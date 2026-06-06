@@ -26,4 +26,19 @@ export {
   type WorkerBackendStopInput,
 } from './worker-backend'
 export { DockerWorkerBackend, dockerWorkerBackend } from './docker-worker-backend'
+export {
+  MemberReconciler,
+  type MemberReconcileInput,
+  type MemberReconcileResult,
+  type MemberReconcileStage,
+  type MemberReconcileStageName,
+} from './member-reconciler'
+export {
+  codeAgentTypeForRuntime,
+  normalizeCodeAgentType,
+  normalizeWorkerRuntimeBase,
+  readWorkerRuntimeBase,
+  workerRoleProfileFromRuntime,
+  type WorkerRuntimeBase,
+} from './worker-runtime-base'
 export { controllerReconcileQueue } from './controller-reconciler'

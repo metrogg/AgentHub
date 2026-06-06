@@ -165,7 +165,7 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 `OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除。所有任务执行通过 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop` / `WorkerRuntimeService`。`messages.ts` 不应继续扩展成编排主脑。
 
-`apps/server/src/services/controller-plane/` 是轻量 Controller Plane 第一版：`ControllerApi` 是 Manager skill / 后续 CLI/API 应调用的统一控制面门面，`ReconcileQueue` 是资源 reconcile 请求入口，`WorkerBackend` 是 Local CLI、OpenClaw/QwenPaw resident Worker、Docker runtime Worker 等 Worker backend 的 seam。Manager Runtime 不应直接 import `roomService`、`runController`、`workerController` 或 `runtimeLeaseController`。
+`apps/server/src/services/controller-plane/` 是轻量 Controller Plane 第一版：`ControllerApi` 是 Manager skill / 后续 CLI/API 应调用的统一控制面门面，`ReconcileQueue` 是资源 reconcile 请求入口，`WorkerBackend` 是 Local CLI、OpenClaw/QwenPaw resident Worker、Docker runtime Worker 等 Worker backend 的 seam。`MemberReconciler` 是“添加 Worker / Manager 补员确认 / 创建并入群”的统一 5 阶段入口：`ResolveMemberSpec -> ApplyWorkspaceAgent -> ApplyWorkerInstance -> JoinRooms -> AnnounceAndObserve`。Manager Runtime 不应直接 import `roomService`、`runController`、`workerController` 或 `runtimeLeaseController`。
 
 ### Docker Resident Runtime
 
@@ -329,6 +329,7 @@ bun test tests/orchestrator-routing.test.ts
 - `apps/server/src/routes/messages.ts`: ChatIngress，负责鉴权、Room-first 写入入口、旧 `messages` 历史只读兼容和进入 Manager/Run 主线；不要继续扩成编排主脑，也不要为新 Room 消息写 `messages` 投影缓存。
 - `apps/server/src/services/orchestrator/manager-loop.ts`: Manager observe/act/review loop。
 - `apps/server/src/services/controller-plane/controller-api.ts`: Manager skill 和后续 Controller API 的统一控制面门面。
+- `apps/server/src/services/controller-plane/member-reconciler.ts`: Worker 成员创建/补员/入群的 5 阶段 Member Reconcile 入口。
 - `apps/server/src/services/controller-plane/reconcile-queue.ts`: 轻量资源 reconcile queue，当前为内存实现。
 - `apps/server/src/services/controller-plane/worker-backend.ts`: WorkerBackend seam，当前默认 Local CLI backend。
 - `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`: Coordinator assign 到 Run/TaskThread/task room/WorkerRuntime 的派发入口。

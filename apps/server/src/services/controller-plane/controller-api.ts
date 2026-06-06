@@ -25,7 +25,7 @@ import { registerArtifactBatch } from '../orchestrator/artifact-controller'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { dockerWorkerBackend } from './docker-worker-backend'
 import { localCliWorkerBackend, type WorkerBackend } from './worker-backend'
-import { openclawLauncher } from '../manager-runtime/openclaw-launcher'
+import { MemberReconciler } from './member-reconciler'
 import {
   condition,
   resourceRef,
@@ -40,9 +40,11 @@ export interface ControllerApiOptions {
 
 export class ControllerApi {
   private readonly workerBackend: WorkerBackend
+  private readonly memberReconciler: MemberReconciler
 
   constructor(options: ControllerApiOptions = {}) {
     this.workerBackend = options.workerBackend ?? (workerContainersEnabled() ? dockerWorkerBackend : localCliWorkerBackend)
+    this.memberReconciler = new MemberReconciler(this.workerBackend)
   }
 
   async applyWorker(input: {
@@ -454,113 +456,20 @@ export class ControllerApi {
     name: string
     runtimeType?: string
     runtimeBase?: string
+    workerRuntimeBase?: string
     codeAgentType?: string
     modelId?: string | null
     skillIds?: string[]
     role?: string
     roleType?: string
     sandboxPolicy?: string
+    ownerId?: string | null
+    groupSessionId?: string | null
+    joinGroupRoom?: boolean
+    createDirectSession?: boolean
+    announce?: boolean
   }) {
-    const explicitModelId =
-      input.modelId?.trim() ||
-      process.env.AGENTHUB_WORKER_LLM_MODEL?.trim() ||
-      process.env.LLM_MODEL?.trim() ||
-      null
-    const existing = await db
-      .select()
-      .from(workspaceAgents)
-      .where(and(eq(workspaceAgents.workspaceId, input.workspaceId), eq(workspaceAgents.name, input.name)))
-      .limit(1)
-    const requestedWorkerRuntimeBase = await this.resolveCreateWorkerRuntimeBase(input, existing[0] ?? null)
-    if (requestedWorkerRuntimeBase === 'openclaw' && !workerContainersEnabled() && !openclawLauncher.isAvailable()) {
-      throw new Error(
-        'OpenClaw Worker requires a resident backend. Install OpenClaw locally or enable AGENTHUB_WORKER_BACKEND=docker / AGENTHUB_CONTAINER_RUNTIME=docker before creating this Worker.',
-      )
-    }
-
-    let agentId: string
-    if (existing.length > 0 && existing[0]) {
-      agentId = existing[0].id
-      const modelId = explicitModelId || existing[0].modelId?.trim() || null
-      if (!modelId) {
-        throw new Error(
-          'Creating a Worker requires an explicit model binding. Set modelId on the Worker or configure AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL before creation.',
-        )
-      }
-      await db
-        .update(workspaceAgents)
-        .set({
-          role: (input.role as any) || existing[0].role || 'worker',
-          roleType: (input.roleType as any) || existing[0].roleType,
-          runtimeType: 'code-agent' as any,
-          codeAgentType: codeAgentTypeForRuntime(requestedWorkerRuntimeBase, input.codeAgentType) as any,
-          roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
-          modelId,
-          skillIds: input.skillIds ?? existing[0].skillIds ?? [],
-          sandboxPolicy: (input.sandboxPolicy as any) || existing[0].sandboxPolicy || 'workspace-write',
-        })
-        .where(eq(workspaceAgents.id, agentId))
-    } else {
-      if (!explicitModelId) {
-        throw new Error(
-          'Creating a Worker requires an explicit model binding. Set modelId on the Worker or configure AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL before creation.',
-        )
-      }
-      const codeAgentType = codeAgentTypeForRuntime(requestedWorkerRuntimeBase, input.codeAgentType)
-      const [inserted] = await db
-        .insert(workspaceAgents)
-        .values({
-          workspaceId: input.workspaceId,
-          name: input.name,
-          role: (input.role as any) || 'worker',
-          roleType: (input.roleType as any) || undefined,
-          runtimeType: 'code-agent' as any,
-          codeAgentType: codeAgentType as any,
-          roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
-          modelId: explicitModelId,
-          skillIds: input.skillIds ?? [],
-          toolPermissions: [],
-          sandboxPolicy: (input.sandboxPolicy as any) || 'workspace-write',
-        })
-        .returning()
-      if (!inserted) throw new Error('Failed to create workspace agent')
-      agentId = inserted.id
-    }
-
-    const worker = await this.applyWorker({ workspaceId: input.workspaceId, workspaceAgentId: agentId })
-    return { agentId, worker }
-  }
-
-  private async resolveCreateWorkerRuntimeBase(
-    input: {
-      workspaceId: string
-      runtimeType?: string
-      runtimeBase?: string
-      codeAgentType?: string
-    },
-    existingAgent: typeof workspaceAgents.$inferSelect | null,
-  ) {
-    const explicit = normalizeWorkerRuntimeBase(input.runtimeBase ?? input.codeAgentType)
-    if (explicit) return explicit
-    const envDefault = normalizeWorkerRuntimeBase(process.env.AGENTHUB_WORKER_RUNTIME_BASE)
-    if (envDefault) return envDefault
-    const existingBase = normalizeWorkerRuntimeBase(readWorkerRuntimeBase(existingAgent?.roleProfile) ?? existingAgent?.codeAgentType)
-    if (existingBase) return existingBase
-    const reusable = await this.findReusableWorkspaceWorkerRuntimeBase(input.workspaceId)
-    if (reusable) return reusable
-    throw new Error(
-      'Creating a Worker requires an explicit worker runtime base. Set runtimeBase/workerRuntimeBase, configure AGENTHUB_WORKER_RUNTIME_BASE, or create/configure an existing Worker base first.',
-    )
-  }
-
-  private async findReusableWorkspaceWorkerRuntimeBase(workspaceId: string) {
-    const agents = await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, workspaceId))
-    for (const agent of agents) {
-      if (agent.roleType === 'orchestrator') continue
-      const base = normalizeWorkerRuntimeBase(readWorkerRuntimeBase(agent.roleProfile) ?? agent.codeAgentType)
-      if (base) return base
-    }
-    return null
+    return this.memberReconciler.reconcile(input)
   }
 
   async updateWorker(workerInstanceId: string, input: {
@@ -816,43 +725,6 @@ export class ControllerApi {
 }
 
 export const controllerApi = new ControllerApi()
-
-function normalizeWorkerRuntimeBase(value?: string | null) {
-  if (
-    value === 'openclaw' ||
-    value === 'claude-code' ||
-    value === 'opencode' ||
-    value === 'gemini' ||
-    value === 'codex'
-  ) {
-    return value
-  }
-  return null
-}
-
-function normalizeCodeAgentType(value?: string | null) {
-  if (value === 'claude-code' || value === 'opencode' || value === 'gemini' || value === 'codex') {
-    return value
-  }
-  return null
-}
-
-function codeAgentTypeForRuntime(runtimeBase: string, value?: string | null) {
-  if (runtimeBase === 'openclaw') return null
-  return normalizeCodeAgentType(value) ?? (runtimeBase === 'claude-code' || runtimeBase === 'opencode' || runtimeBase === 'gemini' || runtimeBase === 'codex'
-    ? runtimeBase
-    : null)
-}
-
-function workerRoleProfileFromRuntime(runtimeBase?: string | null): Record<string, unknown> {
-  return { workerRuntimeBase: normalizeWorkerRuntimeBase(runtimeBase) }
-}
-
-function readWorkerRuntimeBase(roleProfile: unknown) {
-  if (!roleProfile || typeof roleProfile !== 'object') return null
-  const value = (roleProfile as Record<string, unknown>).workerRuntimeBase
-  return typeof value === 'string' ? value : null
-}
 
 function isReadyWorkerState(state: string): boolean {
   return state === 'ready' || state === 'listening' || state === 'assigned' || state === 'busy' || state === 'idle'

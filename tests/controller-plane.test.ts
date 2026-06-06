@@ -5,6 +5,10 @@ const dbApi = await import('../packages/db/src/index')
 const {
   db,
   eq,
+  roomParticipants,
+  rooms,
+  sessions,
+  timelineEvents,
   workerInstances,
   workspaceAgents,
   workspaces,
@@ -139,6 +143,105 @@ describe('Controller Plane', () => {
       modelId: 'test-model',
       role: 'Worker',
     })).rejects.toThrow(/explicit worker runtime base/)
+  })
+
+  test('controller API createWorker runs Member Reconcile stages and joins Matrix rooms', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Member Reconcile Workspace',
+        goal: 'Validate member reconcile stages',
+      })
+      .returning()
+    const api = new ControllerApi({
+      workerBackend: {
+        id: 'test-worker-backend',
+        async ensureRuntime(input) {
+          return {
+            workerInstanceId: input.workerInstanceId,
+            ready: true,
+            state: 'ready',
+            message: 'test backend ready',
+          }
+        },
+        async start() {
+          return { started: true }
+        },
+        async stop() {
+          return { stopped: true }
+        },
+        async inspect(workerInstanceId) {
+          return { workerInstanceId, ready: true, state: 'ready' }
+        },
+        async syncConfig(workerInstanceId) {
+          return { synced: true, details: { workerInstanceId } }
+        },
+      },
+    })
+
+    const result = await api.createWorker({
+      workspaceId: workspace!.id,
+      ownerId: 'default-user',
+      name: 'Room Joined Worker',
+      runtimeBase: 'opencode',
+      modelId: 'test-model',
+      role: 'Engineer',
+      roleType: 'coder',
+      createDirectSession: true,
+      joinGroupRoom: true,
+      announce: true,
+    })
+
+    expect(result.stages.map((stage) => stage.name)).toEqual([
+      'ResolveMemberSpec',
+      'ApplyWorkspaceAgent',
+      'ApplyWorkerInstance',
+      'JoinRooms',
+      'AnnounceAndObserve',
+    ])
+    expect(result.worker?.kind).toBe('Worker')
+    expect(result.runtimeBase).toBe('opencode')
+    expect(result.groupRoom?.kind).toBe('group')
+    expect(result.directSession?.metadata?.kind).toBe('agent-direct')
+    expect(result.directRoom?.kind).toBe('direct')
+    expect(result.participants.length).toBeGreaterThanOrEqual(2)
+    expect(result.announcements).toHaveLength(1)
+
+    const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, result.agentId)).limit(1)
+    expect(agent?.codeAgentType).toBe('opencode')
+    expect(agent?.modelId).toBe('test-model')
+    expect(agent?.roleProfile?.workerRuntimeBase).toBe('opencode')
+
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, result.workerInstanceId)).limit(1)
+    expect(worker?.workspaceAgentId).toBe(result.agentId)
+    expect(worker?.runtimeBase).toBe('opencode')
+
+    const workerParticipants = await db
+      .select()
+      .from(roomParticipants)
+      .where(eq(roomParticipants.workerInstanceId, result.workerInstanceId))
+    expect(workerParticipants.map((participant) => participant.roomId).sort()).toEqual(
+      [result.groupRoom!.id, result.directRoom!.id].sort(),
+    )
+
+    const [announcement] = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.id, result.announcements[0]!.eventId))
+      .limit(1)
+    expect(announcement?.type).toBe('manager.message')
+    expect(announcement?.metadata?.kind).toBe('member-reconcile.announced')
+
+    const directSessions = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.workspaceAgentId, result.agentId))
+    expect(directSessions.some((session) => session.metadata?.createdFrom === 'member-reconcile')).toBe(true)
+
+    const roomRows = await db.select().from(rooms).where(eq(rooms.workspaceId, workspace!.id))
+    expect(roomRows.some((room) => room.kind === 'group')).toBe(true)
+    expect(roomRows.some((room) => room.kind === 'direct')).toBe(true)
   })
 
   test('default controller reconcile queue dispatches Worker requests to ControllerApi', async () => {

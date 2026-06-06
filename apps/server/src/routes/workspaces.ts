@@ -635,7 +635,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '创建 Worker 需要先绑定模型')
     }
 
-    const { agentId, worker } = await controllerApi.createWorker({
+    const result = await controllerApi.createWorker({
       workspaceId,
       name: input.name,
       runtimeType: input.runtimeType,
@@ -646,57 +646,27 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       role: input.role,
       roleType: input.roleType,
       sandboxPolicy: input.sandboxPolicy,
+      ownerId: user.sub,
+      createDirectSession: Boolean(body.createSession),
+      joinGroupRoom: true,
+      announce: true,
     })
 
-    let session = await findDirectWorkerSession(workspaceId, agentId)
-    if (!session && Boolean(body.createSession)) {
-      const [created] = await db
-        .insert(sessions)
-        .values({
-          ownerId: user.sub,
-          title: input.name,
-          type: 'direct',
-          workspaceId,
-          workspaceAgentId: agentId,
-          metadata: {
-            kind: 'agent-direct',
-            createdFrom: 'workspace-worker-create',
-            workerRuntimeBase,
-          },
-        })
-        .returning()
-      if (created) {
-        session = created
-        controllerReconcileQueue.enqueue({
-          ref: resourceRef('Room', created.id, workspaceId),
-          reason: 'workspace-worker-created',
-          payload: {
-            sessionId: created.id,
-            ownerId: user.sub,
-          },
-        })
-      }
-    } else if (session) {
-      const [updated] = await db
-        .update(sessions)
-        .set({
-          title: input.name,
-          workspaceAgentId: agentId,
-          metadata: {
-            ...(session.metadata ?? {}),
-            kind: 'agent-direct',
-            createdFrom: 'workspace-worker-create',
-            workerRuntimeBase,
-          },
-          updatedAt: new Date(),
-        })
-        .where(eq(sessions.id, session.id))
-        .returning()
-      if (updated) session = updated
-    }
-
     await touchWorkspace(workspaceId)
-    return c.json({ success: true, agentId, worker, session: session ?? null })
+    return c.json({
+      success: true,
+      agentId: result.agentId,
+      worker: result.worker,
+      session: result.directSession ?? null,
+      reconcile: {
+        stages: result.stages,
+        runtimeBase: result.runtimeBase,
+        groupRoom: result.groupRoom,
+        directRoom: result.directRoom,
+        participants: result.participants,
+        announcements: result.announcements,
+      },
+    })
   })
 
   .post('/:id/workers/:agentId/apply', async (c) => {
