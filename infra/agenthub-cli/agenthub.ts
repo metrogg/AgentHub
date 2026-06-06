@@ -96,7 +96,7 @@ async function cmdWorker(args: string[]) {
       const workspaceId = requireFlag(f, 'workspace')
       const runtimeBase = f['runtime-base'] || f['worker-runtime-base'] || f['code-agent'] || f.runtime
       if (!runtimeBase) {
-        console.error('Error: --runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> is required')
+        console.error('Error: --runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini> is required')
         process.exit(1)
       }
       const result = await api('/api/controller/workers', {
@@ -181,7 +181,7 @@ async function cmdWorker(args: string[]) {
       const workspaceId = f.workspace || ''
       const runtimeBase = f['runtime-base'] || f['worker-runtime-base'] || f['code-agent'] || f.runtime
       if (!runtimeBase) {
-        console.error('Error: --runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> is required')
+        console.error('Error: --runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini> is required')
         process.exit(1)
       }
       const result = await api('/api/controller/workers', {
@@ -214,7 +214,7 @@ async function cmdWorker(args: string[]) {
     }
     default:
       console.error('Usage: agenthub worker <create|list|get|update|delete|wake|stop|sleep|ensure-ready|status|apply|report-ready> [options]')
-      console.error('Create/apply require: --runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini>')
+      console.error('Create/apply require: --runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini>')
       process.exit(1)
   }
 }

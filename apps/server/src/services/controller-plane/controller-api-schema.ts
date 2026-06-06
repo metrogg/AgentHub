@@ -29,6 +29,12 @@ export interface ControllerApiSchemaDocument {
   operations: ControllerApiOperationSchema[]
 }
 
+export const CONTROLLER_WORKER_RUNTIME_BASES = ['openclaw', 'qwenpaw', 'copaw', 'opencode', 'claude-code', 'codex', 'gemini']
+
+export const CONTROLLER_ROOM_KINDS = ['group', 'manager_dm', 'task', 'direct', 'human_intervention']
+
+export const CONTROLLER_APPLY_MANIFEST_KINDS = ['Worker', 'Room', 'Task']
+
 export function getControllerApiSchema(): ControllerApiSchemaDocument {
   return CONTROLLER_API_SCHEMA
 }
@@ -60,7 +66,7 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       body: {
         workspaceId: field('string', true, 'Workspace id.'),
         name: field('string', true, 'Worker display name.'),
-        runtimeBase: field('string', true, 'Worker runtime base.', ['openclaw', 'qwenpaw', 'opencode', 'claude-code', 'codex', 'gemini']),
+        runtimeBase: field('string', true, 'Worker runtime base.', CONTROLLER_WORKER_RUNTIME_BASES),
         modelId: field('string', true, 'Explicit Worker model binding.'),
         role: field('string', false, 'Human-readable role.'),
         roleType: field('string', false, 'Workspace role type.'),
@@ -104,7 +110,7 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       body: {
         ownerId: field('string', true, 'Human owner id.'),
         title: field('string', true, 'Room title.'),
-        kind: field('string', false, 'Room kind.', ['group', 'manager_dm', 'task', 'direct', 'human_intervention']),
+        kind: field('string', false, 'Room kind.', CONTROLLER_ROOM_KINDS),
         workspaceId: field('string', false, 'Workspace id.'),
       },
     },
@@ -186,10 +192,10 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       approval: 'recommended',
       audit: ['kind', 'metadata.name', 'spec.workspaceId'],
       body: {
-        yaml: field('string', false, 'YAML manifest text.'),
-        json: field('string', false, 'JSON manifest text.'),
-        resource: field('object', false, 'Single manifest object.'),
-        resources: field('object[]', false, 'Manifest object list.'),
+        yaml: field('string', false, `YAML manifest text. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
+        json: field('string', false, `JSON manifest text. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
+        resource: field('object', false, `Single manifest object. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
+        resources: field('object[]', false, `Manifest object list. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
       },
     },
     {

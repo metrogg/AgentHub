@@ -211,6 +211,7 @@ describe('Controller Plane', () => {
           modelId: 'test-model',
           role: 'Applied Engineer',
           skillIds: ['task-management'],
+          sandboxPolicy: { mode: 'workspace-write' },
           createDirectSession: false,
           announce: false,
         },
@@ -229,6 +230,50 @@ describe('Controller Plane', () => {
     expect(agent?.workspaceId).toBe(workspace!.id)
     expect(agent?.roleProfile?.workerRuntimeBase).toBe('opencode')
     expect(agent?.skillIds).toEqual(['task-management'])
+    expect(agent?.sandboxPolicy).toBe('workspace-write')
+  })
+
+  test('controller apply validates Worker manifests before reconcile', async () => {
+    const api = new ControllerApi()
+
+    await expect(applyControllerManifest(api, {
+      resource: {
+        kind: 'Worker',
+        metadata: { name: 'Missing Model Worker' },
+        spec: {
+          workspaceId: 'workspace-apply-validation',
+          runtimeBase: 'opencode',
+        },
+      },
+    })).rejects.toThrow(/spec\.modelId/)
+
+    await expect(applyControllerManifest(api, {
+      resource: {
+        kind: 'Worker',
+        metadata: { name: 'Bad Runtime Worker' },
+        spec: {
+          workspaceId: 'workspace-apply-validation',
+          runtimeBase: 'llm',
+          modelId: 'test-model',
+        },
+      },
+    })).rejects.toThrow(/spec\.runtimeBase/)
+  })
+
+  test('controller apply validates Room manifest kind against Controller schema', async () => {
+    const api = new ControllerApi()
+
+    await expect(applyControllerManifest(api, {
+      resource: {
+        kind: 'Room',
+        metadata: { name: 'Bad Room' },
+        spec: {
+          ownerId: 'default-user',
+          title: 'Bad Room',
+          kind: 'legacy-chat',
+        },
+      },
+    })).rejects.toThrow(/spec\.kind/)
   })
 
   test('controller API createWorker runs Member Reconcile stages and joins Matrix rooms', async () => {

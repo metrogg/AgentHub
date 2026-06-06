@@ -49,9 +49,11 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `apps/server/src/services/controller-plane/controller-api-schema.ts`
   - 提供 `agenthub.controller-api.v1alpha1` 机器可读控制面 schema，列出 Manager skill 可调用的 operation、method、path、required fields、runtime enum、danger level、approval 和 audit 字段。
   - `GET /api/controller/schema` 和 `agenthub schema` 已可读取这份 schema；它不是完整 OpenAPI，但已经让 OpenClaw/QwenPaw skill 不必靠散落示例猜路径。
+  - Worker runtime enum 已统一导出给 schema 和 apply 使用，包含 `openclaw / qwenpaw / copaw / opencode / claude-code / codex / gemini`；`copaw` 是 QwenPaw 的兼容 alias。
 - `apps/server/src/services/controller-plane/controller-apply.ts`
   - 提供 `POST /api/controller/apply` 第一版 manifest apply。
   - 支持 JSON object/list，也支持轻量 YAML manifest；当前可 apply `Worker`、`Room`、`Task` 三类资源，分别进入 `ControllerApi.createWorker()`、`ControllerApi.createRoom()` 和 `ControllerApi.assignTask()`。
+  - 第一轮严格校验已接入：Worker manifest 必须显式提供 `spec.runtimeBase` 和 `spec.modelId`，runtime base 和 Room kind 必须匹配 Controller schema enum，`skillIds/dependsOn` 必须是字符串数组，`sandboxPolicy` 支持字符串或 `{ mode: ... }` 对象。
   - 这一步对齐 HiClaw 的 `hiclaw apply` 心智：Manager skill 或人工可以提交资源声明，由 Controller 负责真实 reconcile，而不是在 skill 里直接调用底层 service。
 - `apps/server/src/services/controller-plane/member-reconciler.ts`
   - 新增 HiClaw-lite `Member Reconcile` 第一版。
@@ -99,7 +101,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `/api/controller/*` 第一版已可用：Manager token 鉴权、Room 创建/事件读取/事件写入、通用 reconcile 已有路由级测试覆盖；`agenthub room create/events/mention` 也改为走 `/api/controller/rooms*`，不再绕过控制面。
 - `POST /api/controller/tasks` 已切到 `ControllerApi.assignTask()`：受 Manager token 保护的 HTTP 入口会创建真实 Run / Task / TaskThread / task room / RuntimeLease，并在 task room 生成 Matrix mention-first assignment。测试已覆盖该入口不会停留在路由层 fake message，而是能从 DB 观察到 `workspace_tasks`、`task_threads`、`rooms`、`room_participants` 和 `timeline_events(metadata.matrixExecutionBus=true)`。
 - `GET /api/controller/schema` 已接入：schema 覆盖 Worker 创建、Task 派发、Room 创建/事件/mention、Artifact 注册、资源 reconcile、平台状态、workspace-state 和 heartbeat，并带上 danger/approval/audit 元数据。`agenthub schema` 会读取同一份 schema，供 Manager skills 和人工调试使用。
-- `POST /api/controller/apply` 已不再是 stub：第一版支持 JSON / 轻量 YAML manifest，能创建 Worker、Room 或派发 Task。`agenthub apply -f <file>` 现在会进入这条真实控制面路径；Worker apply 仍遵守显式 runtime base、显式模型和 Member Reconcile 约束。
+- `POST /api/controller/apply` 已不再是 stub：第一版支持 JSON / 轻量 YAML manifest，能创建 Worker、Room 或派发 Task。`agenthub apply -f <file>` 现在会进入这条真实控制面路径；Worker apply 仍遵守显式 runtime base、显式模型和 Member Reconcile 约束，并会在 apply 层提前拦截缺模型、非法 runtime、非法 Room kind 等 manifest 错误。
 - Manager skill bundle 第一轮已对齐这条控制面：`agenthub-controller`、`worker-management`、`task-management`、`channel-management`、`project-management` 会先读取 `agenthub schema`，再通过 `agenthub apply -f ...` 或 Controller CLI 操作 Worker / Room / Task；边界测试禁止重新出现 `/api/internal/manager/actions` 和硬编码 `localhost:8000/api/rooms`。
 
 Manager Runtime 已调整：
@@ -114,6 +116,8 @@ Manager Runtime 已调整：
   - 验证 reconcile queue 去重和 delayed requeue。
   - 验证 reconcile queue `describe()` 的诊断结构。
   - 验证 workspace agent 可 apply 成 Worker resource。
+  - 验证 Worker manifest apply 支持 `sandboxPolicy.mode` 对象形态，并会提前拒绝缺 `spec.modelId` 或非法 `spec.runtimeBase`。
+  - 验证 Room manifest apply 会按 Controller schema 拒绝非法 `spec.kind`。
   - 验证 `createWorker()` 走 Member Reconcile 5 阶段，并能加入 group/direct room、写入 Manager announcement。
   - 验证 Manager Runtime `create_worker` action 会真正创建 Worker、加入当前 group room，并写入 applied 阶段结果。
   - 验证默认 reconcile queue 能 dispatch Worker request。
@@ -124,7 +128,7 @@ Manager Runtime 已调整：
 - `tests/controller-routes.test.ts`
   - 验证 Manager Matrix token 鉴权。
   - 验证 `/api/controller/rooms` 能创建 Room、写入/读取 timeline event，并通过通用 reconcile 观察 Room。
-  - 验证 `/api/controller/schema` 暴露 Manager skill 可调用的 schema，并包含 `workers.create / tasks.assign / rooms.mention_worker`。
+  - 验证 `/api/controller/schema` 暴露 Manager skill 可调用的 schema，并包含 `workers.create / tasks.assign / rooms.mention_worker`，且 Worker runtime enum 包含 `qwenpaw / copaw`。
   - 验证 `/api/controller/apply` 可以通过 YAML manifest 创建真实 Room。
   - 验证 `/api/controller/tasks` 能通过 `ControllerApi.assignTask()` 创建真实任务资源和 Matrix @mention-first task room。
 
@@ -154,7 +158,7 @@ Manager Runtime 已调整：
 
 ## 下一步
 
-1. 继续把 `agenthub.controller-api.v1alpha1` 从轻量 operation schema 收敛到完整 OpenAPI/JSON schema：补错误码、危险操作 approval、审计字段和更完整的 apply schema 校验。
+1. 继续把 `agenthub.controller-api.v1alpha1` 从轻量 operation schema 收敛到完整 OpenAPI/JSON schema：补错误码、危险操作 approval、审计字段、更多资源 kind 的 manifest schema 和更完整的 apply 校验。
 2. 增加 durable reconcile request 表，替代纯内存队列，服务重启后可恢复未完成 request。
 3. 给 `workspace_agents` / `worker_instances` 引入 generation 语义：Agent 配置变化后自动 enqueue Worker reconcile。
 4. 把 `ManagerRuntime` tools 从“字符串工具名 + executor map”进一步收敛到 Controller API schema，方便 OpenClaw/QwenPaw 直接调用；Manager skill 示例已经第一轮迁到 `agenthub schema/apply`，下一步是让 runtime 自动消费 schema，而不是只靠 Markdown 说明。

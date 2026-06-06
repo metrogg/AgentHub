@@ -33,7 +33,7 @@ agenthub schema
 agenthub worker list --workspace <workspace-id>
 
 # Create a new worker with an explicit Worker runtime base
-agenthub worker create --workspace <workspace-id> --name builder --runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> --model <model-id> --join-group-room true
+agenthub worker create --workspace <workspace-id> --name builder --runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini> --model <model-id> --join-group-room true
 
 # Apply a Worker manifest through the Controller.
 agenthub apply -f worker.yaml

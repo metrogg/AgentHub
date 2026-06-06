@@ -112,7 +112,7 @@ describe('Controller HTTP API', () => {
         path: string
         danger: string
         approval: string
-        body?: Record<string, { required?: boolean; enum?: string[] }>
+        body?: Record<string, { required?: boolean; enum?: string[]; description: string }>
       }>
     }>('/api/controller/schema', token)
 
@@ -125,6 +125,7 @@ describe('Controller HTTP API', () => {
     expect(workerCreate?.path).toBe('/api/controller/workers')
     expect(workerCreate?.body?.runtimeBase.required).toBe(true)
     expect(workerCreate?.body?.runtimeBase.enum).toContain('qwenpaw')
+    expect(workerCreate?.body?.runtimeBase.enum).toContain('copaw')
 
     const taskAssign = schema.operations.find((item) => item.id === 'tasks.assign')
     expect(taskAssign?.path).toBe('/api/controller/tasks')
@@ -137,6 +138,7 @@ describe('Controller HTTP API', () => {
     const apply = schema.operations.find((item) => item.id === 'apply.manifest')
     expect(apply?.path).toBe('/api/controller/apply')
     expect(apply?.body?.yaml.required).toBe(false)
+    expect(apply?.body?.yaml.description).toContain('Worker, Room, Task')
   })
 
   test('applies YAML Controller manifests through HTTP API', async () => {

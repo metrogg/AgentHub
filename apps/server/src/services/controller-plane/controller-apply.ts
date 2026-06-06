@@ -1,5 +1,7 @@
 import { AppError, AppErrorCodes } from '../../lib/error'
 import type { ControllerApi } from './controller-api'
+import { CONTROLLER_ROOM_KINDS, CONTROLLER_WORKER_RUNTIME_BASES } from './controller-api-schema'
+import { normalizeWorkerRuntimeBase } from './worker-runtime-base'
 
 export interface ControllerApplyBody {
   yaml?: string
@@ -79,48 +81,81 @@ function normalizeManifest(value: unknown): NormalizedManifest {
 async function applyOne(api: ControllerApi, manifest: NormalizedManifest) {
   switch (manifest.kind) {
     case 'Worker':
-      return api.createWorker({
-        workspaceId: requiredString(manifest.spec.workspaceId, 'spec.workspaceId'),
-        name: requiredString(manifest.metadata.name ?? manifest.spec.name, 'metadata.name'),
-        runtimeBase: stringValue(manifest.spec.runtimeBase) ?? stringValue(manifest.spec.workerRuntimeBase) ?? undefined,
-        workerRuntimeBase: stringValue(manifest.spec.workerRuntimeBase) ?? undefined,
-        codeAgentType: stringValue(manifest.spec.codeAgentType) ?? undefined,
-        modelId: stringValue(manifest.spec.modelId) ?? null,
-        skillIds: stringArrayValue(manifest.spec.skillIds),
-        role: stringValue(manifest.spec.role) ?? undefined,
-        roleType: stringValue(manifest.spec.roleType) ?? undefined,
-        description: stringValue(manifest.spec.description) ?? undefined,
-        systemPrompt: stringValue(manifest.spec.systemPrompt) ?? undefined,
-        roleProfile: objectValue(manifest.spec.roleProfile),
-        sandboxPolicy: stringValue(manifest.spec.sandboxPolicy) ?? undefined,
-        ownerId: stringValue(manifest.spec.ownerId) ?? null,
-        groupSessionId: stringValue(manifest.spec.groupSessionId) ?? null,
-        joinGroupRoom: booleanValue(manifest.spec.joinGroupRoom) ?? false,
-        createDirectSession: booleanValue(manifest.spec.createDirectSession) ?? true,
-        announce: booleanValue(manifest.spec.announce) ?? true,
-      })
+      return applyWorkerManifest(api, manifest)
     case 'Room':
-      return api.createRoom({
-        ownerId: requiredString(manifest.spec.ownerId, 'spec.ownerId'),
-        title: requiredString(manifest.spec.title ?? manifest.metadata.name, 'spec.title'),
-        kind: stringValue(manifest.spec.kind) as any,
-        workspaceId: stringValue(manifest.spec.workspaceId) ?? null,
-      })
+      return applyRoomManifest(api, manifest)
     case 'Task':
-      return api.assignTask({
-        workspaceId: requiredString(manifest.spec.workspaceId, 'spec.workspaceId'),
-        title: requiredString(manifest.spec.title ?? manifest.metadata.name, 'spec.title'),
-        spec: stringValue(manifest.spec.spec) ?? stringValue(manifest.spec.description) ?? null,
-        targetWorkerId: stringValue(manifest.spec.targetWorkerId) ?? stringValue(manifest.spec.assignToAgentId) ?? null,
-        taskKey: stringValue(manifest.spec.taskKey) ?? null,
-        dependsOn: stringArrayValue(manifest.spec.dependsOn),
-        runId: stringValue(manifest.spec.runId) ?? null,
-        groupSessionId: stringValue(manifest.spec.groupSessionId) ?? null,
-        ownerId: stringValue(manifest.spec.ownerId) ?? null,
-      })
+      return applyTaskManifest(api, manifest)
     default:
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply does not support kind ${manifest.kind} yet.`)
   }
+}
+
+function applyWorkerManifest(api: ControllerApi, manifest: NormalizedManifest) {
+  const runtimeBase = normalizeWorkerRuntimeBase(
+    stringValue(manifest.spec.runtimeBase) ??
+      stringValue(manifest.spec.workerRuntimeBase) ??
+      stringValue(manifest.spec.codeAgentType),
+  )
+  if (!runtimeBase) {
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      `Controller apply Worker requires spec.runtimeBase to be one of ${CONTROLLER_WORKER_RUNTIME_BASES.join(', ')}.`,
+    )
+  }
+  const modelId = requiredString(manifest.spec.modelId, 'spec.modelId')
+  const skillIds = optionalStringArray(manifest.spec.skillIds, 'spec.skillIds')
+  const roleProfile = optionalObject(manifest.spec.roleProfile, 'spec.roleProfile')
+  const sandboxPolicy = sandboxPolicyValue(manifest.spec.sandboxPolicy)
+
+  return api.createWorker({
+    workspaceId: requiredString(manifest.spec.workspaceId, 'spec.workspaceId'),
+    name: requiredString(manifest.metadata.name ?? manifest.spec.name, 'metadata.name'),
+    runtimeBase,
+    workerRuntimeBase: stringValue(manifest.spec.workerRuntimeBase) ?? undefined,
+    codeAgentType: stringValue(manifest.spec.codeAgentType) ?? undefined,
+    modelId,
+    skillIds,
+    role: stringValue(manifest.spec.role) ?? undefined,
+    roleType: stringValue(manifest.spec.roleType) ?? undefined,
+    description: stringValue(manifest.spec.description) ?? undefined,
+    systemPrompt: stringValue(manifest.spec.systemPrompt) ?? undefined,
+    roleProfile,
+    sandboxPolicy,
+    ownerId: stringValue(manifest.spec.ownerId) ?? null,
+    groupSessionId: stringValue(manifest.spec.groupSessionId) ?? null,
+    joinGroupRoom: optionalBoolean(manifest.spec.joinGroupRoom, 'spec.joinGroupRoom') ?? false,
+    createDirectSession: optionalBoolean(manifest.spec.createDirectSession, 'spec.createDirectSession') ?? true,
+    announce: optionalBoolean(manifest.spec.announce, 'spec.announce') ?? true,
+  })
+}
+
+function applyRoomManifest(api: ControllerApi, manifest: NormalizedManifest) {
+  const kind = optionalRoomKind(manifest.spec.kind)
+  return api.createRoom({
+    ownerId: requiredString(manifest.spec.ownerId, 'spec.ownerId'),
+    title: requiredString(manifest.spec.title ?? manifest.metadata.name, 'spec.title'),
+    kind,
+    workspaceId: stringValue(manifest.spec.workspaceId) ?? null,
+  })
+}
+
+function applyTaskManifest(api: ControllerApi, manifest: NormalizedManifest) {
+  return api.assignTask({
+    workspaceId: requiredString(manifest.spec.workspaceId, 'spec.workspaceId'),
+    title: requiredString(manifest.spec.title ?? manifest.metadata.name, 'spec.title'),
+    spec:
+      stringValue(manifest.spec.spec) ??
+      stringValue(manifest.spec.taskSpec) ??
+      stringValue(manifest.spec.description) ??
+      null,
+    targetWorkerId: stringValue(manifest.spec.targetWorkerId) ?? stringValue(manifest.spec.assignToAgentId) ?? null,
+    taskKey: stringValue(manifest.spec.taskKey) ?? null,
+    dependsOn: optionalStringArray(manifest.spec.dependsOn, 'spec.dependsOn'),
+    runId: stringValue(manifest.spec.runId) ?? null,
+    groupSessionId: stringValue(manifest.spec.groupSessionId) ?? null,
+    ownerId: stringValue(manifest.spec.ownerId) ?? null,
+  })
 }
 
 function parseSimpleYamlDocument(input: string): unknown {
@@ -208,14 +243,46 @@ function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function stringArrayValue(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const items = value.map(stringValue).filter((item): item is string => Boolean(item))
+function optionalStringArray(value: unknown, path: string): string[] | undefined {
+  if (value == null) return undefined
+  if (!Array.isArray(value)) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply requires ${path} to be a string array.`)
+  }
+  const items = value.map((item, index) => requiredString(item, `${path}[${index}]`))
   return items.length ? items : undefined
 }
 
-function booleanValue(value: unknown): boolean | undefined {
-  return typeof value === 'boolean' ? value : undefined
+function optionalBoolean(value: unknown, path: string): boolean | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'boolean') return value
+  throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply requires ${path} to be a boolean.`)
+}
+
+function optionalObject(value: unknown, path: string): Record<string, unknown> {
+  if (value == null) return {}
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
+  throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply requires ${path} to be an object.`)
+}
+
+function sandboxPolicyValue(value: unknown): string | undefined {
+  const direct = stringValue(value)
+  if (direct) return direct
+  if (value == null) return undefined
+  const object = optionalObject(value, 'spec.sandboxPolicy')
+  const mode = stringValue(object.mode)
+  if (mode) return mode
+  throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Controller apply requires spec.sandboxPolicy.mode when sandboxPolicy is an object.')
+}
+
+function optionalRoomKind(value: unknown) {
+  const kind = stringValue(value) ?? 'group'
+  if (CONTROLLER_ROOM_KINDS.includes(kind)) {
+    return kind as 'group' | 'manager_dm' | 'task' | 'direct' | 'human_intervention'
+  }
+  throw AppError.fromCode(
+    AppErrorCodes.VALIDATION_FAILED,
+    `Controller apply Room requires spec.kind to be one of ${CONTROLLER_ROOM_KINDS.join(', ')}.`,
+  )
 }
 
 function requiredString(value: unknown, path: string): string {

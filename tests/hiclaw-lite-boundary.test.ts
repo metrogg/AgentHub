@@ -191,7 +191,7 @@ describe('HiClaw-lite kernel boundary', () => {
 
     const worker = readFileSync(join(skillRoot, 'worker-management', 'SKILL.md'), 'utf8')
     expect(worker).toContain('kind: Worker')
-    expect(worker).toContain('runtimeBase: <openclaw|qwenpaw|opencode|claude-code|codex|gemini>')
+    expect(worker).toContain('runtimeBase: <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini>')
 
     const task = readFileSync(join(skillRoot, 'task-management', 'SKILL.md'), 'utf8')
     expect(task).toContain('kind: Task')
@@ -226,7 +226,7 @@ describe('HiClaw-lite kernel boundary', () => {
 
   test('AgentHub Controller CLI requires explicit Worker runtime base', () => {
     const cli = readFileSync(join(process.cwd(), 'infra/agenthub-cli/agenthub.ts'), 'utf8')
-    expect(cli).toContain('--runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> is required')
+    expect(cli).toContain('--runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini> is required')
     expect(cli).not.toContain("|| 'codex'")
     expect(cli).not.toContain('|| "codex"')
   })
