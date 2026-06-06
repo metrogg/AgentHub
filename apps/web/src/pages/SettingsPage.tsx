@@ -3800,6 +3800,7 @@ function WorkerRuntimeDiagnosticRow({
     : 'no rooms'
   const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : 'no heartbeat'
   const inspection = worker.runtimeInspection
+  const doctorProbe = inspection?.doctorProbe
   const runtimeHealth = worker.runtimeHealth
   const runtimeReady = runtimeHealth.ready
   const runtimeStatus = runtimeHealth.message
@@ -3813,6 +3814,7 @@ function WorkerRuntimeDiagnosticRow({
     runtimeHealth.inspectedBy,
     runtimeHealth.state,
     inspection?.nativeProbe?.command ?? inspection?.command,
+    doctorProbe ? `${doctorProbe.kind}:${doctorProbe.supported ? (doctorProbe.ok ? 'ok' : 'failed') : 'unsupported'}` : null,
     worker.mode === 'bridge' ? null : participantSummary,
   ].filter(Boolean).join(' / ')
   return (
@@ -3853,6 +3855,14 @@ function WorkerRuntimeDiagnosticRow({
           {worker.matrixIdentity.userId && (
             <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700">
               {worker.listenerManagedBy}
+            </span>
+          )}
+          {doctorProbe && (
+            <span
+              className={cn('rounded-full px-2 py-0.5', doctorProbe.supported ? (doctorProbe.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700') : 'bg-slate-100 text-slate-600')}
+              title={`${doctorProbe.command}${doctorProbe.output ? `\n${doctorProbe.output}` : ''}`}
+            >
+              {doctorProbe.kind} {doctorProbe.supported ? (doctorProbe.ok ? 'ok' : 'failed') : 'unsupported'}
             </span>
           )}
         </div>

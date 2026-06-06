@@ -738,6 +738,9 @@ describe('Controller Plane', () => {
     if (workerRuntime?.runtimeInspection?.installed) {
       expect(workerRuntime.runtimeInspection.nativeProbe).toBeTruthy()
       expect(typeof workerRuntime.runtimeInspection.nativeProbe?.ok).toBe('boolean')
+      expect(workerRuntime.runtimeInspection.doctorProbe).toBeTruthy()
+      expect(typeof workerRuntime.runtimeInspection.doctorProbe?.supported).toBe('boolean')
+      expect(typeof workerRuntime.runtimeInspection.doctorProbe?.ok).toBe('boolean')
     }
   })
 

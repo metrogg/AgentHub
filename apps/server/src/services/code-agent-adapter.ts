@@ -127,6 +127,16 @@ export interface CodeAgentRuntimeInspection {
     output: string
     version: string | null
   }
+  doctorProbe?: {
+    command: string
+    args: string[]
+    kind: 'doctor' | 'test' | 'help'
+    supported: boolean
+    ok: boolean
+    exitCode: number | null
+    timedOut: boolean
+    output: string
+  }
   blockers: string[]
 }
 
@@ -303,6 +313,8 @@ export const __codeAgentAdapterTestHooks = {
   formatModelTargetLabel,
   createNativeOpenCodeModelTarget,
   buildCodeAgentPrompt,
+  probeCodeAgentNativeCli,
+  probeCodeAgentDoctorCli,
   friendlyCodeAgentError: (output: string, displayName = 'Worker 基座') =>
     friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
@@ -356,7 +368,12 @@ export async function inspectCodeAgentRuntime(
   }
 
   const installed = await isCommandInstalled(adapter.command)
-  const nativeProbe = installed ? await probeCodeAgentNativeCli(adapter.command) : null
+  const [nativeProbe, doctorProbe] = installed
+    ? await Promise.all([
+        probeCodeAgentNativeCli(adapter.command),
+        probeCodeAgentDoctorCli(type, adapter.command),
+      ])
+    : [null, null]
   const configured = await isRuntimeConfigured(type, adapter, modelTarget?.modelId ?? requestedModelId, modelTarget)
   const executionEnabled = await getBooleanSetting(
     'AGENTHUB_ENABLE_CODE_AGENT_EXECUTION',
@@ -374,6 +391,9 @@ export async function inspectCodeAgentRuntime(
   })
   if (installed && !nativeProbeOk) {
     blockers.push(nativeProbe?.timedOut ? 'CLI native probe timed out' : 'CLI native probe failed')
+  }
+  if (doctorProbe?.supported && !doctorProbe.ok) {
+    blockers.push(doctorProbe.timedOut ? 'CLI doctor/test probe timed out' : 'CLI doctor/test probe failed')
   }
 
   return {
@@ -394,6 +414,7 @@ export async function inspectCodeAgentRuntime(
     canExecute,
     commandPreview: previewCommand(adapter, cwd ?? profile.projectPath ?? undefined, profile.sandboxPolicy, modelTarget),
     nativeProbe: nativeProbe ?? undefined,
+    doctorProbe: doctorProbe ?? undefined,
     blockers,
   }
 }
@@ -1043,6 +1064,61 @@ async function probeCodeAgentNativeCli(command: string): Promise<NonNullable<Cod
   }
 }
 
+async function probeCodeAgentDoctorCli(
+  type: CodeAgentType,
+  command: string,
+): Promise<NonNullable<CodeAgentRuntimeInspection['doctorProbe']>> {
+  const probe = doctorProbeSpec(type)
+  const displayCommand = formatCommand(command, probe.args)
+  const timeoutMs = Number(process.env.AGENTHUB_CODE_AGENT_DOCTOR_PROBE_TIMEOUT_MS || '1200')
+  let timedOut = false
+  let proc: ReturnType<typeof Bun.spawn> | null = null
+  try {
+    proc = Bun.spawn(buildRuntimeCommand(command, probe.args), {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    })
+    const timer = setTimeout(() => {
+      timedOut = true
+      try {
+        proc?.kill()
+      } catch {
+        // Best-effort; the probe is intentionally non-critical.
+      }
+    }, timeoutMs)
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited.catch(() => 1),
+      readBunSpawnOutput(proc.stdout).catch(() => ''),
+      readBunSpawnOutput(proc.stderr).catch(() => ''),
+    ])
+    clearTimeout(timer)
+    const output = limitOutput([stdout, stderr].filter(Boolean).join('\n').trim(), 1600)
+    const supported = !looksLikeUnsupportedDoctorCommand(output, exitCode)
+    return {
+      command: displayCommand,
+      args: probe.args,
+      kind: probe.kind,
+      supported,
+      ok: supported && exitCode === 0 && !timedOut,
+      exitCode,
+      timedOut,
+      output,
+    }
+  } catch (error) {
+    return {
+      command: displayCommand,
+      args: probe.args,
+      kind: probe.kind,
+      supported: false,
+      ok: false,
+      exitCode: null,
+      timedOut,
+      output: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
 async function readBunSpawnOutput(stream: unknown) {
   if (!stream || typeof stream === 'number') return ''
   return await new Response(stream as ReadableStream<Uint8Array>).text()
@@ -1050,6 +1126,23 @@ async function readBunSpawnOutput(stream: unknown) {
 
 function nativeProbeArgs(_command: string) {
   return ['--version']
+}
+
+function doctorProbeSpec(type: CodeAgentType): { kind: 'doctor' | 'test' | 'help'; args: string[] } {
+  switch (type) {
+    case 'codex':
+    case 'claude-code':
+    case 'opencode':
+    case 'gemini':
+      return { kind: 'doctor', args: ['doctor'] }
+    default:
+      return { kind: 'help', args: ['--help'] }
+  }
+}
+
+function looksLikeUnsupportedDoctorCommand(output: string, exitCode: number | null) {
+  if (exitCode === 0) return false
+  return /unknown command|unrecognized (?:command|subcommand|option)|invalid (?:choice|command)|no such command|not a recognized command|did you mean|unknown option/i.test(output)
 }
 
 function parseNativeProbeVersion(output: string) {

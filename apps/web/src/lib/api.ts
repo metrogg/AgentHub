@@ -735,6 +735,16 @@ export interface WorkerRuntimeDiagnostic {
       output: string
       version: string | null
     }
+    doctorProbe?: {
+      command: string
+      args: string[]
+      kind: 'doctor' | 'test' | 'help'
+      supported: boolean
+      ok: boolean
+      exitCode: number | null
+      timedOut: boolean
+      output: string
+    }
     blockers: string[]
   } | null
   runtimeHealth: {

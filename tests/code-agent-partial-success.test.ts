@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 describe('code agent partial success handling', () => {
   test('treats webfetch 404 as a fetch problem instead of a model problem', async () => {
@@ -48,6 +51,45 @@ describe('code agent partial success handling', () => {
 
     expect(args).toContain('--model')
     expect(args).toContain('deepseek/xiaomi-token-plan-cn/mimo-v2.5')
+  })
+
+  test('probes bridge CLI runtime with native version and doctor commands', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+    const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-opencode-probe-'))
+    const commandPath = process.platform === 'win32'
+      ? join(tempDir, 'fake-opencode.cmd')
+      : join(tempDir, 'fake-opencode')
+    const script = process.platform === 'win32'
+      ? [
+          '@echo off',
+          'if "%1"=="--version" echo opencode 1.2.3 & exit /b 0',
+          'if "%1"=="doctor" echo doctor ok & exit /b 0',
+          'echo unknown command %1',
+          'exit /b 1',
+        ].join('\r\n')
+      : [
+          '#!/usr/bin/env sh',
+          'if [ "$1" = "--version" ]; then echo "opencode 1.2.3"; exit 0; fi',
+          'if [ "$1" = "doctor" ]; then echo "doctor ok"; exit 0; fi',
+          'echo "unknown command $1"',
+          'exit 1',
+        ].join('\n')
+    writeFileSync(commandPath, script, 'utf8')
+    if (process.platform !== 'win32') chmodSync(commandPath, 0o755)
+
+    const nativeProbe = await __codeAgentAdapterTestHooks.probeCodeAgentNativeCli(commandPath)
+    const doctorProbe = await __codeAgentAdapterTestHooks.probeCodeAgentDoctorCli('opencode', commandPath)
+
+    expect(nativeProbe.ok).toBe(true)
+    expect(nativeProbe.version).toBe('1.2.3')
+    expect(doctorProbe).toMatchObject({
+      kind: 'doctor',
+      supported: true,
+      ok: true,
+    })
+    expect(doctorProbe.output).toContain('doctor ok')
   })
 
   test('explains OpenCode provider/model lookup failures precisely', async () => {

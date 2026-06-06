@@ -354,6 +354,7 @@ function buildRuntimeHealth(input: {
         codeAgentType: input.runtimeInspection.codeAgentType ?? null,
         command: input.runtimeInspection.command ?? null,
         nativeProbe: input.runtimeInspection.nativeProbe ?? null,
+        doctorProbe: input.runtimeInspection.doctorProbe ?? null,
         modelId: input.runtimeInspection.modelId ?? null,
       },
     }
