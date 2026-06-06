@@ -264,11 +264,80 @@ export function runtimeAdapterContract(runtimeBase: string | null) {
     base: runtimeBase ?? 'unconfigured',
     mode,
     baseProfile,
+    diagnosticContract: runtimeDiagnosticContract(runtimeBase),
     listensToMatrix: baseProfile.matrixIntegration.owner,
     workspaceContract: ['profile.json', 'runtime.json', 'SOUL.md', 'AGENTS.md', 'skills/', 'state.json', 'rooms.json', 'tasks.json'],
     taskContract: ['shared/tasks/{taskId}/spec.md', 'plan.md', 'result.md', 'artifacts/'],
     parityCapabilities: RUNTIME_PARITY_CAPABILITIES,
     heartbeat: ['lastHeartbeatAt', 'lastMatrixSyncAt', 'lastRuntimeReadyAt', 'lastTaskStartedAt', 'lastTaskCompletedAt', 'lastError', 'queueDepth'],
+  }
+}
+
+function runtimeDiagnosticContract(runtimeBase: string | null) {
+  const mode = runtimeModeForBase(runtimeBase)
+  if (mode === 'resident') {
+    return {
+      readinessSource: 'WorkerBackend.inspect plus runtime-native Matrix sync',
+      blockingSignals: [
+        'contract_missing',
+        'matrix_identity_missing',
+        'runtime_process_not_ready',
+        'room_binding_missing',
+        'worker_instance_failed',
+      ],
+      informationalSignals: [
+        'lastHeartbeatAt',
+        'lastMatrixSyncAt',
+        'lastRuntimeReadyAt',
+        'queueDepth',
+        'lastError',
+      ],
+      probes: [
+        'worker-backend.inspect',
+        'matrix-sync.status',
+        'resident-self-test.dry-run',
+        'resident-self-test.matrix-probe',
+      ],
+      expectedNativeCapabilities: ['runtime-native-matrix-listener', 'task-protocol-replies', 'heartbeat', 'shared-task-contract'],
+    }
+  }
+  if (mode === 'bridge') {
+    return {
+      readinessSource: 'inspectCodeAgentRuntime plus AgentHub-managed Matrix listener',
+      blockingSignals: [
+        'contract_missing',
+        'matrix_identity_missing',
+        'cli_not_installed',
+        'model_not_configured',
+        'execution_disabled',
+        'cwd_invalid',
+        'doctor_probe_failed_when_supported',
+        'worker_instance_failed',
+      ],
+      informationalSignals: [
+        'nativeProbe.version',
+        'doctorProbe.supported',
+        'capabilityProbe.detected',
+        'commandPreview',
+        'lastHeartbeatAt',
+      ],
+      probes: [
+        'command-installed',
+        'native-version-probe',
+        'doctor-probe',
+        'capability-probe',
+        'model-binding-check',
+        'cwd-check',
+      ],
+      expectedNativeCapabilities: expectedBridgeNativeCapabilities(runtimeBase),
+    }
+  }
+  return {
+    readinessSource: 'Controller validation',
+    blockingSignals: ['runtime_base_missing', 'model_missing'],
+    informationalSignals: [],
+    probes: ['explicit-runtime-base-check'],
+    expectedNativeCapabilities: [],
   }
 }
 
@@ -393,6 +462,21 @@ function bridgeRuntimeBaseProfile(input: {
   }
 }
 
+function expectedBridgeNativeCapabilities(runtimeBase: string | null): string[] {
+  switch (runtimeBase) {
+    case 'claude-code':
+      return ['auth', 'mcp', 'nonInteractive', 'jsonOutput', 'sessionResume', 'agents', 'project', 'doctor']
+    case 'opencode':
+      return ['auth', 'models', 'mcp', 'server', 'nonInteractive', 'jsonOutput', 'sessionResume', 'agents', 'doctor']
+    case 'codex':
+      return ['auth', 'models', 'nonInteractive', 'sessionResume', 'project']
+    case 'gemini':
+      return ['auth', 'models', 'nonInteractive', 'mcp']
+    default:
+      return []
+  }
+}
+
 function runtimeSoulLines(runtimeBase: string | null): string[] {
   switch (runtimeBase) {
     case 'openclaw':
@@ -442,6 +526,7 @@ function runtimeSoulLines(runtimeBase: string | null): string[] {
 function runtimeContextLines(runtimeBase: string | null): string[] {
   const mode = runtimeModeForBase(runtimeBase)
   const profile = runtimeBaseProfile(runtimeBase)
+  const diagnostics = runtimeDiagnosticContract(runtimeBase)
   return [
     `- Mode: ${mode}`,
     `- Base profile: ${profile.label}`,
@@ -452,6 +537,10 @@ function runtimeContextLines(runtimeBase: string | null): string[] {
     `- Runtime readiness: ${profile.implementation.healthSource}`,
     '- The upper-layer Manager should see the same worker capabilities regardless of runtime base: identity, skills, workspace, heartbeat, room listener, and task contract.',
     `- Parity capabilities: ${RUNTIME_PARITY_CAPABILITIES.join(', ')}`,
+    `- Diagnostic readiness source: ${diagnostics.readinessSource}`,
+    `- Blocking diagnostic signals: ${diagnostics.blockingSignals.join(', ')}`,
+    `- Diagnostic probes: ${diagnostics.probes.join(', ')}`,
+    `- Expected native capabilities: ${diagnostics.expectedNativeCapabilities.length ? diagnostics.expectedNativeCapabilities.join(', ') : 'none'}`,
     profile.currentLimits.length ? `- Current limits: ${profile.currentLimits.join(' ')}` : '- Current limits: none recorded.',
   ]
 }

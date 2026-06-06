@@ -225,6 +225,11 @@ describe('Agent contract generator', () => {
     expect(registryWorker.runtimeContract.mode).toBe('bridge')
     expect(registryWorker.runtimeContract.baseProfile.label).toBe('OpenCode Worker')
     expect(registryWorker.runtimeContract.baseProfile.matrixIntegration.owner).toBe('agenthub-supervisor')
+    expect(registryWorker.runtimeContract.diagnosticContract.readinessSource).toContain('inspectCodeAgentRuntime')
+    expect(registryWorker.runtimeContract.diagnosticContract.probes).toEqual(expect.arrayContaining([
+      'doctor-probe',
+      'capability-probe',
+    ]))
     expect(registryWorker.runtimeContract.parityCapabilities).toEqual(expect.arrayContaining([
       'matrix_identity',
       'room_timeline_io',
@@ -307,6 +312,10 @@ describe('Agent contract generator', () => {
     expect(agentsText).toContain('Runtime base: opencode')
     expect(agentsText).toContain('Runtime mode: bridge')
     expect(agentsText).toContain('Worker Reconcile Contract')
+    expect(agentsText).toContain('Diagnostic readiness source: inspectCodeAgentRuntime')
+    expect(agentsText).toContain('Blocking diagnostic signals: contract_missing')
+    expect(agentsText).toContain('Diagnostic probes: command-installed, native-version-probe, doctor-probe, capability-probe')
+    expect(agentsText).toContain('Expected native capabilities: auth, models, mcp')
     expect(agentsText).toContain('Matrix user id: @contract-worker:agenthub.local')
     expect(agentsText).toContain('Controller API: http://127.0.0.1:8000')
     expect(agentsText).toContain('Contract Group')
@@ -394,6 +403,11 @@ describe('Agent contract generator', () => {
         adapterContract: {
           mode: string
           parityCapabilities: string[]
+          diagnosticContract: {
+            readinessSource: string
+            probes: string[]
+            expectedNativeCapabilities: string[]
+          }
           baseProfile: {
             label: string
             roleEligibility: { manager: boolean; worker: boolean }
@@ -407,6 +421,7 @@ describe('Agent contract generator', () => {
       expect(runtime.runtimeBase).toBe(item.base)
       expect(runtime.runtimeMode).toBe(item.mode)
       expect(runtime.adapterContract.mode).toBe(item.mode)
+      expect(runtime.adapterContract.diagnosticContract.probes.length).toBeGreaterThan(0)
       expect(runtime.adapterContract.parityCapabilities).toEqual(expect.arrayContaining([
         'matrix_identity',
         'room_timeline_io',
@@ -423,9 +438,12 @@ describe('Agent contract generator', () => {
       expect(runtime.adapterContract.baseProfile.matrixIntegration.owner).toBe(item.listenerOwner)
       if (item.base === 'qwenpaw') {
         expect(runtime.adapterContract.baseProfile.currentLimits.join(' ')).toContain('WorkerBackend is not implemented')
+        expect(runtime.adapterContract.diagnosticContract.expectedNativeCapabilities).toContain('runtime-native-matrix-listener')
       }
       if (item.mode === 'bridge') {
         expect(runtime.adapterContract.baseProfile.currentLimits.join(' ')).toContain('not yet a runtime-native Matrix listener')
+        expect(runtime.adapterContract.diagnosticContract.readinessSource).toContain('inspectCodeAgentRuntime')
+        expect(runtime.adapterContract.diagnosticContract.probes).toContain('capability-probe')
       }
     }
   })
