@@ -22,7 +22,6 @@ import {
   createSavedAgent,
   flushAgentLibraryServerSync,
   loadAgentLibraryState,
-  normalizeCodeAgentType,
   saveAgentLibraryState,
   saveAgentToLibrary,
   syncOpenClawAgentsIntoLibrary,

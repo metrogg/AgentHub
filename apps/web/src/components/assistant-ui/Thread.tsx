@@ -189,7 +189,6 @@ import {
 } from '../../lib/runtimeStatusProjection'
 import { useChatStore } from '../../stores/chatStore'
 import {
-  makeSelectMessageAvatarState,
   makeSelectMessageById,
   makeSelectMessageWithQuoteSource,
   selectAgentHeaderState,
@@ -207,7 +206,7 @@ import {
 } from '../chat/QuickPromptBubbles'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
-import { WorkspaceFileExplorer, type RailFileItem } from '../workspace/WorkspaceFileExplorer'
+import { WorkspaceFileExplorer } from '../workspace/WorkspaceFileExplorer'
 import {
   ChatAttachmentsPart,
   PendingAttachmentList,
@@ -1051,165 +1050,6 @@ type RailFileItem = {
   url?: string
   source?: string
   kind: ArtifactPreviewItem['kind']
-}
-
-function buildDirectRunProgress(input: {
-  activity: LiveAgentActivity | null
-  agentName?: string | null
-  messages: Message[]
-  streamingRun: CodeAgentRunMetadata | null
-}): DirectRunProgress | null {
-  const run = input.streamingRun ?? latestCodeAgentRunFromMessages(input.messages)
-  if (!run) return null
-
-  const steps = buildDirectRunSteps(run)
-  if (!steps.length) return null
-
-  const total = steps.length
-  const done = steps.filter((step) =>
-    step.status === 'done' || step.status === 'failed' || step.status === 'cancelled',
-  ).length
-  const rawPercent = Math.round((done / total) * 100)
-  const percent =
-    run.status === 'running'
-      ? Math.min(95, Math.max(8, rawPercent))
-      : run.status === 'completed'
-        ? 100
-        : Math.max(rawPercent, 100)
-  const summary = [
-    codeAgentRuntimeLabel(run.runtime),
-    codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
-    input.agentName || input.activity?.agentName,
-  ].filter(Boolean).join(' · ')
-
-  return {
-    agentName: input.agentName ?? input.activity?.agentName,
-    done,
-    percent,
-    run,
-    status: run.status,
-    steps,
-    subtitle: summary,
-    total,
-  }
-}
-
-function latestCodeAgentRunFromMessages(messages: Message[]) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const value = messages[index]?.metadata?.codeAgentRun
-    if (isCodeAgentRunMetadataLike(value)) return value
-  }
-  return null
-}
-
-function isCodeAgentRunMetadataLike(value: unknown): value is CodeAgentRunMetadata {
-  return Boolean(
-    value &&
-      typeof value === 'object' &&
-      (value as { type?: unknown }).type === 'code-agent-run' &&
-      typeof (value as { status?: unknown }).status === 'string' &&
-      typeof (value as { runtime?: unknown }).runtime === 'string',
-  )
-}
-
-function buildDirectRunSteps(run: CodeAgentRunMetadata): DirectRunProgress['steps'] {
-  const steps = run.steps ?? []
-  if (steps.length) {
-    const rows = steps
-      .filter((step) => step.kind !== 'log')
-      .map((step) => ({
-        detail: step.detail ? trimLongText(step.detail, 120) : undefined,
-        id: step.id,
-        status: directRunStatusFromCodeAgent(step.status),
-        subtitle: [
-          step.subtitle,
-          step.toolName,
-          step.command,
-          step.path ? compactPath(step.path) : null,
-          step.fileStatus ? fileStatusLabel(step.fileStatus) : null,
-        ].filter(Boolean).join(' · ') || undefined,
-        title: step.title,
-      }))
-    const logSteps = steps.filter((step) => step.kind === 'log')
-    if (logSteps.length) {
-      const lastLog = logSteps[logSteps.length - 1]
-      rows.push({
-        detail: lastLog.detail ? trimLongText(lastLog.detail, 120) : undefined,
-        id: 'direct-log-summary',
-        status: logSteps.some((step) => step.status === 'failed') ? 'failed' : 'done',
-        subtitle: `${logSteps.length} 条运行日志`,
-        title: '整理过程输出',
-      })
-    }
-    return rows
-  }
-
-  const inferred: DirectRunProgress['steps'] = [
-    {
-      detail: run.cwd ? compactPath(run.cwd) ?? run.cwd : undefined,
-      id: 'direct-start',
-      status: run.status === 'running' ? 'running' : directRunStatusFromCodeAgent(run.status),
-      subtitle: [codeAgentRuntimeLabel(run.runtime), run.command].filter(Boolean).join(' · '),
-      title: '启动 Agent Runtime',
-    },
-  ]
-
-  for (const command of (run.commands ?? []).slice(0, 3)) {
-    inferred.push({
-      detail: command.output ? trimLongText(command.output, 120) : undefined,
-      id: `direct-command-${command.id}`,
-      status: 'done',
-      subtitle: command.cwd ? compactPath(command.cwd) ?? command.cwd : undefined,
-      title: command.command,
-    })
-  }
-
-  for (const call of (run.toolCalls ?? []).slice(0, 3)) {
-    inferred.push({
-      detail: call.detail ? trimLongText(call.detail, 120) : undefined,
-      id: `direct-tool-${call.id}`,
-      status: 'done',
-      subtitle: [call.name, call.target].filter(Boolean).join(' · ') || undefined,
-      title: call.label,
-    })
-  }
-
-  for (const file of (run.files ?? []).slice(0, 4)) {
-    inferred.push({
-      id: `direct-file-${file.path}`,
-      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
-      subtitle: fileStatusLabel(file.status),
-      title: compactPath(file.path) ?? file.path,
-    })
-  }
-
-  const artifacts = readFlowArtifacts(run.artifacts)
-  if (artifacts.length) {
-    inferred.push({
-      id: 'direct-artifacts',
-      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
-      subtitle: `${artifacts.length} 个产物`,
-      title: '汇总产物',
-    })
-  }
-
-  if (run.status !== 'running') {
-    inferred.push({
-      detail: run.finalMessage ? trimLongText(run.finalMessage, 120) : undefined,
-      id: 'direct-finish',
-      status: directRunStatusFromCodeAgent(run.status),
-      title: codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
-    })
-  }
-
-  return inferred
-}
-
-function directRunStatusFromCodeAgent(status: CodeAgentRunMetadata['status']): DirectRunStepStatus {
-  if (status === 'running') return 'running'
-  if (status === 'failed' || status === 'timed-out') return 'failed'
-  if (status === 'cancelled') return 'cancelled'
-  return 'done'
 }
 
 function directRunStepIcon(status: DirectRunStepStatus) {

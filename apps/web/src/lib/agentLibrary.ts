@@ -427,6 +427,11 @@ function defaultCodeAgentTypeFor(
   return preset?.codeAgentType ?? 'codex'
 }
 
+export function normalizeCodeAgentType(value?: string | null): WorkspaceCliCodeAgentType {
+  if (value === 'claude-code' || value === 'opencode' || value === 'gemini') return value
+  return 'codex'
+}
+
 function isManagerAgent(input: Partial<Pick<AgentConfigInput, 'roleType' | 'name' | 'role' | 'roleProfile'>>) {
   return (input.roleType ?? inferRoleType(input)) === 'orchestrator'
 }

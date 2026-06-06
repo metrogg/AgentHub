@@ -1,5 +1,3 @@
-import type { CodeAgentType } from './enums'
-
 export const AGENT_ROLE_TYPES = [
   'orchestrator',
   'clarifier',
