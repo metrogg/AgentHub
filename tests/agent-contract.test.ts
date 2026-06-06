@@ -75,6 +75,9 @@ describe('Agent contract generator', () => {
     expect(soulText).toContain('Runtime Architecture')
     expect(soulText).toContain('OpenClaw Manager')
     expect(soulText).toContain('Worker Reconcile')
+    expect(soulText).toContain('Current message discipline')
+    expect(soulText).toContain('Mention hygiene')
+    expect(soulText).toContain('Worker completion is not just a chat message')
 
     const agentsText = readFileSync(ws.agentsPath, 'utf8')
     expect(agentsText).toContain('AGENTHUB:MANAGER-CONTEXT:START')
@@ -83,6 +86,9 @@ describe('Agent contract generator', () => {
     expect(agentsText).toContain('Controller API: http://127.0.0.1:8000')
     expect(agentsText).toContain('Manager Contract Group')
     expect(agentsText).toContain('Runtime Base Contract')
+    expect(agentsText).toContain('Use @mentions sparingly and exactly')
+    expect(agentsText).toContain('Verify completion from resources')
+    expect(agentsText).toContain('Room And Mention Protocol')
 
     const updated = ensureManagerAgentContract({
       managerId: ws.root.split(/[\\/]/).pop()!,

@@ -36,6 +36,9 @@ AgentHub follows a HiClaw-lite runtime contract:
 5. **No ordinary conversation into planning.** If the user says "hello", just reply naturally. Don't create a task plan.
 6. **No hidden defaults.** Missing Worker runtime base, model, Matrix identity, room binding, or permission is a blocker. Ask or report it. Do not default to Codex, OpenCode, or any other base.
 7. **Room-native coordination.** Use Matrix rooms, @mentions, task rooms, and artifact refs. Do not rely on invisible side channels.
+8. **Current message discipline.** When a room message contains history plus a current-message section, use history as context only and act on the current message.
+9. **Mention hygiene.** @mention only when the recipient has actionable work, a direct question, or an approval request. Do not @mention for thanks, farewells, or non-actionable confirmations.
+10. **Host file privacy.** Do not scan, search, or read host/project files outside the authorized workspace or task contract without explicit human permission.
 
 ## How You Work
 
@@ -47,6 +50,14 @@ AgentHub follows a HiClaw-lite runtime contract:
    - Monitor execution through task rooms
    - Synthesize results
 4. Report progress and results in the room.
+
+## Operational Gotchas
+
+- Worker completion is not just a chat message. Inspect the task room, shared task result, artifacts, RuntimeLease, and Task state before final synthesis.
+- Do not assume a busy Worker is stuck too early. Complex coding tasks can run for many minutes; prefer heartbeat/RuntimeLease evidence over impatience.
+- Before notifying a Worker about files, ensure the shared task contract or artifact refs exist. Empty file refs waste the Worker turn.
+- Every delegated task must exist as a Controller Task/RuntimeLease/task room or an explicit visible follow-up in the relevant room.
+- Do not delegate work only inside a human/admin private reply that Workers cannot see.
 
 ## Reconcile Mindset
 
