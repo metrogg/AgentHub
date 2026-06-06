@@ -188,6 +188,16 @@ describe('Controller Plane', () => {
       modelId: 'test-model',
       role: 'Engineer',
       roleType: 'coder',
+      description: 'Own frontend implementation and report progress in Matrix rooms.',
+      systemPrompt: 'Act as a careful frontend engineer inside AgentHub rooms.',
+      roleProfile: {
+        expertProfileId: 'frontend-engineer',
+        outputContract: ['implementation_notes', 'changed_files'],
+      },
+      capabilityTags: ['frontend', 'implementation'],
+      skillIds: ['task-management', 'file-sharing'],
+      toolPermissions: ['chat', 'workspace:read', 'workspace:write'],
+      contextPolicy: 'workspace-aware',
       createDirectSession: true,
       joinGroupRoom: true,
       announce: true,
@@ -211,6 +221,14 @@ describe('Controller Plane', () => {
     const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, result.agentId)).limit(1)
     expect(agent?.codeAgentType).toBe('opencode')
     expect(agent?.modelId).toBe('test-model')
+    expect(agent?.description).toContain('frontend implementation')
+    expect(agent?.systemPrompt).toContain('frontend engineer')
+    expect(agent?.capabilityTags).toEqual(['frontend', 'implementation'])
+    expect(agent?.skillIds).toEqual(['task-management', 'file-sharing'])
+    expect(agent?.toolPermissions).toEqual(['chat', 'workspace:read', 'workspace:write'])
+    expect(agent?.contextPolicy).toBe('workspace-aware')
+    expect(agent?.roleProfile?.expertProfileId).toBe('frontend-engineer')
+    expect(agent?.roleProfile?.outputContract).toEqual(['implementation_notes', 'changed_files'])
     expect(agent?.roleProfile?.workerRuntimeBase).toBe('opencode')
 
     const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, result.workerInstanceId)).limit(1)

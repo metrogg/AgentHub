@@ -462,7 +462,16 @@ export class ControllerApi {
     skillIds?: string[]
     role?: string
     roleType?: string
+    description?: string
+    systemPrompt?: string
+    roleProfile?: Record<string, unknown> | null
+    color?: string
+    capabilityTags?: string[]
+    toolPermissions?: string[]
     sandboxPolicy?: string
+    contextPolicy?: string
+    autoInvoke?: boolean
+    approvalRequired?: boolean
     ownerId?: string | null
     groupSessionId?: string | null
     joinGroupRoom?: boolean

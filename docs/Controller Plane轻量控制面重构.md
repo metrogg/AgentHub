@@ -63,6 +63,8 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `ControllerApi.createWorker()` 不再把缺失的 Worker runtime base 静默默认成 Codex。解析顺序是：显式 `runtimeBase / workerRuntimeBase / codeAgentType` → `AGENTHUB_WORKER_RUNTIME_BASE` → 当前 workspace 已有 Worker 基座 → 报错要求补齐。
 - `POST /api/workspaces/:id/workers` 已接入 Member Reconcile：添加 Worker 时由 Controller 统一负责 direct/group room reconcile、Worker participant、contract refresh 和 Manager announcement，不再由 route 自己散写 direct session。
 - `ManagerRuntimeService` 的 `create_worker` action 已接入 Member Reconcile：Manager 运行时输出显式 member spec 后，会调用 `ControllerApi.createWorker()` 创建 Worker、加入当前 group room、创建 direct room，并写回 `manager.action.create_worker.applied / failed`。
+- Manager 补员确认卡也已接入 Member Reconcile：确认后不再直接 insert `workspace_agents` 或手动 add participant，而是把 proposal / 专家预设中的角色说明、系统提示、skills、工具权限、上下文策略和 `roleProfile` 交给 `ControllerApi.createWorker()`；卡片 metadata 会记录 `workerInstanceIds / runtimeBases / memberReconcileResults`，便于 UI 和诊断展示真实阶段。
+- 后端创建默认值继续收紧：工作区创建 Worker 和聊天 Agent 草案 normalize 都不会再把缺失的 `codeAgentType` 静默改成 `codex`；缺 Worker runtime base 会交给 Controller 显式报错或使用用户配置的 `AGENTHUB_WORKER_RUNTIME_BASE`。
 - `infra/agenthub-cli/agenthub.ts` 的 `worker create/apply` 已取消 Codex 默认值，必须显式传 `--runtime-base`；OpenClaw Manager skill 示例也已更新为 `--runtime-base ... --model ...`。
 - OpenClaw Worker 的 `roleProfile.workerRuntimeBase=openclaw` 会保持为 resident Worker 语义，`workspace_agents.codeAgentType` 不再写成 `codex`。
 - `WorkerRuntimeService.runGroupMentionRoom()` 会把真实 runtime result status 返回给 dispatcher；Worker 执行失败时保持 `failed`，不再被旧 group mention bridge 覆盖成 `idle`。

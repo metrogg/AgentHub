@@ -120,7 +120,7 @@ function normalizeAgentCreateDefaults(input: z.infer<typeof createAgentSchema>):
   if (input.runtimeType === 'code-agent') {
     return {
       ...input,
-      codeAgentType: input.codeAgentType ?? 'codex',
+      codeAgentType: input.codeAgentType ?? null,
       sandboxPolicy: input.sandboxPolicy === 'danger-full-access' ? 'danger-full-access' : 'workspace-write',
       approvalRequired: false,
     }
@@ -152,7 +152,7 @@ function normalizeAgentUpdateDefaults(
   }
   if (nextRuntimeType === 'code-agent') {
     if (input.codeAgentType === null) {
-      result.codeAgentType = 'codex'
+      result.codeAgentType = null
     }
     if (input.sandboxPolicy === undefined) {
       result.sandboxPolicy = 'workspace-write'

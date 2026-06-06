@@ -25,8 +25,14 @@ export function codeAgentTypeForRuntime(runtimeBase: string, value?: string | nu
   return normalizeCodeAgentType(value) ?? normalizeWorkerRuntimeBase(runtimeBase)
 }
 
-export function workerRoleProfileFromRuntime(runtimeBase?: string | null): Record<string, unknown> {
-  return { workerRuntimeBase: normalizeWorkerRuntimeBase(runtimeBase) }
+export function workerRoleProfileFromRuntime(
+  runtimeBase?: string | null,
+  extra?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  return {
+    ...(extra ?? {}),
+    workerRuntimeBase: normalizeWorkerRuntimeBase(runtimeBase),
+  }
 }
 
 export function readWorkerRuntimeBase(roleProfile: unknown) {

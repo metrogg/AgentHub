@@ -41,7 +41,16 @@ export interface MemberReconcileInput {
   skillIds?: string[]
   role?: string
   roleType?: string
+  description?: string
+  systemPrompt?: string
+  roleProfile?: Record<string, unknown> | null
+  color?: string
+  capabilityTags?: string[]
+  toolPermissions?: string[]
   sandboxPolicy?: string
+  contextPolicy?: string
+  autoInvoke?: boolean
+  approvalRequired?: boolean
   ownerId?: string | null
   groupSessionId?: string | null
   joinGroupRoom?: boolean
@@ -200,10 +209,18 @@ export class MemberReconciler {
           roleType: (input.roleType as any) || spec.existingAgent.roleType,
           runtimeType: 'code-agent' as any,
           codeAgentType: codeAgentTypeForRuntime(spec.runtimeBase, input.codeAgentType) as any,
-          roleProfile: workerRoleProfileFromRuntime(spec.runtimeBase),
+          description: input.description ?? spec.existingAgent.description ?? '',
+          systemPrompt: input.systemPrompt ?? spec.existingAgent.systemPrompt ?? '',
+          roleProfile: workerRoleProfileFromRuntime(spec.runtimeBase, input.roleProfile),
+          color: input.color ?? spec.existingAgent.color ?? '#6366f1',
           modelId: spec.modelId,
+          capabilityTags: input.capabilityTags ?? spec.existingAgent.capabilityTags ?? [],
           skillIds: input.skillIds ?? spec.existingAgent.skillIds ?? [],
+          toolPermissions: input.toolPermissions ?? spec.existingAgent.toolPermissions ?? [],
           sandboxPolicy: (input.sandboxPolicy as any) || spec.existingAgent.sandboxPolicy || 'workspace-write',
+          contextPolicy: (input.contextPolicy as any) || spec.existingAgent.contextPolicy || 'workspace-aware',
+          autoInvoke: input.autoInvoke ?? spec.existingAgent.autoInvoke ?? true,
+          approvalRequired: input.approvalRequired ?? spec.existingAgent.approvalRequired ?? true,
         })
         .where(eq(workspaceAgents.id, spec.existingAgent.id))
         .returning()
@@ -218,13 +235,20 @@ export class MemberReconciler {
         name: input.name,
         role: (input.role as any) || 'worker',
         roleType: (input.roleType as any) || undefined,
+        description: input.description ?? '',
+        systemPrompt: input.systemPrompt ?? '',
         runtimeType: 'code-agent' as any,
         codeAgentType: codeAgentTypeForRuntime(spec.runtimeBase, input.codeAgentType) as any,
-        roleProfile: workerRoleProfileFromRuntime(spec.runtimeBase),
+        roleProfile: workerRoleProfileFromRuntime(spec.runtimeBase, input.roleProfile),
+        color: input.color ?? '#6366f1',
         modelId: spec.modelId,
+        capabilityTags: input.capabilityTags ?? [],
         skillIds: input.skillIds ?? [],
-        toolPermissions: [],
+        toolPermissions: input.toolPermissions ?? [],
         sandboxPolicy: (input.sandboxPolicy as any) || 'workspace-write',
+        contextPolicy: (input.contextPolicy as any) || 'workspace-aware',
+        autoInvoke: input.autoInvoke ?? true,
+        approvalRequired: input.approvalRequired ?? true,
       })
       .returning()
     if (!inserted) throw new Error('Failed to create workspace agent.')
