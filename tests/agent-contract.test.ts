@@ -5,8 +5,23 @@ import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
-const { db, workspaceAgents, workspaces } = dbApi
-const { ensureManagerAgentContract, ensureWorkerAgentContract } = await import('../apps/server/src/services/agent-contract')
+const {
+  db,
+  matrixIdentities,
+  orchestratorRuns,
+  roomParticipants,
+  rooms,
+  runtimeLeases,
+  sessions,
+  workerInstances,
+  workspaceAgents,
+  workspaces,
+} = dbApi
+const {
+  ensureManagerAgentContract,
+  ensureManagerAgentContractFromController,
+  ensureWorkerAgentContract,
+} = await import('../apps/server/src/services/agent-contract')
 const { projectWorkerContractIntoBridgeCwd } = await import('../apps/server/src/services/worker-runtime/worker-bridge-contract')
 
 describe('Agent contract generator', () => {
@@ -83,6 +98,145 @@ describe('Agent contract generator', () => {
     const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as Record<string, unknown>
     expect(runtime.runtimeFamily).toBe('manager')
     expect(runtime.runtimeType).toBe('qwenpaw')
+  })
+
+  test('refreshes Manager registries from Controller resources', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Manager Registry Workspace',
+        goal: 'Verify Manager reads Controller-backed registries',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Registry Worker',
+        role: 'Runtime registry specialist',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        modelId: 'mimo-v2.5',
+        capabilityTags: ['registry', 'runtime'],
+        skillIds: ['task-management'],
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'opencode',
+        modelId: 'mimo-v2.5',
+        skillIds: ['task-management'],
+        observedState: 'listening',
+        desiredState: 'running',
+        lastHeartbeatAt: new Date(),
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: `!manager-registry-${Date.now()}:agenthub.local`,
+        kind: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        title: 'Manager Registry Group',
+        status: 'active',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Manager Registry Session',
+        type: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+      })
+      .returning()
+    await db.insert(roomParticipants).values([
+      {
+        roomId: room!.id,
+        participantType: 'manager',
+        providerUserId: '@manager:agenthub.local',
+        displayName: 'Manager',
+        role: 'manager',
+      },
+      {
+        roomId: room!.id,
+        participantType: 'human',
+        userId: 'default-user',
+        providerUserId: '@human-default:agenthub.local',
+        displayName: 'Human Default',
+        role: 'owner',
+      },
+      {
+        roomId: room!.id,
+        participantType: 'worker',
+        workspaceAgentId: agent!.id,
+        workerInstanceId: worker!.id,
+        providerUserId: '@registry-worker:agenthub.local',
+        displayName: 'Registry Worker',
+        role: 'member',
+      },
+    ])
+    await db.insert(matrixIdentities).values({
+      ownerType: 'worker',
+      ownerId: worker!.id,
+      serverName: 'agenthub.local',
+      localpart: `worker-${worker!.id}`,
+      userId: '@registry-worker:agenthub.local',
+      displayName: 'Registry Worker',
+      metadata: {
+        matrixSync: {
+          status: 'ok',
+          lastSyncAt: '2026-06-07T00:00:00.000Z',
+        },
+      },
+    })
+    await db.insert(runtimeLeases).values({
+      workspaceId: workspace!.id,
+      workerInstanceId: worker!.id,
+      provider: 'local-workdir',
+      status: 'running',
+      metadata: {},
+    })
+    await db.insert(orchestratorRuns).values({
+      workspaceId: workspace!.id,
+      groupSessionId: session!.id,
+      status: 'running',
+    })
+
+    const ws = await ensureManagerAgentContractFromController({
+      managerId: `controller-registry-${Date.now()}`,
+      runtimeType: 'openclaw',
+      matrixUserId: '@manager:agenthub.local',
+    })
+
+    const workersRegistry = JSON.parse(readFileSync(ws.workerRegistryPath, 'utf8')) as Record<string, any>
+    expect(workersRegistry.source).toBe('agenthub-controller')
+    expect(workersRegistry.workers.some((item: any) => item.workerInstanceId === worker!.id)).toBe(true)
+    const registryWorker = workersRegistry.workers.find((item: any) => item.workerInstanceId === worker!.id)
+    expect(registryWorker.runtimeBase).toBe('opencode')
+    expect(registryWorker.matrixUserId).toBe('@registry-worker:agenthub.local')
+    expect(registryWorker.roomIds).toContain(room!.id)
+    expect(registryWorker.activeLeaseIds).toHaveLength(1)
+
+    const roomsMirror = JSON.parse(readFileSync(ws.roomsPath, 'utf8')) as Record<string, any>
+    expect(roomsMirror.rooms.some((item: any) => item.roomId === room!.id && item.title === 'Manager Registry Group')).toBe(true)
+
+    const humansRegistry = JSON.parse(readFileSync(ws.humanRegistryPath, 'utf8')) as Record<string, any>
+    expect(humansRegistry.humans.some((item: any) => item.matrixUserId === '@human-default:agenthub.local')).toBe(true)
+
+    const state = JSON.parse(readFileSync(ws.statePath, 'utf8')) as Record<string, any>
+    expect(state.source).toBe('agenthub-controller')
+    expect(state.resources.workers).toBeGreaterThanOrEqual(1)
+    expect(state.activeRuns.some((item: any) => item.workspaceId === workspace!.id)).toBe(true)
+    expect(state.heartbeat.lastMatrixSyncAt).toBe('2026-06-07T00:00:00.000Z')
   })
 
   test('creates normalized Worker contract files and refreshes AGENTS collaboration context', async () => {

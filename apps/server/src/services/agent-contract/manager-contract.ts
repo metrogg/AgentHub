@@ -1,5 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import {
+  db,
+  matrixIdentities,
+  orchestratorRuns,
+  roomParticipants,
+  rooms,
+  runtimeLeases,
+  workspaceAgents,
+  workerInstances,
+} from '@agenthub/db'
 import { agentHubUserDataRoot } from '../system-paths'
 
 const CONTEXT_START = '<!-- AGENTHUB:MANAGER-CONTEXT:START -->'
@@ -39,6 +49,53 @@ export interface EnsureManagerAgentContractInput {
     participantId?: string | null
     title?: string | null
   }>
+  currentWorkers?: ManagerWorkerRegistryEntry[]
+  currentHumans?: ManagerHumanRegistryEntry[]
+  currentTeams?: ManagerTeamRegistryEntry[]
+  managerState?: Record<string, unknown>
+}
+
+export interface ManagerWorkerRegistryEntry {
+  workerInstanceId: string
+  workspaceId: string
+  workspaceAgentId: string
+  name: string
+  role: string | null
+  roleType: string | null
+  runtimeBase: string
+  runtimeFamily: string
+  modelId: string | null
+  desiredState: string
+  observedState: string
+  skillIds: string[]
+  capabilityTags: string[]
+  sandboxPolicy: string | null
+  runtimeHome: string | null
+  runtimeConfigPath: string | null
+  matrixUserId: string | null
+  matrixSync: Record<string, unknown> | null
+  roomParticipantIds: string[]
+  roomIds: string[]
+  activeLeaseIds: string[]
+  lastHeartbeatAt: string | null
+  lastError: string | null
+}
+
+export interface ManagerHumanRegistryEntry {
+  userId: string | null
+  matrixUserId: string | null
+  displayName: string
+  roomIds: string[]
+  participantIds: string[]
+  status: string
+}
+
+export interface ManagerTeamRegistryEntry {
+  id: string
+  name: string
+  status: string
+  members: string[]
+  note?: string
 }
 
 export function resolveManagerAgentContractRoot(managerId?: string | null): string {
@@ -81,29 +138,72 @@ export function ensureManagerAgentContract(
   syncManagerSkills(ws.skillsDir)
 
   writeJson(ws.runtimePath, buildRuntime(input))
-  writeJsonIfMissing(ws.workerRegistryPath, { schemaVersion: 1, workers: [] })
-  writeJsonIfMissing(ws.teamRegistryPath, { schemaVersion: 1, teams: [] })
-  writeJsonIfMissing(ws.humanRegistryPath, { schemaVersion: 1, humans: [] })
-  writeJsonIfMissing(ws.statePath, {
-    schemaVersion: 1,
-    status: 'ready',
-    activeRuns: [],
-    heartbeat: {
-      lastHeartbeatAt: null,
-      lastMatrixSyncAt: null,
-      lastRuntimeReadyAt: null,
-      lastError: null,
-      queueDepth: 0,
-    },
-  })
-  writeJson(ws.roomsPath, {
-    schemaVersion: 1,
-    rooms: input.currentRooms ?? [],
-  })
+  if (input.currentWorkers) {
+    writeJson(ws.workerRegistryPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      workers: input.currentWorkers,
+    })
+  } else {
+    writeJsonIfMissing(ws.workerRegistryPath, { schemaVersion: 1, workers: [] })
+  }
+  if (input.currentTeams) {
+    writeJson(ws.teamRegistryPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      teams: input.currentTeams,
+    })
+  } else {
+    writeJsonIfMissing(ws.teamRegistryPath, { schemaVersion: 1, teams: [] })
+  }
+  if (input.currentHumans) {
+    writeJson(ws.humanRegistryPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      humans: input.currentHumans,
+    })
+  } else {
+    writeJsonIfMissing(ws.humanRegistryPath, { schemaVersion: 1, humans: [] })
+  }
+  if (input.managerState) {
+    writeJson(ws.statePath, buildManagerState(input))
+  } else {
+    writeJsonIfMissing(ws.statePath, buildManagerState(input))
+  }
+  if (input.currentRooms) {
+    writeJson(ws.roomsPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      rooms: input.currentRooms,
+    })
+  } else {
+    writeJsonIfMissing(ws.roomsPath, { schemaVersion: 1, rooms: [] })
+  }
   mirrorManagerAgentDir(ws)
   copyAgentHubCli(ws.root)
 
   return ws
+}
+
+export async function ensureManagerAgentContractFromController(
+  input: EnsureManagerAgentContractInput = {},
+): Promise<ManagerAgentContractWorkspace> {
+  const snapshot = await buildManagerControllerSnapshot()
+  return ensureManagerAgentContract({
+    ...input,
+    currentRooms: input.currentRooms ?? snapshot.currentRooms,
+    currentWorkers: input.currentWorkers ?? snapshot.currentWorkers,
+    currentHumans: input.currentHumans ?? snapshot.currentHumans,
+    currentTeams: input.currentTeams ?? snapshot.currentTeams,
+    managerState: {
+      ...snapshot.managerState,
+      ...(input.managerState ?? {}),
+    },
+  })
 }
 
 export function readManagerPromptContract(managerId?: string | null) {
@@ -129,6 +229,205 @@ function buildRuntime(input: EnsureManagerAgentContractInput) {
     matrixServerName: input.matrixServerName ?? null,
     skillSchema: 'agenthub-controller-v1',
   }
+}
+
+async function buildManagerControllerSnapshot(): Promise<{
+  currentRooms: NonNullable<EnsureManagerAgentContractInput['currentRooms']>
+  currentWorkers: ManagerWorkerRegistryEntry[]
+  currentHumans: ManagerHumanRegistryEntry[]
+  currentTeams: ManagerTeamRegistryEntry[]
+  managerState: Record<string, unknown>
+}> {
+  const [
+    roomRows,
+    participantRows,
+    workerRows,
+    agentRows,
+    identityRows,
+    leaseRows,
+    runRows,
+  ] = await Promise.all([
+    db.select().from(rooms),
+    db.select().from(roomParticipants),
+    db.select().from(workerInstances),
+    db.select().from(workspaceAgents),
+    db.select().from(matrixIdentities),
+    db.select().from(runtimeLeases),
+    db.select().from(orchestratorRuns),
+  ])
+
+  const activeRooms = roomRows.filter((room) => room.status === 'active')
+  const agentById = new Map(agentRows.map((agent) => [agent.id, agent]))
+  const participantsByWorker = new Map<string, Array<typeof roomParticipants.$inferSelect>>()
+  for (const participant of participantRows) {
+    if (!participant.workerInstanceId) continue
+    const list = participantsByWorker.get(participant.workerInstanceId) ?? []
+    list.push(participant)
+    participantsByWorker.set(participant.workerInstanceId, list)
+  }
+
+  const identitiesByWorker = new Map<string, typeof matrixIdentities.$inferSelect>()
+  for (const identity of identityRows) {
+    if (identity.ownerType !== 'worker') continue
+    identitiesByWorker.set(identity.ownerId, identity)
+  }
+
+  const activeLeaseStatuses = new Set(['creating', 'ready', 'running', 'waiting_for_human', 'cleaning'])
+  const activeLeasesByWorker = new Map<string, string[]>()
+  for (const lease of leaseRows) {
+    if (!lease.workerInstanceId || !activeLeaseStatuses.has(lease.status)) continue
+    const list = activeLeasesByWorker.get(lease.workerInstanceId) ?? []
+    list.push(lease.id)
+    activeLeasesByWorker.set(lease.workerInstanceId, list)
+  }
+
+  const currentRooms = activeRooms.map((room) => {
+    const managerParticipant = participantRows.find(
+      (participant) => participant.roomId === room.id && participant.participantType === 'manager',
+    )
+    return {
+      roomId: room.id,
+      roomKind: room.kind,
+      providerRoomId: room.providerRoomId,
+      participantId: managerParticipant?.id ?? null,
+      title: room.title,
+    }
+  })
+
+  const currentWorkers = workerRows.map((worker) => {
+    const agent = agentById.get(worker.workspaceAgentId)
+    const workerParticipants = participantsByWorker.get(worker.id) ?? []
+    const identity =
+      identitiesByWorker.get(worker.id)
+      ?? identitiesByWorker.get(worker.workspaceAgentId)
+      ?? identityRows.find((item) => workerParticipants.some((participant) => participant.providerUserId === item.userId))
+      ?? null
+    return {
+      workerInstanceId: worker.id,
+      workspaceId: worker.workspaceId,
+      workspaceAgentId: worker.workspaceAgentId,
+      name: agent?.name ?? worker.workspaceAgentId,
+      role: agent?.role ?? null,
+      roleType: agent?.roleType ?? null,
+      runtimeBase: worker.runtimeBase,
+      runtimeFamily: worker.runtimeFamily,
+      modelId: worker.modelId,
+      desiredState: worker.desiredState,
+      observedState: worker.observedState,
+      skillIds: worker.skillIds ?? agent?.skillIds ?? [],
+      capabilityTags: agent?.capabilityTags ?? [],
+      sandboxPolicy: worker.sandboxPolicy ?? agent?.sandboxPolicy ?? null,
+      runtimeHome: worker.runtimeHome,
+      runtimeConfigPath: worker.runtimeConfigPath,
+      matrixUserId: identity?.userId ?? null,
+      matrixSync: asPlainRecord(identity?.metadata?.matrixSync),
+      roomParticipantIds: workerParticipants.map((participant) => participant.id),
+      roomIds: workerParticipants.map((participant) => participant.roomId),
+      activeLeaseIds: activeLeasesByWorker.get(worker.id) ?? [],
+      lastHeartbeatAt: toIso(worker.lastHeartbeatAt),
+      lastError: readLastError(worker.health) ?? worker.message ?? null,
+    }
+  })
+
+  const humanMap = new Map<string, ManagerHumanRegistryEntry>()
+  for (const participant of participantRows.filter((row) => row.participantType === 'human')) {
+    const key = participant.providerUserId ?? participant.userId ?? participant.displayName
+    const existing = humanMap.get(key)
+    if (existing) {
+      existing.roomIds.push(participant.roomId)
+      existing.participantIds.push(participant.id)
+      if (participant.status !== 'joined') existing.status = participant.status
+      continue
+    }
+    humanMap.set(key, {
+      userId: participant.userId,
+      matrixUserId: participant.providerUserId,
+      displayName: participant.displayName,
+      roomIds: [participant.roomId],
+      participantIds: [participant.id],
+      status: participant.status,
+    })
+  }
+
+  const activeRuns = runRows
+    .filter((run) => run.status === 'planning' || run.status === 'running' || run.status === 'synthesizing')
+    .map((run) => ({
+      runId: run.id,
+      workspaceId: run.workspaceId,
+      groupSessionId: run.groupSessionId,
+      status: run.status,
+      createdAt: toIso(run.createdAt),
+      updatedAt: toIso(run.updatedAt),
+    }))
+
+  return {
+    currentRooms,
+    currentWorkers,
+    currentHumans: Array.from(humanMap.values()),
+    currentTeams: [],
+    managerState: {
+      activeRuns,
+      resources: {
+        rooms: activeRooms.length,
+        workers: currentWorkers.length,
+        humans: humanMap.size,
+        activeRuntimeLeases: Array.from(activeLeasesByWorker.values()).reduce((sum, ids) => sum + ids.length, 0),
+      },
+      heartbeat: {
+        lastHeartbeatAt: null,
+        lastMatrixSyncAt: latestMatrixSyncAt(identityRows),
+        lastRuntimeReadyAt: null,
+        lastError: null,
+        queueDepth: activeRuns.length,
+      },
+    },
+  }
+}
+
+function buildManagerState(input: EnsureManagerAgentContractInput) {
+  return {
+    schemaVersion: 1,
+    status: 'ready',
+    generatedAt: new Date().toISOString(),
+    source: input.managerState ? 'agenthub-controller' : 'agent-contract',
+    activeRuns: [],
+    heartbeat: {
+      lastHeartbeatAt: null,
+      lastMatrixSyncAt: null,
+      lastRuntimeReadyAt: null,
+      lastError: null,
+      queueDepth: 0,
+    },
+    ...(input.managerState ?? {}),
+  }
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function readLastError(health: Record<string, unknown>) {
+  return stringOrNull(health.lastError)
+    ?? stringOrNull(health.error)
+    ?? stringOrNull(asPlainRecord(health.matrixSync)?.lastError)
+}
+
+function stringOrNull(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function latestMatrixSyncAt(identityRows: Array<typeof matrixIdentities.$inferSelect>) {
+  const values = identityRows
+    .map((identity) => stringOrNull(asPlainRecord(identity.metadata?.matrixSync)?.lastSyncAt))
+    .filter((value): value is string => Boolean(value))
+    .sort()
+  return values.at(-1) ?? null
+}
+
+function toIso(value: Date | null | undefined) {
+  return value ? value.toISOString() : null
 }
 
 function buildManagerSoul(): string {

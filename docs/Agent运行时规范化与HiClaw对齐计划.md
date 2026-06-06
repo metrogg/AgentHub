@@ -295,6 +295,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - Worker `SOUL.md` 已写入 runtime adapter identity：OpenClaw/QwenPaw resident、Claude Code/OpenCode/Codex/Gemini bridge 的运行差异会被描述清楚，但都遵守同一 Room/Task/Artifact/Heartbeat contract。
    - Worker `runtime.json` 已写入 `runtimeMode` 和 `adapterContract`，包括 listener owner、workspace contract、task contract 和 heartbeat 字段，便于诊断页和后续 runtime adapter 统一消费。
    - Manager contract 已统一生成 `runtime.json`、`SOUL.md`、`AGENTS.md`、`TOOLS.md`、`HEARTBEAT.md`、`skills/`、`workers-registry.json`、`teams-registry.json`、`humans-registry.json`、`state.json`、`rooms.json`、`logs/`，并镜像到 OpenClaw `agentDir`。
+   - 新增 `ensureManagerAgentContractFromController()`：Manager 启动前会从 Controller/DB 同步 active rooms、WorkerInstance、WorkspaceAgent、Matrix identity、Room participant、RuntimeLease、Human participant 和 active runs，刷新 `workers-registry.json / humans-registry.json / rooms.json / state.json`，不再只是空 registry 文件。
    - `manager-runtime/manager-config.ts` 已降级为兼容外壳，正式生成逻辑归口到 `apps/server/src/services/agent-contract/manager-contract.ts`。
    - `infra/manager-agent` 模板已补强 Runtime Architecture、Manager/Member/Worker 五阶段 reconcile、Bridge 规则、heartbeat patrol、显式 runtime/model 约束。
    - Manager skills 目录已补齐统一 `Decision Pattern`，示例不再默认使用 Codex，缺 runtime/model 必须请求确认或报错；新增轻量 `review-and-synthesis`、`error-recovery`、`capacity-management`、`artifact-management`、`heartbeat`、`memory-management` skill 作为 HiClaw skill 面的 AgentHub 版本。

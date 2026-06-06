@@ -9,7 +9,7 @@ import { getRuntimeServerPort } from '../../lib/runtime-server'
 import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv, matrixLocalpart } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
-import { ensureManagerAgentContract } from '../agent-contract'
+import { ensureManagerAgentContractFromController } from '../agent-contract'
 import {
   containerControllerUrl,
   containerLlmBaseUrl,
@@ -194,8 +194,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     // Generate config with Matrix credentials and a real model catalog target.
     await this.generateConfig()
 
-    // Copy agent files
-    this.copyAgentFiles()
+    // Copy agent files and refresh Controller-backed registries.
+    await this.copyAgentFiles()
 
     // Launch
     if (managerContainersEnabled()) {
@@ -428,9 +428,9 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return configPath
   }
 
-  private copyAgentFiles(): void {
+  private async copyAgentFiles(): Promise<void> {
     const serverPort = getRuntimeServerPort() ?? Number(process.env.PORT || 3000)
-    ensureManagerAgentContract({
+    await ensureManagerAgentContractFromController({
       managerId: 'global',
       runtimeType: this.runtimeType,
       matrixUserId: this.config.matrixUserId ?? null,
