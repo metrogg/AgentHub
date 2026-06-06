@@ -3,7 +3,15 @@ import { and, controllerAuditEvents, db, desc, eq, matrixIdentities } from '@age
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
 import { controllerApi } from '../services/controller-plane/controller-api'
-import { applyControllerManifest, controllerReconcileQueue, getControllerApiSchema, resourceRef, type ControllerResourceKind } from '../services/controller-plane'
+import {
+  applyControllerManifest,
+  confirmControllerApplyApproval,
+  controllerReconcileQueue,
+  denyControllerApplyApproval,
+  getControllerApiSchema,
+  resourceRef,
+  type ControllerResourceKind,
+} from '../services/controller-plane'
 
 // ─── Auth Middleware ───────────────────────────────────────────────────
 
@@ -428,6 +436,24 @@ controllerRoutes.delete('/humans/:name', async (c) => {
 controllerRoutes.post('/apply', async (c) => {
   const body = await c.req.json()
   return c.json(await applyControllerManifest(controllerApi, body))
+})
+
+controllerRoutes.post('/approvals/:eventId/confirm', async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  return c.json(await confirmControllerApplyApproval(controllerApi, {
+    approvalEventId: c.req.param('eventId'),
+    approvedBy: typeof body.approvedBy === 'string' ? body.approvedBy : 'manager-token',
+    reason: typeof body.reason === 'string' ? body.reason : null,
+  }))
+})
+
+controllerRoutes.post('/approvals/:eventId/deny', async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  return c.json(await denyControllerApplyApproval({
+    approvalEventId: c.req.param('eventId'),
+    deniedBy: typeof body.deniedBy === 'string' ? body.deniedBy : 'manager-token',
+    reason: typeof body.reason === 'string' ? body.reason : null,
+  }))
 })
 
 // ─── Platform Status ──────────────────────────────────────────────────

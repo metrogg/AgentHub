@@ -482,13 +482,61 @@ async function cmdApply(args: string[]) {
   if (file) {
     const { readFileSync } = require('node:fs')
     const content = readFileSync(file, 'utf8')
-    const result = await api('/api/controller/apply', { method: 'POST', body: { yaml: content } })
+    const approvalMode = f['approval-mode'] || f.approval
+    const body: Record<string, unknown> = { yaml: content }
+    if (approvalMode) body.approvalMode = approvalMode
+    if (f.room) body.requestApprovalRoomId = f.room
+    if (f.reason || f['requested-by']) {
+      body.approvalRequest = {
+        roomId: f.room || undefined,
+        reason: f.reason || undefined,
+        requestedBy: f['requested-by'] || undefined,
+      }
+    }
+    const result = await api('/api/controller/apply', { method: 'POST', body })
     output(result, f)
   } else {
     const resource = args[0]
     if (resource === 'worker') return cmdWorker(['apply', ...args.slice(1)])
     console.error('Usage: agenthub apply -f <yaml-file>  OR  agenthub apply worker --name <N> ...')
     process.exit(1)
+  }
+}
+
+// ─── Approval Command ────────────────────────────────────────────────
+
+async function cmdApproval(args: string[]) {
+  const [sub, ...rest] = args
+  const { flags: f } = parseArgs(rest)
+  const eventId = f.event || f['event-id'] || f.id
+  if (!eventId) { console.error('Error: --event <timeline-event-id> is required'); process.exit(1) }
+
+  switch (sub) {
+    case 'confirm': {
+      const result = await api(`/api/controller/approvals/${eventId}/confirm`, {
+        method: 'POST',
+        body: {
+          approvedBy: f['approved-by'] || f.by || undefined,
+          reason: f.reason || undefined,
+        },
+      })
+      output(result, f)
+      break
+    }
+    case 'deny': {
+      const result = await api(`/api/controller/approvals/${eventId}/deny`, {
+        method: 'POST',
+        body: {
+          deniedBy: f['denied-by'] || f.by || undefined,
+          reason: f.reason || undefined,
+        },
+      })
+      output(result, f)
+      break
+    }
+    default:
+      console.error('Usage: agenthub approval <confirm|deny> --event <timeline-event-id> [--reason "..."]')
+      process.exit(1)
   }
 }
 
@@ -539,7 +587,8 @@ Usage:
   agenthub room     <create|events|mention>
   agenthub team     <create|list|get|update|delete>
   agenthub human    <create|list|delete>
-  agenthub apply    -f <yaml-file>  |  agenthub apply worker --name <N> ...
+  agenthub apply    -f <yaml-file> [--approval-mode request --room <room-id>]  |  agenthub apply worker --name <N> ...
+  agenthub approval <confirm|deny> --event <timeline-event-id>
   agenthub schema
   agenthub status
   agenthub version
@@ -567,6 +616,7 @@ async function main() {
       case 'team':      await cmdTeam(rest); break
       case 'human':     await cmdHuman(rest); break
       case 'apply':     await cmdApply(rest); break
+      case 'approval':  await cmdApproval(rest); break
       case 'schema':    await cmdSchema(rest); break
       case 'status':    await cmdStatus(rest); break
       case 'version':   await cmdVersion(rest); break

@@ -1,5 +1,7 @@
-import { controllerAuditEvents, db } from '@agenthub/db'
+import { controllerAuditEvents, db, eq, timelineEvents } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
+import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
+import { roomService } from '../rooms/room-service'
 import type { ControllerApi } from './controller-api'
 import {
   CONTROLLER_ROOM_KINDS,
@@ -20,10 +22,19 @@ export interface ControllerApplyBody {
     approvedBy?: string
   }
   approvalToken?: string
+  approvalMode?: 'apply' | 'request'
+  requestApprovalRoomId?: string
+  approvalRequest?: {
+    roomId?: string
+    reason?: string
+    requestedBy?: string
+  }
 }
 
 export interface ControllerApplyResult {
   success: boolean
+  approvalRequested?: boolean
+  approvalEventId?: string | null
   applied: Array<{
     kind: string
     name?: string | null
@@ -52,6 +63,9 @@ export async function applyControllerManifest(
   body: ControllerApplyBody,
 ): Promise<ControllerApplyResult> {
   const resources = parseApplyResources(body)
+  if (body.approvalMode === 'request') {
+    return requestControllerApplyApproval(body, resources)
+  }
   const applied = []
   for (const resource of resources) {
     const manifest = normalizeManifest(resource)
@@ -80,6 +94,207 @@ export async function applyControllerManifest(
     })
   }
   return { success: true, applied }
+}
+
+export async function confirmControllerApplyApproval(
+  api: ControllerApi,
+  input: {
+    approvalEventId: string
+    approvedBy?: string | null
+    reason?: string | null
+  },
+): Promise<ControllerApplyResult & { approvalEventId: string }> {
+  const [event] = await db
+    .select()
+    .from(timelineEvents)
+    .where(eq(timelineEvents.id, input.approvalEventId))
+    .limit(1)
+  if (!event) {
+    throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Controller approval request event not found.')
+  }
+  const metadata = objectValue(event.metadata)
+  if (metadata.kind !== 'controller.apply.approval.requested') {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Timeline event is not a Controller apply approval request.')
+  }
+  if (metadata.status === 'approved') {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Controller apply approval request has already been approved.')
+  }
+  if (metadata.status === 'denied') {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Controller apply approval request has already been denied.')
+  }
+  const resources = Array.isArray(metadata.resources) ? metadata.resources : []
+  if (!resources.length) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Controller approval request does not contain apply resources.')
+  }
+  const result = await applyControllerManifest(api, {
+    resources,
+    approval: {
+      approved: true,
+      approvedBy: input.approvedBy ?? 'human',
+      reason: input.reason ?? stringValue(metadata.reason) ?? 'Approved from Room timeline.',
+    },
+  })
+  await markControllerApprovalEventResolved(event.id, event.metadata, {
+    status: 'approved',
+    resolvedBy: input.approvedBy ?? 'human',
+    reason: input.reason ?? null,
+    appliedCount: result.applied.length,
+    auditEventIds: result.applied.map((item) => item.auditEventId).filter(Boolean),
+  })
+  await appendControllerApprovalStatusEvent({
+    roomId: event.roomId,
+    approvalEventId: event.id,
+    status: 'approved',
+    approvedBy: input.approvedBy ?? 'human',
+    reason: input.reason ?? null,
+    result,
+  })
+  return {
+    ...result,
+    approvalEventId: event.id,
+  }
+}
+
+export async function denyControllerApplyApproval(input: {
+  approvalEventId: string
+  deniedBy?: string | null
+  reason?: string | null
+}): Promise<{ success: true; approvalEventId: string; status: 'denied' }> {
+  const [event] = await db
+    .select()
+    .from(timelineEvents)
+    .where(eq(timelineEvents.id, input.approvalEventId))
+    .limit(1)
+  if (!event) {
+    throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Controller approval request event not found.')
+  }
+  const metadata = objectValue(event.metadata)
+  if (metadata.kind !== 'controller.apply.approval.requested') {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Timeline event is not a Controller apply approval request.')
+  }
+  if (metadata.status === 'approved' || metadata.status === 'denied') {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply approval request has already been ${metadata.status}.`)
+  }
+  await markControllerApprovalEventResolved(event.id, event.metadata, {
+    status: 'denied',
+    resolvedBy: input.deniedBy ?? 'human',
+    reason: input.reason ?? null,
+  })
+  await appendControllerApprovalStatusEvent({
+    roomId: event.roomId,
+    approvalEventId: event.id,
+    status: 'denied',
+    approvedBy: input.deniedBy ?? 'human',
+    reason: input.reason ?? null,
+    result: null,
+  })
+  return { success: true, approvalEventId: event.id, status: 'denied' }
+}
+
+async function markControllerApprovalEventResolved(
+  eventId: string,
+  metadata: Record<string, unknown>,
+  resolution: Record<string, unknown> & { status: 'approved' | 'denied' },
+) {
+  await db
+    .update(timelineEvents)
+    .set({
+      metadata: {
+        ...metadata,
+        status: resolution.status,
+        resolution,
+        resolvedAt: new Date().toISOString(),
+      },
+    })
+    .where(eq(timelineEvents.id, eventId))
+}
+
+async function requestControllerApplyApproval(
+  body: ControllerApplyBody,
+  resources: unknown[],
+): Promise<ControllerApplyResult> {
+  const roomId = body.requestApprovalRoomId ?? body.approvalRequest?.roomId
+  if (!roomId) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'approvalMode=request requires requestApprovalRoomId or approvalRequest.roomId.')
+  }
+  const manifests = resources.map(normalizeManifest)
+  const operations = manifests.map((manifest) => operationForManifestKind(manifest.kind))
+  const manager = await ensureManagerParticipantForRoom(roomId)
+  const summary = manifests.map((manifest, index) => {
+    const operation = operations[index]!
+    return {
+      kind: manifest.kind,
+      name: manifest.metadata.name ?? null,
+      operationId: operation.id,
+      danger: operation.danger,
+      approval: operation.approval,
+      audit: auditSnapshot(operation, manifest),
+    }
+  })
+  const event = await roomService.appendTimelineEvent({
+    roomId,
+    senderParticipantId: manager.id,
+    senderType: 'manager',
+    type: 'approval.requested',
+    body: approvalRequestBody(summary, body.approvalRequest?.reason),
+    metadata: {
+      kind: 'controller.apply.approval.requested',
+      actionType: 'controller_apply',
+      status: 'pending',
+      resources,
+      summary,
+      reason: body.approvalRequest?.reason ?? null,
+      requestedBy: body.approvalRequest?.requestedBy ?? null,
+      skipAutoDispatch: true,
+    },
+  })
+  return {
+    success: true,
+    approvalRequested: true,
+    approvalEventId: event.id,
+    applied: [],
+  }
+}
+
+async function appendControllerApprovalStatusEvent(input: {
+  roomId: string
+  approvalEventId: string
+  status: 'approved' | 'denied'
+  approvedBy: string | null
+  reason: string | null
+  result: unknown
+}) {
+  const manager = await ensureManagerParticipantForRoom(input.roomId)
+  await roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderParticipantId: manager.id,
+    senderType: 'manager',
+    type: 'manager.message',
+    body: input.status === 'approved'
+      ? '已确认 Controller 变更，正在按审批结果执行。'
+      : '已拒绝 Controller 变更，本次申请不会执行。',
+    metadata: {
+      kind: 'controller.apply.approval.resolved',
+      approvalEventId: input.approvalEventId,
+      status: input.status,
+      resolvedBy: input.approvedBy,
+      reason: input.reason,
+      result: input.result,
+      skipAutoDispatch: true,
+    },
+  })
+}
+
+function approvalRequestBody(
+  summary: Array<{ kind: string; name: string | null; operationId: string; danger: string; approval: string }>,
+  reason?: string | null,
+) {
+  const lines = [
+    '需要确认 Controller 变更：',
+    ...summary.map((item) => `- ${item.kind}${item.name ? ` ${item.name}` : ''}: ${item.operationId}, danger=${item.danger}, approval=${item.approval}`),
+  ]
+  if (reason) lines.push(`原因：${reason}`)
+  return lines.join('\n')
 }
 
 interface NormalizedManifest {

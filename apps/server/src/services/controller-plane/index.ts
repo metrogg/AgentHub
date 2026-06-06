@@ -23,6 +23,8 @@ export {
 } from './controller-api-schema'
 export {
   applyControllerManifest,
+  confirmControllerApplyApproval,
+  denyControllerApplyApproval,
   type ControllerApplyBody,
   type ControllerApplyResult,
 } from './controller-apply'

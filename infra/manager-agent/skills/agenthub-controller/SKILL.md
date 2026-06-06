@@ -38,6 +38,15 @@ agenthub worker create --workspace <workspace-id> --name builder --runtime-base 
 # Apply a Worker manifest through the Controller.
 agenthub apply -f worker.yaml
 
+# Request Room-native approval before applying a manifest.
+agenthub apply -f worker.yaml --approval-mode request --room <room-id> --reason "Need confirmation before adding capacity"
+
+# Apply a previously approved Controller approval request.
+agenthub approval confirm --event <approval-timeline-event-id> --approved-by <human-or-manager> --reason "Approved in room"
+
+# Deny a pending Controller approval request without applying it.
+agenthub approval deny --event <approval-timeline-event-id> --denied-by <human-or-manager> --reason "Not needed"
+
 # Check worker status
 agenthub worker status --id <worker-id>
 
@@ -150,9 +159,11 @@ agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 ### Simple goal (1 task, 1 Worker)
 1. `agenthub schema` — confirm the current Controller operation contract.
 2. `agenthub worker list --workspace <id>` — check existing workers
-3. If no suitable worker: ask for or use the explicitly requested runtime base and model, then `agenthub worker create --workspace <id> --name <name> --runtime-base <runtime-base> --model <model-id>` or `agenthub apply -f worker.yaml`
-4. `agenthub task create --workspace <id> --title "..." --assign-to <agent-id> --spec "..."` or `agenthub apply -f task.yaml`
-5. Let the Controller-created task room @mention wake the Worker; use `agenthub room mention` only for explicit follow-up messages.
+3. If no suitable worker: ask for or use the explicitly requested runtime base and model.
+4. If the room policy or action risk requires confirmation, use `agenthub apply -f worker.yaml --approval-mode request --room <room-id>` and wait for `agenthub approval confirm ...`.
+5. Otherwise use `agenthub worker create --workspace <id> --name <name> --runtime-base <runtime-base> --model <model-id>` or `agenthub apply -f worker.yaml`.
+6. `agenthub task create --workspace <id> --title "..." --assign-to <agent-id> --spec "..."` or `agenthub apply -f task.yaml`.
+7. Let the Controller-created task room @mention wake the Worker; use `agenthub room mention` only for explicit follow-up messages.
 
 ### Complex goal (multiple tasks)
 1. `agenthub schema` — inspect `tasks.assign`, `apply.manifest`, and `reconcile.resource`.

@@ -141,6 +141,16 @@ describe('Controller HTTP API', () => {
     expect(apply?.path).toBe('/api/controller/apply')
     expect(apply?.body?.yaml.required).toBe(false)
     expect(apply?.body?.yaml.description).toContain('Manager, Worker, Room, Task, Team, Human')
+    expect(apply?.body?.approvalMode?.enum).toEqual(['apply', 'request'])
+    expect(apply?.body?.requestApprovalRoomId?.description).toContain('approval.requested')
+
+    const approvalConfirm = schema.operations.find((item) => item.id === 'apply.approval_confirm')
+    expect(approvalConfirm?.method).toBe('POST')
+    expect(approvalConfirm?.path).toBe('/api/controller/approvals/{eventId}/confirm')
+
+    const approvalDeny = schema.operations.find((item) => item.id === 'apply.approval_deny')
+    expect(approvalDeny?.method).toBe('POST')
+    expect(approvalDeny?.path).toBe('/api/controller/approvals/{eventId}/deny')
 
     const teamCreate = schema.operations.find((item) => item.id === 'teams.create')
     expect(teamCreate?.path).toBe('/api/controller/teams')
@@ -267,6 +277,143 @@ describe('Controller HTTP API', () => {
       .limit(1)
     expect(room?.title).toBe('Applied Room')
     expect(room?.workspaceId).toBe(workspace!.id)
+  })
+
+  test('requests and confirms Controller apply approval through Room timeline', async () => {
+    const token = await createManagerToken()
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller HTTP Approval Workspace',
+        goal: 'Validate HTTP approval request flow',
+      })
+      .returning()
+    const created = await controllerJson<{
+      success: boolean
+      room: { id: string; workspaceId: string; title: string }
+    }>('/api/controller/rooms', token, {
+      method: 'POST',
+      body: {
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        title: 'HTTP Approval Room',
+        kind: 'group',
+      },
+    })
+
+    const requested = await controllerJson<{
+      success: boolean
+      approvalRequested: boolean
+      approvalEventId: string
+      applied: unknown[]
+    }>('/api/controller/apply', token, {
+      method: 'POST',
+      body: {
+        approvalMode: 'request',
+        requestApprovalRoomId: created.room.id,
+        resource: {
+          apiVersion: 'agenthub.dev/v1alpha1',
+          kind: 'Room',
+          metadata: { name: 'Approved HTTP Room' },
+          spec: {
+            ownerId: 'default-user',
+            workspaceId: workspace!.id,
+            kind: 'group',
+            title: 'Approved HTTP Room',
+          },
+        },
+      },
+    })
+
+    expect(requested.success).toBe(true)
+    expect(requested.approvalRequested).toBe(true)
+    expect(requested.applied).toHaveLength(0)
+
+    const [approvalEvent] = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.id, requested.approvalEventId))
+      .limit(1)
+    expect(approvalEvent?.metadata?.kind).toBe('controller.apply.approval.requested')
+    expect(approvalEvent?.metadata?.status).toBe('pending')
+
+    const confirmed = await controllerJson<{
+      success: boolean
+      approvalEventId: string
+      applied: Array<{ kind: string; result: { id: string; title: string }; approval: { provided: boolean; approvedBy: string } }>
+    }>(`/api/controller/approvals/${requested.approvalEventId}/confirm`, token, {
+      method: 'POST',
+      body: {
+        approvedBy: 'human-default',
+        reason: 'Approve room create.',
+      },
+    })
+
+    expect(confirmed.success).toBe(true)
+    expect(confirmed.approvalEventId).toBe(requested.approvalEventId)
+    expect(confirmed.applied[0]?.kind).toBe('Room')
+    expect(confirmed.applied[0]?.approval).toMatchObject({
+      provided: true,
+      approvedBy: 'human-default',
+    })
+    expect(confirmed.applied[0]?.result.title).toBe('Approved HTTP Room')
+
+    const [updatedApprovalEvent] = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.id, requested.approvalEventId))
+      .limit(1)
+    expect(updatedApprovalEvent?.metadata?.status).toBe('approved')
+
+    const deniedRequest = await controllerJson<{
+      success: boolean
+      approvalRequested: boolean
+      approvalEventId: string
+      applied: unknown[]
+    }>('/api/controller/apply', token, {
+      method: 'POST',
+      body: {
+        approvalMode: 'request',
+        requestApprovalRoomId: created.room.id,
+        resource: {
+          apiVersion: 'agenthub.dev/v1alpha1',
+          kind: 'Room',
+          metadata: { name: 'Denied HTTP Room' },
+          spec: {
+            ownerId: 'default-user',
+            workspaceId: workspace!.id,
+            kind: 'group',
+            title: 'Denied HTTP Room',
+          },
+        },
+      },
+    })
+    const denied = await controllerJson<{ success: boolean; status: string }>(
+      `/api/controller/approvals/${deniedRequest.approvalEventId}/deny`,
+      token,
+      {
+        method: 'POST',
+        body: {
+          deniedBy: 'human-default',
+          reason: 'Not needed.',
+        },
+      },
+    )
+    expect(denied).toMatchObject({ success: true, status: 'denied' })
+
+    const [deniedApprovalEvent] = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.id, deniedRequest.approvalEventId))
+      .limit(1)
+    expect(deniedApprovalEvent?.metadata?.status).toBe('denied')
+    const deniedRooms = await db
+      .select()
+      .from(rooms)
+      .where(eq(rooms.title, 'Denied HTTP Room'))
+      .limit(1)
+    expect(deniedRooms).toHaveLength(0)
   })
 
   test('assigns tasks through ControllerApi and writes Matrix mention-first task rooms', async () => {

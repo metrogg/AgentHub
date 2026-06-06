@@ -21,6 +21,7 @@ const {
   ControllerApi,
   ReconcileQueue,
   applyControllerManifest,
+  confirmControllerApplyApproval,
   condition,
   controllerReconcileQueue,
   describeControllerPlane,
@@ -303,6 +304,129 @@ describe('Controller Plane', () => {
         },
       },
     })).rejects.toThrow(/spec\.runtimeBase/)
+  })
+
+  test('controller apply can request Room-native approval before applying resources', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller Apply Approval Workspace',
+        goal: 'Validate Room-native Controller approval request',
+      })
+      .returning()
+    const room = await roomService.createRoom({
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+      kind: 'group',
+      title: 'Controller Approval Room',
+    })
+    const api = new ControllerApi({
+      workerBackend: {
+        id: 'apply-approval-worker-backend',
+        async ensureRuntime(input) {
+          return { workerInstanceId: input.workerInstanceId, ready: true, state: 'ready' }
+        },
+        async start() {
+          return { started: true }
+        },
+        async stop() {
+          return { stopped: true }
+        },
+        async inspect(workerInstanceId) {
+          return { workerInstanceId, ready: true, state: 'ready' }
+        },
+        async syncConfig(workerInstanceId) {
+          return { synced: true, details: { workerInstanceId } }
+        },
+      },
+    })
+
+    const manifest = {
+      apiVersion: 'agenthub.dev/v1alpha1',
+      kind: 'Worker',
+      metadata: { name: 'Approval Worker' },
+      spec: {
+        workspaceId: workspace!.id,
+        runtimeBase: 'opencode',
+        modelId: 'test-model',
+        createDirectSession: false,
+        announce: false,
+      },
+    }
+    const requested = await applyControllerManifest(api, {
+      resource: manifest,
+      approvalMode: 'request',
+      requestApprovalRoomId: room.id,
+      approvalRequest: {
+        reason: 'Need human confirmation before adding a Worker.',
+        requestedBy: 'manager-test',
+      },
+    })
+
+    expect(requested.success).toBe(true)
+    expect(requested.approvalRequested).toBe(true)
+    expect(requested.applied).toHaveLength(0)
+    expect(requested.approvalEventId).toBeTruthy()
+
+    const [approvalEvent] = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.id, requested.approvalEventId!))
+      .limit(1)
+    expect(approvalEvent?.type).toBe('approval.requested')
+    expect(approvalEvent?.metadata).toMatchObject({
+      kind: 'controller.apply.approval.requested',
+      actionType: 'controller_apply',
+      status: 'pending',
+      requestedBy: 'manager-test',
+    })
+
+    const beforeConfirm = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.name, 'Approval Worker'))
+      .limit(1)
+    expect(beforeConfirm).toHaveLength(0)
+
+    const confirmed = await confirmControllerApplyApproval(api, {
+      approvalEventId: requested.approvalEventId!,
+      approvedBy: 'human-default',
+      reason: 'Looks good.',
+    })
+
+    expect(confirmed.success).toBe(true)
+    expect(confirmed.applied[0]?.approval).toMatchObject({
+      level: 'recommended',
+      provided: true,
+      approvedBy: 'human-default',
+      reason: 'Looks good.',
+    })
+    expect(confirmed.applied[0]?.auditEventId).toBeTruthy()
+
+    const [updatedApprovalEvent] = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.id, requested.approvalEventId!))
+      .limit(1)
+    expect(updatedApprovalEvent?.metadata?.status).toBe('approved')
+    expect(updatedApprovalEvent?.metadata?.resolution).toMatchObject({
+      status: 'approved',
+      resolvedBy: 'human-default',
+      appliedCount: 1,
+    })
+
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.name, 'Approval Worker'))
+      .limit(1)
+    expect(agent?.workspaceId).toBe(workspace!.id)
+
+    await expect(confirmControllerApplyApproval(api, {
+      approvalEventId: requested.approvalEventId!,
+      approvedBy: 'human-default',
+    })).rejects.toThrow(/already been approved/)
   })
 
   test('controller apply validates Room manifest kind against Controller schema', async () => {
