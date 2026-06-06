@@ -123,7 +123,7 @@ agenthub human create --name admin-user --display-name "Admin User" --permission
 
 ```bash
 # Refresh Manager SOUL/AGENTS/skills/registries/state/rooms from Controller.
-# This does not start or stop the resident OpenClaw/QwenPaw process.
+# Without spec.desiredState this is contract-only. With desiredState=running/stopped it also reconciles the resident process lifecycle.
 agenthub apply -f manager.yaml
 ```
 
@@ -178,7 +178,7 @@ agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 
 ## Manager Manifest Rule
 
-`kind: Manager` only reconciles the Manager contract workspace and Controller-backed registries. It does not start, stop, or replace the resident OpenClaw/QwenPaw process; use the Manager Runtime controls for process lifecycle.
+`kind: Manager` always reconciles the Manager contract workspace and Controller-backed registries. It is contract-only by default. If the manifest explicitly sets `spec.desiredState: running`, `stopped`, or `observed`, Controller also reconciles the resident OpenClaw/QwenPaw provider lifecycle and records the runtime status/health in the result snapshot.
 
 ## Member Reconcile Result
 

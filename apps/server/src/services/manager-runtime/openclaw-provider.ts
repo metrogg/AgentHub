@@ -126,7 +126,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       connectionMode,
       syncReady: residentSyncReady,
       running,
-      pid: containerMode ? null : running ? this.process!.pid ?? null : null,
+      pid: endpoint || containerMode ? null : running ? this.process!.pid ?? null : null,
       workspace: this.managerWorkspace,
       configPath: this.getConfigPath(),
       binaryPath: containerMode ? null : binaryPath,

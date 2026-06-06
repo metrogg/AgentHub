@@ -23,7 +23,7 @@ import { runController, type RunControllerRunContext } from '../orchestrator/run
 import { workerController } from '../orchestrator/worker-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { registerArtifactBatch } from '../orchestrator/artifact-controller'
-import type { ManagerAction } from '../manager-runtime'
+import { getManagerProvider, type ManagerAction, type ManagerRuntimeProvider, type ManagerRuntimeType } from '../manager-runtime'
 import { ensureGroupSession } from '../workspace/session-manager'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { dockerWorkerBackend } from './docker-worker-backend'
@@ -40,15 +40,18 @@ import {
 
 export interface ControllerApiOptions {
   workerBackend?: WorkerBackend
+  managerProviderResolver?: (runtimeType: ManagerRuntimeType) => ManagerRuntimeProvider | null
 }
 
 export class ControllerApi {
   private readonly workerBackend: WorkerBackend
   private readonly memberReconciler: MemberReconciler
+  private readonly managerProviderResolver: (runtimeType: ManagerRuntimeType) => ManagerRuntimeProvider | null
 
   constructor(options: ControllerApiOptions = {}) {
     this.workerBackend = options.workerBackend ?? (workerContainersEnabled() ? dockerWorkerBackend : localCliWorkerBackend)
     this.memberReconciler = new MemberReconciler(this.workerBackend)
+    this.managerProviderResolver = options.managerProviderResolver ?? getManagerProvider
   }
 
   async applyWorker(input: {
@@ -478,6 +481,7 @@ export class ControllerApi {
           sharedStorageRoot: stringPayload(request.payload, 'sharedStorageRoot'),
           matrixHomeserverUrl: stringPayload(request.payload, 'matrixHomeserverUrl'),
           matrixServerName: stringPayload(request.payload, 'matrixServerName'),
+          desiredState: stringPayload(request.payload, 'desiredState'),
           reason: request.reason,
         })
       case 'Worker':
@@ -579,13 +583,15 @@ export class ControllerApi {
     sharedStorageRoot?: string | null
     matrixHomeserverUrl?: string | null
     matrixServerName?: string | null
+    desiredState?: string | null
     reason?: string | null
   }): Promise<ReconcileResult> {
     const managerId = input.managerId?.trim() || 'global'
     const runtimeType = input.runtimeType?.trim() || 'openclaw'
-    if (runtimeType !== 'openclaw' && runtimeType !== 'qwenpaw') {
+    if (!isManagerRuntimeType(runtimeType)) {
       throw new Error(`Manager runtimeType must be openclaw or qwenpaw, received ${runtimeType}.`)
     }
+    const desiredState = normalizeManagerDesiredState(input.desiredState)
 
     const identity = await this.ensureManagerMatrixIdentity(managerId)
     const workspace = await ensureManagerAgentContractFromController({
@@ -599,17 +605,23 @@ export class ControllerApi {
       managerState: {
         reconcileReason: input.reason ?? 'controller-manager-reconcile',
         desiredRuntimeType: runtimeType,
+        desiredState: desiredState ?? 'contract-only',
         lastControllerReconcileAt: new Date().toISOString(),
       },
+    })
+    const runtimeLifecycle = await this.reconcileManagerRuntime({
+      runtimeType,
+      desiredState,
     })
 
     return {
       ref: resourceRef('Manager', managerId),
-      phase: 'manager-contract-synced',
+      phase: runtimeLifecycle.phase,
       changed: true,
       snapshot: {
         managerId,
         runtimeType,
+        desiredState: desiredState ?? 'contract-only',
         matrixIdentity: identity,
         workspaceRoot: workspace.root,
         runtimePath: workspace.runtimePath,
@@ -621,7 +633,98 @@ export class ControllerApi {
         teamRegistryPath: workspace.teamRegistryPath,
         statePath: workspace.statePath,
         roomsPath: workspace.roomsPath,
+        runtimeLifecycle,
       },
+    }
+  }
+
+  private async reconcileManagerRuntime(input: {
+    runtimeType: ManagerRuntimeType
+    desiredState: ManagerDesiredState | null
+  }): Promise<{
+    desiredState: ManagerDesiredState | 'contract-only'
+    action: 'none' | 'observe' | 'ensureStarted' | 'stop'
+    phase: string
+    status: Awaited<ReturnType<ManagerRuntimeProvider['status']>> | null
+    health: Awaited<ReturnType<NonNullable<ManagerRuntimeProvider['healthCheck']>>> | null
+    error: string | null
+  }> {
+    const provider = this.managerProviderResolver(input.runtimeType)
+    if (!provider) {
+      return {
+        desiredState: input.desiredState ?? 'contract-only',
+        action: 'none',
+        phase: 'manager-runtime-blocked',
+        status: null,
+        health: null,
+        error: `Manager runtime provider not found for ${input.runtimeType}.`,
+      }
+    }
+
+    try {
+      if (input.desiredState === 'running') {
+        const status = provider.ensureStarted ? await provider.ensureStarted() : await provider.status()
+        const health = await provider.healthCheck?.().catch((error: any) => ({
+          healthy: false,
+          error: error?.message || String(error),
+        })) ?? null
+        return {
+          desiredState: input.desiredState,
+          action: provider.ensureStarted ? 'ensureStarted' : 'observe',
+          phase: status.running && !status.error ? 'manager-runtime-running' : 'manager-runtime-blocked',
+          status,
+          health,
+          error: status.error ?? health?.error ?? null,
+        }
+      }
+
+      if (input.desiredState === 'stopped') {
+        const status = provider.stop ? await provider.stop() : await provider.status()
+        return {
+          desiredState: input.desiredState,
+          action: provider.stop ? 'stop' : 'observe',
+          phase: status.running ? 'manager-runtime-running' : 'manager-runtime-stopped',
+          status,
+          health: null,
+          error: status.error,
+        }
+      }
+
+      if (input.desiredState === 'observed') {
+        const [status, health] = await Promise.all([
+          provider.status(),
+          provider.healthCheck?.().catch((error: any) => ({
+            healthy: false,
+            error: error?.message || String(error),
+          })) ?? Promise.resolve(null),
+        ])
+        return {
+          desiredState: input.desiredState,
+          action: 'observe',
+          phase: status.running && !status.error ? 'manager-runtime-observed' : 'manager-runtime-blocked',
+          status,
+          health,
+          error: status.error ?? health?.error ?? null,
+        }
+      }
+
+      return {
+        desiredState: 'contract-only',
+        action: 'none',
+        phase: 'manager-contract-synced',
+        status: null,
+        health: null,
+        error: null,
+      }
+    } catch (error) {
+      return {
+        desiredState: input.desiredState ?? 'contract-only',
+        action: input.desiredState === 'running' ? 'ensureStarted' : input.desiredState === 'stopped' ? 'stop' : 'observe',
+        phase: 'manager-runtime-blocked',
+        status: null,
+        health: null,
+        error: error instanceof Error ? error.message : String(error),
+      }
     }
   }
 
@@ -928,4 +1031,25 @@ function isReadyWorkerState(state: string): boolean {
 function stringPayload(payload: Record<string, unknown> | undefined, key: string): string | null {
   const value = payload?.[key]
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+type ManagerDesiredState = 'running' | 'stopped' | 'observed'
+
+function isManagerRuntimeType(value: string): value is ManagerRuntimeType {
+  return value === 'openclaw' || value === 'qwenpaw'
+}
+
+function normalizeManagerDesiredState(value?: string | null): ManagerDesiredState | null {
+  const normalized = value?.trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'running' || normalized === 'started' || normalized === 'listening' || normalized === 'ready') {
+    return 'running'
+  }
+  if (normalized === 'stopped' || normalized === 'stopping' || normalized === 'sleeping') {
+    return 'stopped'
+  }
+  if (normalized === 'observed' || normalized === 'observe' || normalized === 'status' || normalized === 'health') {
+    return 'observed'
+  }
+  throw new Error(`Manager desiredState must be running, stopped, or observed, received ${value}.`)
 }

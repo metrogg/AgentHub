@@ -151,6 +151,7 @@ describe('Controller HTTP API', () => {
     const managerReconcile = schema.operations.find((item) => item.id === 'managers.reconcile')
     expect(managerReconcile?.path).toBe('/api/controller/reconcile')
     expect(managerReconcile?.body?.kind?.enum).toContain('Manager')
+    expect(managerReconcile?.body?.payload?.description).toContain('desiredState=running|stopped|observed')
   })
 
   test('applies YAML Controller manifests through HTTP API', async () => {

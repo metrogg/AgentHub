@@ -105,9 +105,20 @@ function applyManagerManifest(api: ControllerApi, manifest: NormalizedManifest) 
       'Controller apply Manager requires spec.runtimeType to be openclaw or qwenpaw.',
     )
   }
+  const desiredState = stringValue(manifest.spec.desiredState)
+  if (
+    desiredState &&
+    !['running', 'started', 'listening', 'ready', 'stopped', 'stopping', 'sleeping', 'observed', 'observe', 'status', 'health'].includes(desiredState.trim().toLowerCase())
+  ) {
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      'Controller apply Manager requires spec.desiredState to be running, stopped, or observed when provided.',
+    )
+  }
   return api.reconcileManager({
     managerId: stringValue(manifest.metadata.name ?? manifest.spec.managerId) ?? 'global',
     runtimeType,
+    desiredState,
     controllerUrl: stringValue(manifest.spec.controllerUrl),
     sharedStorageRoot: stringValue(manifest.spec.sharedStorageRoot),
     matrixHomeserverUrl: stringValue(manifest.spec.matrixHomeserverUrl),

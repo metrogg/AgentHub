@@ -25,7 +25,7 @@ agenthub schema
 agenthub heartbeat --workspace <workspace-id>
 
 # Refresh the Manager contract workspace and registries.
-# This does not start or stop the resident Manager runtime process.
+# Contract-only unless manager.yaml explicitly sets spec.desiredState.
 agenthub apply -f manager.yaml
 ```
 
@@ -37,6 +37,8 @@ metadata:
   name: global
 spec:
   runtimeType: openclaw
+  # Optional: running | stopped | observed
+  desiredState: observed
   controllerUrl: <controller-url>
   matrixServerName: agenthub.local
 ```

@@ -90,7 +90,7 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
         kind: field('string', true, 'Must be Manager.', ['Manager']),
         id: field('string', true, 'Manager id, usually global.'),
         workspaceId: field('string', false, 'Optional workspace id.'),
-        payload: field('object', false, 'Optional runtimeType/controllerUrl/sharedStorageRoot/matrix settings.'),
+        payload: field('object', false, 'Optional runtimeType/controllerUrl/sharedStorageRoot/matrix settings and desiredState=running|stopped|observed.'),
       },
     },
     {
@@ -243,7 +243,7 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       body: {
         yaml: field('string', false, `YAML manifest text. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
         json: field('string', false, `JSON manifest text. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
-        resource: field('object', false, `Single manifest object. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
+        resource: field('object', false, `Single manifest object. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}. Manager spec may include desiredState=running|stopped|observed.`),
         resources: field('object[]', false, `Manifest object list. Supported kinds: ${CONTROLLER_APPLY_MANIFEST_KINDS.join(', ')}.`),
       },
     },

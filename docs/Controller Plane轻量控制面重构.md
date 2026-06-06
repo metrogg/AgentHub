@@ -53,7 +53,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `apps/server/src/services/controller-plane/controller-apply.ts`
   - 提供 `POST /api/controller/apply` 第一版 manifest apply。
   - 支持 JSON object/list，也支持轻量 YAML manifest；当前可 apply `Manager`、`Worker`、`Room`、`Task`、`Team`、`Human` 六类资源，分别进入 `ControllerApi.reconcileManager()`、`ControllerApi.createWorker()`、`ControllerApi.createRoom()`、`ControllerApi.assignTask()`、`ControllerApi.createTeam()` 和 `ControllerApi.createHuman()`。
-  - Manager manifest 只负责幂等刷新 Manager 标准合约：`runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / rooms.json / state.json`，不负责启动或停止 resident OpenClaw/QwenPaw 进程。
+  - Manager manifest 总是幂等刷新 Manager 标准合约：`runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / rooms.json / state.json`。默认不启停进程；显式 `spec.desiredState=running|stopped|observed` 时会调 Manager runtime provider 的 `ensureStarted()`、`stop()` 或 status/health 观察，并把 lifecycle snapshot 返回给 Manager skill。
   - 第一轮严格校验已接入：Worker manifest 必须显式提供 `spec.runtimeBase` 和 `spec.modelId`，runtime base 和 Room kind 必须匹配 Controller schema enum，`skillIds/dependsOn` 必须是字符串数组，`sandboxPolicy` 支持字符串或 `{ mode: ... }` 对象。
   - Manager manifest 必须使用 `spec.runtimeType=openclaw|qwenpaw`。
   - Team manifest 只引用已有 WorkspaceAgent ids/names，不再隐式创建缺 runtime/model 的 Worker；需要新增成员时必须先 apply Worker manifest。

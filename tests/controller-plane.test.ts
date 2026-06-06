@@ -417,6 +417,111 @@ describe('Controller Plane', () => {
     expect(result.snapshot).toMatchObject({ managerId, runtimeType: 'qwenpaw' })
   })
 
+  test('controller apply can declaratively start and stop Manager runtime providers', async () => {
+    let startCalls = 0
+    let stopCalls = 0
+    let running = false
+    const status = () => ({
+      runtimeType: 'openclaw',
+      available: true,
+      connectionMode: 'managed-process',
+      syncReady: running,
+      running,
+      pid: running ? 1234 : null,
+      workspace: 'manager-workspace',
+      configPath: 'openclaw.json',
+      binaryPath: 'openclaw',
+      endpoint: null,
+      stepEndpoint: null,
+      healthEndpoint: null,
+      error: null,
+      diagnostics: { fake: true },
+      startedAt: running ? new Date().toISOString() : null,
+      uptime: running ? 1 : null,
+    })
+    const provider = {
+      runtimeType: 'openclaw',
+      status: async () => status(),
+      ensureStarted: async () => {
+        startCalls += 1
+        running = true
+        return status()
+      },
+      stop: async () => {
+        stopCalls += 1
+        running = false
+        return status()
+      },
+      healthCheck: async () => ({ healthy: running }),
+      getEndpointOrCommand: () => ({ command: 'openclaw gateway' }),
+      createRuntime: () => {
+        throw new Error('not used')
+      },
+    }
+    const api = new ControllerApi({
+      managerProviderResolver: (type) => type === 'openclaw' ? provider as any : null,
+    })
+    const managerId = `lifecycle-manager-${Date.now()}`
+
+    const started = await applyControllerManifest(api, {
+      resource: {
+        kind: 'Manager',
+        metadata: { name: managerId },
+        spec: {
+          runtimeType: 'openclaw',
+          desiredState: 'running',
+        },
+      },
+    })
+
+    expect(startCalls).toBe(1)
+    expect(started.success).toBe(true)
+    expect(started.applied[0]?.result).toMatchObject({
+      phase: 'manager-runtime-running',
+      snapshot: {
+        desiredState: 'running',
+        runtimeLifecycle: {
+          action: 'ensureStarted',
+          phase: 'manager-runtime-running',
+          status: { running: true },
+        },
+      },
+    })
+
+    const stopped = await api.reconcileManager({
+      managerId,
+      runtimeType: 'openclaw',
+      desiredState: 'stopped',
+    })
+
+    expect(stopCalls).toBe(1)
+    expect(stopped).toMatchObject({
+      phase: 'manager-runtime-stopped',
+      snapshot: {
+        desiredState: 'stopped',
+        runtimeLifecycle: {
+          action: 'stop',
+          phase: 'manager-runtime-stopped',
+          status: { running: false },
+        },
+      },
+    })
+  })
+
+  test('controller apply validates Manager lifecycle desiredState', async () => {
+    const api = new ControllerApi()
+    await expect(applyControllerManifest(api, {
+      resource: {
+        kind: 'Manager',
+        metadata: { name: `bad-manager-${Date.now()}` },
+        spec: {
+          runtimeType: 'openclaw',
+          desiredState: 'teleport',
+        },
+      },
+    })).rejects.toThrow(/desiredState/)
+  })
+
   test('controller API createWorker runs Member Reconcile stages and joins Matrix rooms', async () => {
     const [workspace] = await db
       .insert(workspaces)

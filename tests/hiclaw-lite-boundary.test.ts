@@ -207,7 +207,7 @@ describe('HiClaw-lite kernel boundary', () => {
     const heartbeat = readFileSync(join(skillRoot, 'heartbeat', 'SKILL.md'), 'utf8')
     expect(heartbeat).toContain('kind: Manager')
     expect(heartbeat).toContain('managers.reconcile')
-    expect(heartbeat).toContain('does not start or stop the resident Manager runtime process')
+    expect(heartbeat).toContain('spec.desiredState')
   })
 
   test('Manager contract generator owns SOUL AGENTS registries and runtime context', () => {
