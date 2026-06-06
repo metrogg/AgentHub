@@ -535,7 +535,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     color: input.color || '#111827',
     modelId: input.modelId ?? null,
     runtimeType,
-    codeAgentType,
+    codeAgentType: runtimeType === 'code-agent' ? (codeAgentType ?? 'codex') : null,
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags.filter(isNonEmptyString) : [],
     toolPermissions: Array.isArray(input.toolPermissions) ? input.toolPermissions.filter(isNonEmptyString) : [],
     sandboxPolicy: normalizeSandboxPolicy(input.sandboxPolicy),
@@ -777,7 +777,7 @@ function savedAgentWorkspaceValues(agent: SavedAgentConfig) {
     color: agent.color ?? '#111827',
     modelId: agent.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType) : null,
+    codeAgentType: runtimeType === 'code-agent' ? (normalizeCodeAgentType(agent.codeAgentType) ?? 'codex') : null,
     capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions ?? [],
     sandboxPolicy: normalizeSandboxPolicy(agent.sandboxPolicy),
@@ -821,9 +821,8 @@ function normalizeRoleType(value?: string | null) {
   return allowed.includes(value ?? '') ? value! as any : 'custom'
 }
 
-function normalizeRuntimeType(value?: string | null) {
-  const allowed = ['llm', 'code-agent', 'mcp', 'a2a']
-  return allowed.includes(value ?? '') ? value! as any : 'llm'
+function normalizeRuntimeType(value?: string | null): 'code-agent' {
+  return 'code-agent'
 }
 
 function normalizeCodeAgentType(value?: string | null): WorkspaceCodeAgentType | null {
@@ -839,6 +838,12 @@ function normalizeSandboxPolicy(value?: string | null) {
 function normalizeContextPolicy(value?: string | null) {
   const allowed = ['recent-only', 'pinned-recent', 'workspace-aware']
   return allowed.includes(value ?? '') ? value! as any : 'workspace-aware'
+}
+
+export const __mobileRoutesTestHooks = {
+  normalizeSavedAgent,
+  normalizeRuntimeType,
+  savedAgentWorkspaceValues,
 }
 
 function getServerPort() {

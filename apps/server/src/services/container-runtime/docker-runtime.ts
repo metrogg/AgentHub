@@ -75,6 +75,12 @@ export class DockerRuntime {
       })
       return { present: true, error: null }
     } catch (error: any) {
+      const stderr = typeof error?.stderr === 'string' ? error.stderr : ''
+      const stdout = typeof error?.stdout === 'string' ? error.stdout : ''
+      const output = `${error?.message ?? ''}\n${stdout}\n${stderr}`
+      if (isMissingDockerImageError(output)) {
+        return { present: false, error: null }
+      }
       return { present: false, error: error?.message || String(error) }
     }
   }
@@ -228,3 +234,7 @@ function flatEntries(
 }
 
 export const dockerRuntime = new DockerRuntime()
+
+export function isMissingDockerImageError(message: string) {
+  return /no such image/i.test(message) || /reference does not exist/i.test(message) || /manifest unknown/i.test(message)
+}

@@ -314,6 +314,7 @@ function timelineEventToMessage(
 ): Message | null {
   const eventMetadata = asRecord(event.metadata)
   if (eventMetadata?.hiddenFromChat === true) return null
+  if (isDirectRuntimeInternalEvent(event, room, eventMetadata)) return null
 
   if (
     event.type !== 'human.message' &&
@@ -370,6 +371,17 @@ function timelineEventToMessage(
     },
     createdAt: event.createdAt,
   }
+}
+
+function isDirectRuntimeInternalEvent(
+  event: TimelineEvent,
+  room: Room,
+  metadata: Record<string, unknown> | null,
+) {
+  if (room.kind !== 'direct') return false
+  if (event.type === 'worker.message' && metadata?.kind === 'worker-runtime.message') return true
+  if (event.type === 'task.progress' && metadata?.kind === 'worker-runtime.progress') return true
+  return false
 }
 
 function senderTypeFromTimeline(event: TimelineEvent): SenderType {

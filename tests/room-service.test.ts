@@ -605,6 +605,100 @@ describe('RoomService Matrix room adapter contract', () => {
     }
   })
 
+  test('Matrix adapter invites participants with the room owner token when no admin token is configured', async () => {
+    const previousAccessToken = process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+    delete process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+    delete Bun.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+
+    const calls: Array<{ method: string; path: string; auth: string | null; body: any }> = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      const auth = init?.headers
+        ? ((init.headers as Record<string, string>).Authorization ?? null)
+        : null
+      calls.push({ method: init?.method ?? 'GET', path: parsed.pathname, auth, body })
+      if (parsed.pathname.endsWith('/register')) {
+        const username = body.username
+        return Response.json({
+          user_id: `@${username}:agenthub.local`,
+          access_token: `token-${username}`,
+        })
+      }
+      if (parsed.pathname.includes('/profile/')) return Response.json({})
+      if (parsed.pathname.includes('/createRoom')) return Response.json({ room_id: '!owner-room:agenthub.local' })
+      if (parsed.pathname.includes('/invite')) return Response.json({})
+      if (parsed.pathname.includes('/_matrix/client/v3/join/')) {
+        return Response.json({ room_id: '!owner-room:agenthub.local' })
+      }
+      return Response.json({}, { status: 404 })
+    }) as typeof fetch
+
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Owner Token Workspace',
+        goal: 'Invite worker without admin token',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        id: 'owner-token-agent',
+        workspaceId: workspace!.id,
+        name: 'Owner Token Worker',
+        role: 'Worker',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const adapter = new MatrixRoomAdapter({
+      homeserverUrl: 'http://matrix.test',
+      serverName: 'agenthub.local',
+      autoInviteParticipants: true,
+      autoJoinParticipants: true,
+    })
+
+    try {
+      const room = await adapter.createRoom({
+        kind: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        title: 'Owner Token Room',
+      })
+      await adapter.addParticipant({
+        roomId: room.id,
+        participantType: 'human',
+        userId: 'default-user',
+        displayName: 'You',
+        role: 'owner',
+      })
+      await adapter.addParticipant({
+        roomId: room.id,
+        participantType: 'worker',
+        workspaceAgentId: agent!.id,
+        displayName: 'Owner Token Worker',
+        role: 'member',
+      })
+
+      const workerInvite = calls.find(
+        (call) => call.path.includes('/invite') && call.body?.user_id === '@worker-owner-token-agent:agenthub.local',
+      )
+      expect(workerInvite?.auth).toBe('Bearer token-human-default-user')
+    } finally {
+      globalThis.fetch = originalFetch
+      if (previousAccessToken === undefined) {
+        delete process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+        delete Bun.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+      } else {
+        process.env.AGENTHUB_MATRIX_ACCESS_TOKEN = previousAccessToken
+        Bun.env.AGENTHUB_MATRIX_ACCESS_TOKEN = previousAccessToken
+      }
+    }
+  })
+
   test('Matrix adapter repairs stale room ids from a previous homeserver name', async () => {
     const repairedRoomId = `!new-room-${randomUUID()}:agenthub.local`
     const calls: Array<{ method: string; path: string; body: any }> = []
@@ -1300,6 +1394,70 @@ describe('RoomService Matrix room adapter contract', () => {
     ])
     // HiClaw model: Worker picks up @mention via /sync, no platform dispatch
     expect(workerCalls).toEqual([])
+  })
+
+  test('Matrix dispatcher routes agent-direct human messages to Direct Worker runtime', async () => {
+    const directCalls: any[] = []
+    const originalRunDirectRoom = workerRuntimeService.runDirectRoom
+    workerRuntimeService.runDirectRoom = (async (input: any) => {
+      directCalls.push(input)
+      return { roomId: input.roomId, appendedEventIds: [] }
+    }) as typeof workerRuntimeService.runDirectRoom
+
+    try {
+      const [workspace] = await db
+        .insert(workspaces)
+        .values({
+          ownerId: 'default-user',
+          name: 'Agent Direct Workspace',
+          goal: 'Verify direct dispatch',
+        })
+        .returning()
+      const [agent] = await db
+        .insert(workspaceAgents)
+        .values({
+          workspaceId: workspace!.id,
+          name: 'Direct Agent',
+          role: 'Worker',
+          runtimeType: 'code-agent',
+          codeAgentType: 'opencode',
+        })
+        .returning()
+      const [session] = await db
+        .insert(sessions)
+        .values({
+          title: 'Direct Agent Session',
+          type: 'direct',
+          ownerId: 'default-user',
+          workspaceId: workspace!.id,
+          workspaceAgentId: agent!.id,
+          metadata: {
+            kind: 'agent-direct',
+            savedAgentId: agent!.id,
+          },
+        })
+        .returning()
+
+      const { room, event } = await appendHumanMessageRoomFirst({
+        session: session!,
+        userId: 'default-user',
+        userName: 'Tester',
+        content: 'Hello direct agent',
+        type: 'text',
+        metadata: {},
+      })
+
+      expect(directCalls).toHaveLength(1)
+      expect(directCalls[0]).toMatchObject({
+        roomId: room.id,
+        ownerId: 'default-user',
+        workspaceAgentId: agent!.id,
+        prompt: 'Hello direct agent',
+      })
+      expect(event.body).toBe('Hello direct agent')
+    } finally {
+      workerRuntimeService.runDirectRoom = originalRunDirectRoom
+    }
   })
 
   test('Matrix runtime listener can run as a stoppable polling loop', async () => {

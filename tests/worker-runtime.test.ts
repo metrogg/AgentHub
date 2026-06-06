@@ -7,6 +7,7 @@ const roomBridgeApi = await import('../apps/server/src/services/rooms/room-chat-
 const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const workerRuntimeResourcesApi = await import('../apps/server/src/services/orchestrator/worker-runtime-resources')
+const agentRunnerApi = await import('../apps/server/src/services/agent-runner')
 
 const {
   artifacts,
@@ -29,12 +30,72 @@ const { appendHumanMessageRoomFirst } = roomBridgeApi
 const { WorkerRuntimeService } = workerRuntimeApi
 const { ensureTaskThread } = taskThreadApi
 const { ensureWorkerInstance } = workerRuntimeResourcesApi
+const { joinRoom, leaveRoom } = agentRunnerApi
 type WorkerRuntime = workerRuntimeApi.WorkerRuntime
 type WorkerRuntimeContext = workerRuntimeApi.WorkerRuntimeContext
 type WorkerRuntimeEvent = workerRuntimeApi.WorkerRuntimeEvent
 type WorkerRuntimeResult = workerRuntimeApi.WorkerRuntimeResult
 
 describe('WorkerRuntime task room integration', () => {
+  test('direct room hides runtime metadata and stream chunks behind one final worker reply', async () => {
+    const { room, agent, session } = await createDirectRoomFixture()
+    const service = new WorkerRuntimeService()
+    const wsPayloads: any[] = []
+    const fakeWs = {
+      readyState: 1,
+      send(payload: string) {
+        wsPayloads.push(JSON.parse(payload))
+      },
+    } as any
+    joinRoom(session.id, fakeWs)
+
+    let result: Awaited<ReturnType<typeof service.runDirectRoom>>
+    try {
+      result = await service.runDirectRoom({
+        roomId: room.id,
+        ownerId: 'default-user',
+        workspaceAgentId: agent.id,
+        prompt: 'Hello direct worker',
+        runtime: new ChunkyDirectWorkerRuntime(),
+      })
+    } finally {
+      leaveRoom(session.id, fakeWs)
+    }
+
+    expect(result.appendedEventIds).toHaveLength(1)
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    const visibleWorkerEvents = events.filter(
+      (event) =>
+        event.senderType === 'worker' &&
+        (event.type === 'worker.message' || event.type === 'task.progress') &&
+        event.metadata?.hiddenFromChat !== true &&
+        Boolean(event.body.trim()),
+    )
+    expect(visibleWorkerEvents).toHaveLength(1)
+    expect(visibleWorkerEvents[0]?.type).toBe('worker.message')
+    expect(visibleWorkerEvents[0]?.body).toBe('hello world')
+    expect(visibleWorkerEvents[0]?.metadata?.codeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'completed',
+      finalMessage: 'hello world',
+      files: [
+        {
+          path: 'src/App.tsx',
+          status: 'modified',
+          diff: 'diff --git a/src/App.tsx b/src/App.tsx',
+        },
+      ],
+    })
+    expect(events.some((event) => event.body === 'Worker runtime metadata updated.')).toBe(false)
+    expect(events.some((event) => event.type === 'worker.message' && event.body === 'hello')).toBe(false)
+    expect(events.some((event) => event.type === 'worker.message' && event.body === ' world')).toBe(false)
+    const metadataEvents = wsPayloads.filter((event) => event.type === 'message:metadata')
+    expect(metadataEvents.map((event) => event.payload.codeAgentRun.status)).toEqual([
+      'running',
+      'completed',
+    ])
+  })
+
   test('task resources become active as soon as WorkerRuntime starts the task room', async () => {
     const { room } = await createTaskRoomFixture()
     const runtime = new DeferredWorkerRuntime()
@@ -486,6 +547,56 @@ describe('WorkerRuntime task room integration', () => {
   })
 })
 
+async function createDirectRoomFixture() {
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({
+      ownerId: 'default-user',
+      name: 'Direct Worker Runtime Workspace',
+      goal: 'Run direct rooms',
+    })
+    .returning()
+  const [agent] = await db
+    .insert(workspaceAgents)
+    .values({
+      workspaceId: workspace!.id,
+      name: 'Direct Builder',
+      role: 'Direct worker',
+      roleType: 'coder',
+      runtimeType: 'code-agent',
+      codeAgentType: 'opencode',
+    })
+    .returning()
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      title: 'Direct Builder',
+      type: 'direct',
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+      workspaceAgentId: agent!.id,
+      metadata: { kind: 'agent-direct', savedAgentId: agent!.id },
+    })
+    .returning()
+  const room = await roomService.createRoom({
+    kind: 'direct',
+    ownerId: 'default-user',
+    workspaceId: workspace!.id,
+    sessionId: session!.id,
+    title: 'Direct Builder',
+    metadata: { kind: 'agent-direct' },
+  })
+  await roomService.addWorkerParticipant(room.id, agent!.id)
+  await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: 'human',
+    type: 'human.message',
+    body: 'Hello direct worker',
+    metadata: { messageId: 'direct-human-message', skipAutoDispatch: true },
+  })
+  return { room, workspace: workspace!, agent: agent!, session: session! }
+}
+
 async function createTaskRoomFixture() {
   const [workspace] = await db
     .insert(workspaces)
@@ -604,6 +715,90 @@ async function createTaskRoomFixture() {
     },
   })
   return { room, workspace: workspace!, agent: agent!, groupSession: groupSession!, childSession: childSession!, run: run!, task: task!, thread }
+}
+
+class ChunkyDirectWorkerRuntime implements WorkerRuntime {
+  readonly runtimeType = 'code-agent' as const
+  readonly kind = 'ephemeral-code-agent' as const
+
+  async *executeTask(): AsyncGenerator<WorkerRuntimeEvent, WorkerRuntimeResult, unknown> {
+    yield {
+      type: 'progress',
+      message: 'Direct worker started.',
+      progressPercent: 5,
+    }
+    yield {
+      type: 'progress',
+      message: 'Worker runtime metadata updated.',
+      metadata: { sessionId: 'direct-runtime-session' },
+    }
+    yield {
+      type: 'metadata',
+      metadata: {
+        codeAgentRun: {
+          type: 'code-agent-run',
+          status: 'running',
+          runtime: 'opencode',
+          command: 'opencode',
+          durationMs: 10,
+          exitCode: 0,
+          commands: [],
+          files: [],
+          toolCalls: [],
+          artifacts: [],
+          partialSuccess: false,
+          reviewRequired: true,
+          steps: [],
+        },
+      },
+    }
+    yield {
+      type: 'message',
+      message: 'hello',
+    }
+    yield {
+      type: 'message',
+      message: ' world',
+    }
+    return {
+      runtimeType: this.runtimeType,
+      status: 'completed',
+      message: 'hello world',
+      sessionId: 'direct-runtime-session',
+      metadata: {
+        codeAgentRun: {
+          type: 'code-agent-run',
+          status: 'completed',
+          runtime: 'opencode',
+          command: 'opencode',
+          durationMs: 42,
+          exitCode: 0,
+          commands: [],
+          files: [
+            {
+              path: 'src/App.tsx',
+              status: 'modified',
+              diff: 'diff --git a/src/App.tsx b/src/App.tsx',
+            },
+          ],
+          toolCalls: [],
+          artifacts: [
+            {
+              id: 'diff-src-app',
+              type: 'diff',
+              title: 'src/App.tsx',
+              filePath: 'src/App.tsx',
+              diff: 'diff --git a/src/App.tsx b/src/App.tsx',
+            },
+          ],
+          finalMessage: 'hello world',
+          partialSuccess: false,
+          reviewRequired: true,
+          steps: [],
+        },
+      },
+    }
+  }
 }
 
 class FakeWorkerRuntime implements WorkerRuntime {

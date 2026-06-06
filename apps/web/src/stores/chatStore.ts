@@ -132,12 +132,70 @@ function sortMessages(messages: Message[]): Message[] {
 }
 
 function upsertMessage(messages: Message[], message: Message): Message[] {
+  if (isLocalOptimisticUserMessage(message) && hasCanonicalUserMessageMatch(messages, message)) {
+    return sortMessages(messages)
+  }
+  const reconciled = reconcileOptimisticUserMessage(messages, message)
+  messages = reconciled
   const exists = messages.some((item) => item.id === message.id)
   return sortMessages(
     exists
       ? messages.map((item) => (item.id === message.id ? message : item))
       : [...messages, message],
   )
+}
+
+function reconcileOptimisticUserMessage(messages: Message[], incoming: Message): Message[] {
+  if (isLocalOptimisticUserMessage(incoming) || incoming.senderType !== SenderType.User) return messages
+  let bestIndex = -1
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < messages.length; index += 1) {
+    const candidate = messages[index]
+    if (!candidate || !isLocalOptimisticUserMessage(candidate)) continue
+    if (!messagesDescribeSameUserSend(candidate, incoming)) continue
+    const distance = Math.abs(messageTime(candidate) - messageTime(incoming))
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index
+    }
+  }
+  if (bestIndex < 0) return messages
+  return messages.filter((_, index) => index !== bestIndex)
+}
+
+function hasCanonicalUserMessageMatch(messages: Message[], local: Message) {
+  return messages.some(
+    (message) =>
+      !isLocalOptimisticUserMessage(message) &&
+      message.senderType === SenderType.User &&
+      messagesDescribeSameUserSend(local, message),
+  )
+}
+
+function isLocalOptimisticUserMessage(message: Message) {
+  return message.senderType === SenderType.User && message.id.startsWith('local-')
+}
+
+function messagesDescribeSameUserSend(a: Message, b: Message) {
+  if (a.sessionId !== b.sessionId) return false
+  if (a.senderType !== SenderType.User || b.senderType !== SenderType.User) return false
+  if (Math.abs(messageTime(a) - messageTime(b)) > 30_000) return false
+  const aTexts = comparableMessageTexts(a)
+  const bTexts = comparableMessageTexts(b)
+  return aTexts.some((text) => bTexts.includes(text))
+}
+
+function comparableMessageTexts(message: Message) {
+  const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+  const texts = [
+    message.content,
+    typeof metadata.displayContent === 'string' ? metadata.displayContent : '',
+  ]
+  return Array.from(new Set(texts.map(normalizeComparableMessageText).filter(Boolean)))
+}
+
+function normalizeComparableMessageText(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
 }
 
 function mergeMessages(messages: Message[], incoming: Message[]): Message[] {

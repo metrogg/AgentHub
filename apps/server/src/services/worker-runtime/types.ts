@@ -43,6 +43,10 @@ export type WorkerRuntimeEvent =
       message: string
       metadata?: Record<string, unknown>
     }
+  | {
+      type: 'metadata'
+      metadata: Record<string, unknown>
+    }
 
 export interface WorkerRuntimeContext {
   roomId: string

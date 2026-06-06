@@ -255,6 +255,9 @@ export function createSavedAgent(
   const now = new Date().toISOString()
   const runtimeType = normalizeRuntimeType(input.runtimeType)
   const managerAgent = isManagerAgent(input)
+  const codeAgentType = managerAgent
+    ? null
+    : (runtimeType === 'code-agent' ? normalizeCodeAgentType(input.codeAgentType) : null)
   return normalizeSavedAgent({
     id:
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -270,7 +273,7 @@ export function createSavedAgent(
     color: input.color ?? '#111827',
     modelId: managerAgent ? null : (input.modelId ?? null),
     runtimeType,
-    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null),
+    codeAgentType: managerAgent ? null : (codeAgentType ?? defaultCodeAgentTypeFor(input)),
     capabilityTags: input.capabilityTags ?? [],
     skillIds: input.skillIds ?? [],
     toolPermissions: input.toolPermissions ?? [],
@@ -286,6 +289,9 @@ export function createSavedAgent(
 export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
   const runtimeType = normalizeRuntimeType(agent.runtimeType)
   const managerAgent = isManagerAgent(agent)
+  const codeAgentType = managerAgent
+    ? null
+    : (runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType) : null)
   return {
     name: agent.name,
     role: agent.role,
@@ -297,7 +303,7 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     color: agent.color ?? '#111827',
     modelId: managerAgent ? null : (agent.modelId ?? null),
     runtimeType,
-    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null),
+    codeAgentType: managerAgent ? null : (codeAgentType ?? defaultCodeAgentTypeFor(agent)),
     capabilityTags: [...(agent.capabilityTags ?? [])],
     skillIds: [...(agent.skillIds ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
@@ -340,6 +346,9 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
   if (!input.name?.trim() || !input.role?.trim()) return null
   const runtimeType = normalizeRuntimeType(input.runtimeType)
   const managerAgent = isManagerAgent(input)
+  const codeAgentType = managerAgent
+    ? null
+    : (runtimeType === 'code-agent' ? normalizeCodeAgentType(input.codeAgentType) : null)
   return {
     id: input.id || `${Date.now()}-${Math.random()}`,
     name: input.name.trim(),
@@ -352,7 +361,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     color: input.color || '#111827',
     modelId: managerAgent ? null : (input.modelId ?? null),
     runtimeType,
-    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null),
+    codeAgentType: managerAgent ? null : (codeAgentType ?? defaultCodeAgentTypeFor(input)),
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags : [],
     skillIds: Array.isArray(input.skillIds) ? input.skillIds : [],
     toolPermissions:

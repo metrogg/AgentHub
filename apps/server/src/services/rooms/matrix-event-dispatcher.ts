@@ -485,9 +485,24 @@ export class MatrixRoomEventDispatcher {
       return true
     }
 
-    // Direct room: Worker picks up human messages via its own /sync loop.
-    // No platform dispatch needed — the Worker's OpenClaw process sees the message
-    // and responds autonomously.
+    if (event.senderType === 'human' && room.kind === 'direct' && room.metadata?.kind === 'agent-direct') {
+      const [workerParticipant] = await db
+        .select()
+        .from(roomParticipants)
+        .where(and(eq(roomParticipants.roomId, room.id), eq(roomParticipants.participantType, 'worker')))
+        .limit(1)
+      if (!workerParticipant?.workspaceAgentId) {
+        logger.warn({ roomId: room.id }, 'Direct agent room has no worker participant to dispatch')
+        return false
+      }
+      await workerRuntimeService.runDirectRoom({
+        roomId: room.id,
+        ownerId: room.ownerId,
+        workspaceAgentId: workerParticipant.workspaceAgentId,
+        prompt: event.body,
+      })
+      return true
+    }
 
     return false
   }

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { WsEvent, type CodeAgentRunMetadata } from '@agenthub/shared'
 import {
   and,
   db,
@@ -16,6 +17,7 @@ import {
 } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { logger } from '../../lib/logger'
+import { broadcastSessionEvent } from '../agent-runner'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -45,6 +47,48 @@ function buildSandboxEnvFromLease(lease: typeof runtimeLeases.$inferSelect | und
   }
   if (Object.keys(env).length === 0) return undefined
   return env
+}
+
+function broadcastWorkerRuntimeMetadata(input: {
+  sessionId: string
+  messageId: string
+  event?: Extract<WorkerRuntimeEvent, { type: 'metadata' }>
+  metadata?: Record<string, unknown>
+  agentId?: string
+  agentName?: string
+}) {
+  const codeAgentRun = readCodeAgentRunMetadata(input.event?.metadata ?? input.metadata)
+  if (!codeAgentRun) return
+  broadcastSessionEvent(input.sessionId, {
+    type: WsEvent.MessageMetadata,
+    payload: {
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      codeAgentRun,
+      agentId: input.agentId,
+      agentName: input.agentName,
+    },
+  })
+}
+
+function readCodeAgentRunMetadata(value: unknown): CodeAgentRunMetadata | null {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+  if (!record) return null
+  const nested = record.codeAgentRun
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    return readCodeAgentRunMetadata(nested)
+  }
+  if (
+    record.type === 'code-agent-run' &&
+    typeof record.status === 'string' &&
+    typeof record.runtime === 'string' &&
+    typeof record.command === 'string'
+  ) {
+    return record as unknown as CodeAgentRunMetadata
+  }
+  return null
 }
 
 export interface RunTaskRoomInput {
@@ -159,6 +203,7 @@ export class WorkerRuntimeService {
     workspaceAgentId: string
     prompt?: string
     signal?: AbortSignal
+    runtime?: WorkerRuntime
     overrides?: { sandboxPolicy?: string; approvalRequired?: boolean }
   }): Promise<{ roomId: string; appendedEventIds: string[] }> {
     const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
@@ -199,7 +244,7 @@ export class WorkerRuntimeService {
     const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 100 })
     const prompt = input.prompt?.trim() || latestHumanMessageBody(timeline) || room.title
 
-    const runtime = new EphemeralCodeAgentWorkerRuntime(agent)
+    const runtime = input.runtime ?? new EphemeralCodeAgentWorkerRuntime(agent)
     this.roomRuntimeKind.set(room.id, runtime.kind)
 
     const abortController = new AbortController()
@@ -238,21 +283,37 @@ export class WorkerRuntimeService {
       let next = await iterator.next()
       while (!next.done) {
         const event = next.value
+        if (event.type === 'metadata') {
+          broadcastWorkerRuntimeMetadata({
+            sessionId: room.sessionId ?? room.id,
+            messageId: `direct-runtime:${room.id}`,
+            event,
+            agentId: agent.id,
+            agentName: agent.name,
+          })
+          next = await iterator.next()
+          continue
+        }
+        if (event.type === 'progress' || event.type === 'message' || event.type === 'failed') {
+          next = await iterator.next()
+          continue
+        }
         const timelineEvent = await roomService.appendTimelineEvent({
           roomId: room.id,
           senderParticipantId: workerParticipant.id,
           senderType: 'worker',
-          type: event.type === 'message' ? 'worker.message' : 'task.progress',
+          type: event.type === 'artifact' ? 'artifact.created' : 'approval.requested',
           body: event.message ?? '',
           metadata: {
             kind: `worker-runtime.${event.type}`,
             workspaceAgentId: agent.id,
             runtimeType: runtime.runtimeType,
-            ...(event.type === 'progress'
-              ? { progressPercent: event.progressPercent }
-              : event.type === 'artifact'
-                ? { artifact: event.artifact }
-                : {}),
+            ...(event.type === 'artifact'
+              ? { artifact: event.artifact }
+              : {
+                  question: event.question ?? event.message,
+                  options: event.options ?? [],
+                }),
           },
         })
         appendedEventIds.push(timelineEvent.id)
@@ -273,9 +334,18 @@ export class WorkerRuntimeService {
           workspaceAgentId: agent.id,
           runtimeType: runtime.runtimeType,
           artifacts: result.artifacts ?? [],
+          sessionId: result.sessionId ?? null,
+          ...(result.metadata ?? {}),
         },
       })
       appendedEventIds.push(resultEvent.id)
+      broadcastWorkerRuntimeMetadata({
+        sessionId: room.sessionId ?? room.id,
+        messageId: `room:${resultEvent.id}`,
+        metadata: result.metadata,
+        agentId: agent.id,
+        agentName: agent.name,
+      })
     } catch (error: any) {
       logger.error({ err: error?.message, roomId: room.id, agentId: agent.id }, 'Direct room execution failed')
       const failEvent = await roomService.appendTimelineEvent({
@@ -401,6 +471,10 @@ export class WorkerRuntimeService {
       let next = await iterator.next()
       while (!next.done) {
         const runtimeEvent = next.value
+        if (runtimeEvent.type === 'metadata') {
+          next = await iterator.next()
+          continue
+        }
         if (runtimeEvent.type === 'message') {
           next = await iterator.next()
           continue
@@ -706,6 +780,10 @@ export class WorkerRuntimeService {
       let lastClarificationId: string | null = null
       let lastClarificationQuestion: string | null = null
       while (!next.done) {
+        if (next.value.type === 'metadata') {
+          next = await iterator.next()
+          continue
+        }
         const event = await appendWorkerRuntimeEvent({
           roomId: room.id,
           participantId: workerParticipant.id,
@@ -1171,7 +1249,7 @@ async function appendWorkerRuntimeEvent(input: {
   workerInstanceId?: string | null
   runtimeLeaseId?: string | null
   runtimeType: string
-  event: WorkerRuntimeEvent
+  event: Exclude<WorkerRuntimeEvent, { type: 'metadata' }>
 }) {
   if (input.event.type === 'artifact') {
     const registeredArtifact =

@@ -1,6 +1,6 @@
 import { gt } from 'drizzle-orm'
 import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, sql, timelineEvents, workspaceAgents } from '@agenthub/db'
-import { MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
+import { MatrixClient, defaultMatrixHomeserverUrl, matrixBool, matrixLocalpart } from './matrix-client'
 import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
 import type {
   AddParticipantInput,
@@ -255,6 +255,9 @@ export class MatrixRoomAdapter implements RoomAdapter {
 
   async appendTimelineEvent(input: AppendTimelineEventInput) {
     const room = await this.ensureRoomOnCurrentHomeserver(input.roomId)
+    if (input.senderParticipantId) {
+      await this.ensureSenderParticipantJoined(input.senderParticipantId, room)
+    }
     const senderIdentity = input.senderParticipantId
       ? await this.getIdentityForSenderParticipant(input.senderParticipantId)
       : null
@@ -429,7 +432,8 @@ export class MatrixRoomAdapter implements RoomAdapter {
     }
     if (client.shouldAutoInviteParticipants()) {
       try {
-        await client.inviteUser(room.providerRoomId, participant.providerUserId)
+        const accessToken = await this.getMembershipInviteAccessToken(room)
+        await client.inviteUser(room.providerRoomId, participant.providerUserId, { accessToken })
         membership.invited = true
       } catch (error) {
         membership.inviteError = (error as Error).message
@@ -456,6 +460,25 @@ export class MatrixRoomAdapter implements RoomAdapter {
         updatedAt: new Date(),
       })
       .where(eq(roomParticipants.id, participant.id))
+  }
+
+  private async ensureSenderParticipantJoined(
+    participantId: string,
+    room: typeof rooms.$inferSelect,
+  ) {
+    const [participant] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participantId)).limit(1)
+    if (!participant) return
+    const matrixMembership = participant.metadata?.matrixMembership
+    if (
+      matrixMembership &&
+      typeof matrixMembership === 'object' &&
+      !Array.isArray(matrixMembership) &&
+      (matrixMembership as Record<string, unknown>).providerRoomId === room.providerRoomId &&
+      (matrixMembership as Record<string, unknown>).joined === true
+    ) {
+      return
+    }
+    await this.reconcileMatrixMembership(participant, {}, room)
   }
 
   private async ensureRoomOnCurrentHomeserver(roomId: string) {
@@ -594,6 +617,17 @@ export class MatrixRoomAdapter implements RoomAdapter {
 
   private getAdminAccessToken() {
     return (this.options.accessToken ?? process.env.AGENTHUB_MATRIX_ACCESS_TOKEN)?.trim() || null
+  }
+
+  private async getMembershipInviteAccessToken(room: typeof rooms.$inferSelect) {
+    const adminAccessToken = this.getAdminAccessToken()
+    if (adminAccessToken) return adminAccessToken
+    const identity = await this.identityService().ensureIdentity({
+      ownerType: 'human',
+      ownerId: room.ownerId,
+      displayName: 'You',
+    })
+    return identity.accessToken ?? null
   }
 
   private async getRoomCreationAccessToken(ownerId: string) {
