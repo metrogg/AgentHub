@@ -55,6 +55,18 @@ describe('artifact preview utilities', () => {
         'workspace-1',
       ).url,
     ).toBe(artifactFileUrl('workspace-1', 'README.md'))
+
+    expect(
+      enrichPreviewItem(
+        {
+          id: 'file-legacy-url',
+          kind: 'file',
+          title: 'README.md',
+          url: `/api/artifacts/file?path=${encodeURIComponent('README.md')}`,
+        },
+        'workspace-1',
+      ).url,
+    ).toBe(artifactFileUrl('workspace-1', 'README.md'))
   })
 
   test('detects text and office document preview hints', () => {
@@ -127,6 +139,39 @@ describe('artifact preview utilities', () => {
     expect(enrichPreviewItem(htmlPreview, 'workspace-1').url).toBe(
       artifactPreviewFileUrl('workspace-1', 'dist/index.html'),
     )
+
+    const staticPreview = enrichPreviewItem(
+      previewItemFromAgentArtifact(
+        {
+          id: 'artifact-static-preview',
+          type: 'preview',
+          title: 'Static preview',
+          url: `/api/artifacts/preview-file?path=${encodeURIComponent('dist/index.html')}`,
+          previewKind: 'static-html',
+        },
+        labelOptions,
+      ),
+      'workspace-1',
+    )
+    expect(staticPreview).toMatchObject({
+      id: 'artifact-static-preview',
+      kind: 'web',
+      path: 'dist/index.html',
+      url: artifactPreviewFileUrl('workspace-1', 'dist/index.html'),
+      workspaceId: 'workspace-1',
+    })
+
+    const externalPreview = enrichPreviewItem(
+      {
+        id: 'external-preview',
+        kind: 'web',
+        title: 'External preview',
+        url: 'http://127.0.0.1:4173/?path=dist/index.html',
+      },
+      'workspace-1',
+    )
+    expect(externalPreview.path).toBeUndefined()
+    expect(externalPreview.url).toBe('http://127.0.0.1:4173/?path=dist/index.html')
 
     const wordPreview = enrichPreviewItem(
       previewItemFromAgentArtifact(

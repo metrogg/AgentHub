@@ -367,7 +367,9 @@ export const Thread: FC = () => {
     function handlePreview(event: Event) {
       const item = (event as CustomEvent<ArtifactPreviewItem>).detail
       if (!item?.id) return
-      const workspaceId = item.workspaceId ?? useChatStore.getState().currentSession?.workspaceId
+      const state = useChatStore.getState()
+      const workspaceId =
+        item.workspaceId ?? state.currentSession?.workspaceId ?? state.currentWorkspace?.id
       setPreviewItem(enrichPreviewItem(item, workspaceId ?? undefined))
       setPreviewCollapsed(false)
     }
@@ -910,7 +912,7 @@ const ThreadContextRail: FC<{
       directRunProgress && !taskBoard
         ? collectDirectRunFiles(directRunProgress, workspace)
         : collectRailFiles(taskBoard, workspace),
-    [directRunProgress, taskBoard, workspace?.projectPath],
+    [directRunProgress, taskBoard, workspace?.id, workspace?.projectPath],
   )
   const activeTask =
     taskBoard?.tasks.find((task) => task.status === 'running') ??
@@ -1043,14 +1045,7 @@ const RailCard: FC<{
   </section>
 )
 
-type RailFileItem = {
-  id: string
-  title: string
-  path?: string
-  url?: string
-  source?: string
-  kind: ArtifactPreviewItem['kind']
-}
+type RailFileItem = ArtifactPreviewItem
 
 function directRunStepIcon(status: DirectRunStepStatus) {
   if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
@@ -1084,14 +1079,19 @@ function collectRailFiles(
         task.title ||
         '任务产物'
 
-      files.push({
-        id: key,
-        kind: railPreviewKind(artifact.type ?? artifact.kind, rawPath, rawUrl),
-        path,
-        source: artifact.source,
-        title,
-        url: rawUrl,
-      })
+      files.push(
+        enrichPreviewItem(
+          {
+            id: key,
+            kind: railPreviewKind(artifact.type ?? artifact.kind, rawPath, rawUrl),
+            path,
+            source: artifact.source,
+            title,
+            url: rawUrl,
+          },
+          workspace?.id ?? undefined,
+        ),
+      )
     }
   }
 
@@ -1114,32 +1114,37 @@ function collectDirectRunFiles(
   }
 
   for (const artifact of readFlowArtifacts(progress.run.artifacts)) {
-    const preview = previewItemFromArtifact(artifact)
+    const rawPreview = previewItemFromArtifact(artifact)
     const rawPath =
       artifact.type === 'diff'
         ? artifact.filePath
         : artifact.type === 'file'
           ? artifact.path
           : undefined
-    const path = rawPath ? resolveWorkspacePath(rawPath, workspacePath) : preview.path
-    addFile({
-      id: artifact.id,
-      kind: preview.kind,
-      path,
-      source: preview.source,
-      title: preview.title,
-      url: preview.url,
-    })
+    addFile(
+      enrichPreviewItem(
+        {
+          ...rawPreview,
+          path: rawPath ? resolveWorkspacePath(rawPath, workspacePath) : rawPreview.path,
+        },
+        workspace?.id ?? undefined,
+      ),
+    )
   }
 
   for (const file of progress.run.files ?? []) {
-    addFile({
-      id: `direct-run-file-${file.path}`,
-      kind: file.diff ? 'diff' : railPreviewKind(undefined, file.path),
-      path: resolveWorkspacePath(file.path, workspacePath),
-      source: file.diff,
-      title: fileNameFromPath(file.path) ?? file.path,
-    })
+    addFile(
+      enrichPreviewItem(
+        {
+          id: `direct-run-file-${file.path}`,
+          kind: file.diff ? 'diff' : railPreviewKind(undefined, file.path),
+          path: resolveWorkspacePath(file.path, workspacePath),
+          source: file.diff,
+          title: fileNameFromPath(file.path) ?? file.path,
+        },
+        workspace?.id ?? undefined,
+      ),
+    )
   }
 
   return files.slice(0, 4)
@@ -1283,6 +1288,7 @@ function taskArtifactPreviewItem(
   artifact: NonNullable<LiveTaskBoard['tasks'][number]['artifacts']>[number],
   taskId: string,
   index: number,
+  workspaceId?: string,
 ): ArtifactPreviewItem {
   const title = artifact.title || artifact.filePath || artifact.url || `产物 ${index + 1}`
   const kind: ArtifactPreviewItem['kind'] =
@@ -1299,19 +1305,22 @@ function taskArtifactPreviewItem(
               : /\.(png|jpg|jpeg|webp|gif)$/i.test(artifact.filePath ?? '')
                 ? 'image'
                 : 'file'
-  return {
-    id:
-      artifact.artifactId ??
-      artifact.id ??
-      artifact.filePath ??
-      artifact.url ??
-      `${taskId}-${index}`,
-    title,
-    kind,
-    url: artifact.url ?? undefined,
-    path: artifact.filePath ?? undefined,
-    source: artifact.source ?? undefined,
-  }
+  return enrichPreviewItem(
+    {
+      id:
+        artifact.artifactId ??
+        artifact.id ??
+        artifact.filePath ??
+        artifact.url ??
+        `${taskId}-${index}`,
+      title,
+      kind,
+      url: artifact.url ?? undefined,
+      path: artifact.filePath ?? undefined,
+      source: artifact.source ?? undefined,
+    },
+    workspaceId,
+  )
 }
 
 function buildRoomThreadSections(tasks: LiveTaskBoard['tasks']): RoomThreadSection[] {
@@ -1336,6 +1345,9 @@ const RoomTaskDrawer: FC<{
 }> = ({ open, onClose, taskBoard, agentTabs, activity }) => {
   const selectAgentTab = useChatStore((state) => state.selectAgentTab)
   const selectSession = useChatStore((state) => state.selectSession)
+  const previewWorkspaceId = useChatStore(
+    (state) => state.currentSession?.workspaceId ?? state.currentWorkspace?.id ?? undefined,
+  )
   const navigate = useNavigate()
   const [pendingChildNoticeTaskId, setPendingChildNoticeTaskId] = useState<string | null>(null)
   const title = taskBoard?.title || taskBoard?.goal || '房间任务'
@@ -1359,7 +1371,7 @@ const RoomTaskDrawer: FC<{
   const newestArtifacts = tasks
     .flatMap((task) =>
       (task.artifacts ?? []).map((artifact, index) => ({
-        item: taskArtifactPreviewItem(artifact, task.id, index),
+        item: taskArtifactPreviewItem(artifact, task.id, index, previewWorkspaceId),
         taskTitle: task.title,
       })),
     )
@@ -1567,7 +1579,12 @@ const RoomTaskDrawer: FC<{
                                 {task.artifacts && task.artifacts.length > 0 && (
                                   <div className="mt-2 flex flex-wrap gap-1.5">
                                     {task.artifacts.slice(0, 3).map((artifact, index) => {
-                                      const item = taskArtifactPreviewItem(artifact, task.id, index)
+                                      const item = taskArtifactPreviewItem(
+                                        artifact,
+                                        task.id,
+                                        index,
+                                        previewWorkspaceId,
+                                      )
                                       return (
                                         <button
                                           key={item.id}
@@ -4612,7 +4629,9 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   item,
   onClose,
 }) => {
-  const activeWorkspaceId = useChatStore((state) => state.currentSession?.workspaceId)
+  const activeWorkspaceId = useChatStore(
+    (state) => state.currentSession?.workspaceId ?? state.currentWorkspace?.id,
+  )
   const previewWorkspaceId = item.workspaceId ?? activeWorkspaceId ?? undefined
   const canOpen = Boolean(item.url)
   const canInspectSource = canInspectArtifactPreviewSource(item, previewWorkspaceId)
@@ -5635,7 +5654,7 @@ const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
 const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({
   artifact,
 }) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
   const item = enrichPreviewItem(previewItemFromArtifact(artifact), workspaceId ?? undefined)
   return (
     <FlowRowShell
@@ -5685,7 +5704,7 @@ const InlineDiffReview: FC<{
   compact?: boolean
   previewId?: string
 }> = ({ compact = false, diff, filePath, previewId }) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
   const [open, setOpen] = useState(false)
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<'applied' | 'error' | null>(null)
@@ -5699,6 +5718,7 @@ const InlineDiffReview: FC<{
     source: diff,
     subtitle: '代码 Diff',
     title: filePath,
+    workspaceId: workspaceId ?? undefined,
   }
 
   async function handleSaveEdit(params: DiffEditSaveParams) {
@@ -5827,7 +5847,8 @@ const InlineDiffReview: FC<{
 const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({
   artifact,
 }) => {
-  const item = previewItemFromArtifact(artifact)
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
+  const item = enrichPreviewItem(previewItemFromArtifact(artifact), workspaceId ?? undefined)
   return (
     <FlowRowShell
       icon={<Globe2 className="h-3.5 w-3.5" />}
@@ -5866,7 +5887,8 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
 const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({
   artifact,
 }) => {
-  const item = previewItemFromArtifact(artifact)
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
+  const item = enrichPreviewItem(previewItemFromArtifact(artifact), workspaceId ?? undefined)
   return (
     <FlowRowShell
       icon={<Rocket className="h-3.5 w-3.5" />}
@@ -5916,7 +5938,15 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
     action={
       <button
         type="button"
-        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+        onClick={() => {
+          const state = useChatStore.getState()
+          requestArtifactPreview(
+            enrichPreviewItem(
+              previewItemFromArtifact(artifact),
+              state.currentSession?.workspaceId ?? state.currentWorkspace?.id ?? undefined,
+            ),
+          )
+        }}
         className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
         title="查看流程"
       >
