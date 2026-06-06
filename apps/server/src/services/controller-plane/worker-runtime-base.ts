@@ -1,8 +1,10 @@
-export type WorkerRuntimeBase = 'openclaw' | 'claude-code' | 'opencode' | 'gemini' | 'codex'
+export type WorkerRuntimeBase = 'openclaw' | 'qwenpaw' | 'copaw' | 'claude-code' | 'opencode' | 'gemini' | 'codex'
 
 export function normalizeWorkerRuntimeBase(value?: string | null): WorkerRuntimeBase | null {
   if (
     value === 'openclaw' ||
+    value === 'qwenpaw' ||
+    value === 'copaw' ||
     value === 'claude-code' ||
     value === 'opencode' ||
     value === 'gemini' ||
@@ -21,7 +23,7 @@ export function normalizeCodeAgentType(value?: string | null) {
 }
 
 export function codeAgentTypeForRuntime(runtimeBase: string, value?: string | null) {
-  if (runtimeBase === 'openclaw') return null
+  if (runtimeBase === 'openclaw' || runtimeBase === 'qwenpaw' || runtimeBase === 'copaw') return null
   return normalizeCodeAgentType(value) ?? normalizeWorkerRuntimeBase(runtimeBase)
 }
 

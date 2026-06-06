@@ -149,6 +149,26 @@ describe('Controller Plane', () => {
     })).rejects.toThrow(/explicit worker runtime base/)
   })
 
+  test('controller API recognizes QwenPaw Worker base but fails loudly until backend exists', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller QwenPaw Runtime Workspace',
+        goal: 'Validate qwenpaw worker base is explicit and diagnostic',
+      })
+      .returning()
+    const api = new ControllerApi()
+
+    await expect(api.createWorker({
+      workspaceId: workspace!.id,
+      name: 'QwenPaw Resident Worker',
+      runtimeBase: 'qwenpaw',
+      modelId: 'test-model',
+      role: 'Worker',
+    })).rejects.toThrow(/QwenPaw Worker runtime is recognized but its WorkerBackend is not implemented yet/)
+  })
+
   test('controller API createWorker runs Member Reconcile stages and joins Matrix rooms', async () => {
     const [workspace] = await db
       .insert(workspaces)

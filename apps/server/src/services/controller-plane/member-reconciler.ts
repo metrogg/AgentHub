@@ -173,6 +173,11 @@ export class MemberReconciler {
         'OpenClaw Worker requires a resident backend. Install OpenClaw locally or enable AGENTHUB_WORKER_BACKEND=docker / AGENTHUB_CONTAINER_RUNTIME=docker before creating this Worker.',
       )
     }
+    if (runtimeBase === 'qwenpaw' || runtimeBase === 'copaw') {
+      throw new Error(
+        'QwenPaw Worker runtime is recognized but its WorkerBackend is not implemented yet. Use OpenClaw for resident Workers now, or choose OpenCode / Claude Code / Codex / Gemini bridge.',
+      )
+    }
 
     const modelId =
       input.modelId?.trim() ||

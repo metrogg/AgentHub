@@ -12,7 +12,7 @@ const ROLE_TYPES = new Set([
 ])
 
 const CODE_AGENT_TYPES = new Set(['codex', 'claude-code', 'opencode', 'gemini'])
-const WORKER_RUNTIME_BASES = new Set(['openclaw', 'qwenpaw', 'codex', 'claude-code', 'opencode', 'gemini'])
+const WORKER_RUNTIME_BASES = new Set(['openclaw', 'qwenpaw', 'copaw', 'codex', 'claude-code', 'opencode', 'gemini'])
 const SANDBOX_POLICIES = new Set(['workspace-write', 'danger-full-access'])
 const CONTEXT_POLICIES = new Set(['recent-only', 'pinned-recent', 'workspace-aware'])
 

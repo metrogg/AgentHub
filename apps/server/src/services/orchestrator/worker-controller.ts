@@ -45,7 +45,7 @@ interface WorkerInstanceRow {
   workspaceId: string
   workspaceAgentId: string
   runtimeFamily: 'coordinator' | 'worker'
-  runtimeBase: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  runtimeBase: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
   modelId: string | null
   skillIds: string[]
   mcpServerIds: string[]
@@ -699,7 +699,7 @@ export class WorkerController {
     details.modelConfigured = true
 
     // Check runtime base is valid
-    const validRuntimes = ['openclaw', 'codex', 'claude-code', 'opencode', 'gemini']
+    const validRuntimes = ['openclaw', 'qwenpaw', 'copaw', 'codex', 'claude-code', 'opencode', 'gemini']
     if (!validRuntimes.includes(worker.runtimeBase)) {
       return {
         ready: false,

@@ -1565,7 +1565,7 @@ export interface OrchestratorRunResourceSnapshot {
     workspaceId: string
     workspaceAgentId: string
     runtimeFamily: 'coordinator' | 'worker' 
-    runtimeBase: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
+    runtimeBase: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
     modelId: string | null
     skillIds: string[]
     mcpServerIds: string[]

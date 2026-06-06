@@ -52,6 +52,7 @@ import { useChatStore } from '../stores/chatStore'
 const WORKER_BASE_OPTIONS = [
   { value: '', label: '未选择 Worker 基座' },
   { value: 'openclaw', label: 'OpenClaw' },
+  { value: 'qwenpaw', label: 'QwenPaw' },
   { value: 'codex', label: 'Codex CLI' },
   { value: 'claude-code', label: 'Claude Code' },
   { value: 'opencode', label: 'OpenCode' },
@@ -191,6 +192,10 @@ export default function AgentConfigPage() {
     if (workerRuntimeBase === 'openclaw') {
       if (!modelId) return 'OpenClaw Worker 需要绑定模型，并通过 OpenClaw resident runtime / Matrix 接单。'
       return 'OpenClaw Worker 会使用独立 openclaw.json 和 resident backend；模型从当前 Agent 绑定生成。'
+    }
+    if (workerRuntimeBase === 'qwenpaw') {
+      if (!modelId) return 'QwenPaw Worker 需要绑定模型；当前后端已识别该基座，但 WorkerBackend 仍在接入中。'
+      return 'QwenPaw Worker 是轻量 resident 基座目标；当前创建时会明确提示 WorkerBackend 尚未接入。'
     }
     if (!modelId) return '未绑定模型不会使用内部 LLM 默认模型；Worker 执行前需要显式绑定或匹配到兼容模型。'
     if (!model) return '当前绑定的模型不在模型目录中，运行前需要先补齐模型条目。'
@@ -1133,7 +1138,7 @@ function getManagerRuntimeBaseFromDraft(draft: AgentConfigInput): ManagerRuntime
 
 function getWorkerRuntimeBaseFromDraft(draft: AgentConfigInput): WorkerRuntimeBase {
   const value = draft.roleProfile?.workerRuntimeBase
-  if (value === 'openclaw' || value === 'claude-code' || value === 'opencode' || value === 'gemini' || value === 'codex') {
+  if (value === 'openclaw' || value === 'qwenpaw' || value === 'claude-code' || value === 'opencode' || value === 'gemini' || value === 'codex') {
     return value
   }
   return draft.codeAgentType ?? ''
@@ -1159,7 +1164,7 @@ function withAgentRuntimeBases(
 }
 
 function applyWorkerRuntimeBase(draft: AgentConfigInput, workerRuntimeBase: WorkerRuntimeBase): AgentConfigInput {
-  const codeAgentType = workerRuntimeBase === 'openclaw' || !workerRuntimeBase
+  const codeAgentType = workerRuntimeBase === 'openclaw' || workerRuntimeBase === 'qwenpaw' || !workerRuntimeBase
     ? null
     : cliWorkerBaseFromRuntimeBase(workerRuntimeBase)
   return {

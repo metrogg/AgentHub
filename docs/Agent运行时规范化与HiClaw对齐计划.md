@@ -364,11 +364,12 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 进展：`agenthub room create/events/mention` 已改为调用 `/api/controller/rooms*`。这让 Manager 的 channel/worker/task skill 更接近 HiClaw 的“自然语言 -> skill -> Controller API -> Matrix Room timeline”链路。
    - 剩余：把各 skill 从命令示例继续收敛到稳定 Controller API schema，补危险操作 approval、审计字段、OpenAPI/JSON schema 和 YAML apply。
 5. **Resident Worker e2e**
-   - OpenClaw Worker 用自己的 Matrix `/sync` 接 @mention，自主回复和执行。
+   - OpenClaw / QwenPaw Worker 用自己的 Matrix `/sync` 接 @mention，自主回复和执行。
    - 进展：OpenClaw Worker config 生成已开始 room-aware。`deployWorkerConfig()` 会接收 Controller 查到的 Worker room bindings，把实际 `providerRoomId` 写入 `channels.matrix.groups`，并把同房间 human / manager Matrix user id 加入 `groupAllowFrom`；本地进程和 Docker resident backend 都走同一份 room binding。Worker contract 也会同步当前 rooms，避免 OpenClaw config 知道房间但 `AGENTS.md / rooms.json` 不知道。
+   - 进展：QwenPaw / CoPaw 已被纳入 Worker runtime base 口径：Manager proposal、shared preset type、Controller runtime normalize、WorkerController 校验、前端 Agent 配置和 run snapshot 类型都能识别 `qwenpaw`，并保持 `codeAgentType=null` 的 resident 语义。由于 QwenPaw WorkerBackend 尚未实现，`ControllerApi.createWorker(runtimeBase=qwenpaw)` 会明确失败并提示 backend 未接入，而不是降级成 Codex 或 bridge。
    - 进展：resident Worker 通过 Matrix 发回 HiClaw 风格协议消息时，Controller 已不再只打日志。`TASK_COMPLETED` 会按 `Room -> TaskThread -> Task -> RuntimeLease -> WorkerInstance` 解析上下文，同步 `workspace_tasks=done`、`TaskThread=completed`、释放 `RuntimeLease`，并让 resident Worker 回到 `listening`；`QUESTION` 会创建 `task_clarifications`、写 `approval.requested` timeline event，并同步进入 `waiting_for_human`；`BLOCKED` 会把任务置为 blocked/failed-thread 并释放 lease；`PHASE{N}_DONE` 会进入 RunController 进度事件。这个切片让“Worker 在 Room 里说完了/卡住了/要澄清”开始成为真正的资源 reconcile，而不是纯聊天文本。
    - 进展：resident Worker e2e 现在有可操作验收入口。自动化测试覆盖 dry-run readiness 和 Matrix probe reply：Controller 先写 `worker-runtime.resident-self-test.request` mention event，再观察 Worker reply；这保护了“Room mention -> resident worker 回复 -> Controller 识别协议结果”的最小链路。现场验证时应先在设置页跑 dry-run，通过后再用显式 probe 或真实群聊 @mention 验证 OpenClaw/QwenPaw 进程自己的 `/sync`。
-   - 剩余：用真实 Tuwunel + 真实 OpenClaw Worker 做现场 e2e，确认 OpenClaw 自己的 `/sync` 能稳定接 @mention、执行、发 `TASK_COMPLETED / QUESTION / BLOCKED`，并由 AgentHub 导入后完成上述资源闭环。
+   - 剩余：用真实 Tuwunel + 真实 OpenClaw Worker 做现场 e2e，确认 OpenClaw 自己的 `/sync` 能稳定接 @mention、执行、发 `TASK_COMPLETED / QUESTION / BLOCKED`，并由 AgentHub 导入后完成上述资源闭环；随后实现 QwenPaw WorkerBackend，把当前“可识别但阻塞”的 QwenPaw resident Worker 变成可运行 backend。
 6. **Bridge hardening**
    - 状态：第一刀已落地。
    - OpenCode / Claude / Codex / Gemini bridge 执行目录现在能看到同一套规范 workspace、SOUL/AGENTS、skills 和 runtime/profile/state 文件；prompt 也会显式指向本次投影 contract 和 Controller 标准 contract。

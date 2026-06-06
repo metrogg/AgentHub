@@ -82,6 +82,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - 前端配置默认值也已收紧：Agent 配置页、本地 Agent library、专家模板导入和 Coding Tools 启动修复都不再为缺失 Worker 基座补 Codex；未配置基座会保留为未配置态，等待用户、模板或 Manager proposal 明确选择。
 - `infra/agenthub-cli/agenthub.ts` 的 `worker create/apply` 已取消 Codex 默认值，必须显式传 `--runtime-base`；OpenClaw Manager skill 示例也已更新为 `--runtime-base ... --model ...`。
 - OpenClaw Worker 的 `roleProfile.workerRuntimeBase=openclaw` 会保持为 resident Worker 语义，`workspace_agents.codeAgentType` 不再写成 `codex`。
+- QwenPaw / CoPaw Worker runtime base 已进入统一口径：Manager proposal、Controller normalize、WorkerController 校验、前端配置和 shared preset type 都能识别 `qwenpaw`，并保持 resident Worker 的 `codeAgentType=null`。当前 QwenPaw WorkerBackend 尚未实现，创建时会明确失败并提示 backend 未接入，不会降级成 Codex 或 bridge。
 - `WorkerRuntimeService.runGroupMentionRoom()` 会把真实 runtime result status 返回给 dispatcher；Worker 执行失败时保持 `failed`，不再被旧 group mention bridge 覆盖成 `idle`。
 - OpenCode / Claude Code / Codex / Gemini 当前仍是 AgentHub-managed Worker bridge；OpenClaw Worker 是 resident Worker 目标形态，需要独立 Matrix identity、room membership、openclaw config 和长期 gateway/listener。
 - 新增 `apps/server/src/services/agent-contract/`：Manager 和 Worker 的 SOUL/AGENTS/Skills/registry/state 生成逻辑归口到这里。Manager contract 会生成 `runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / state.json / rooms.json / logs`，并镜像到 OpenClaw `agentDir`；`manager-runtime/manager-config.ts` 只保留兼容外壳。

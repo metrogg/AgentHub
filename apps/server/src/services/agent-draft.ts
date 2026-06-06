@@ -57,7 +57,7 @@ export async function buildAgentDraft(content: string): Promise<AgentDraft> {
     '只返回严格 JSON，不要 Markdown，不要解释。',
     '不要使用固定团队模板；根据用户这次表达决定名称、职责、运行时、工具权限和系统提示。',
     'runtimeType 只能是 "code-agent"。AgentHub 的普通成员都是 Worker Agent，必须显式选择可用的 Worker Runtime Base。',
-    'codeAgentType 只能是 "codex"、"claude-code"、"opencode"、"gemini" 或 null；如果要创建 OpenClaw Worker，请在 roleProfile.workerRuntimeBase 写入 "openclaw"，codeAgentType 保持 null。',
+    'codeAgentType 只能是 "codex"、"claude-code"、"opencode"、"gemini" 或 null；如果要创建 OpenClaw / QwenPaw Worker，请在 roleProfile.workerRuntimeBase 写入 "openclaw" / "qwenpaw"，codeAgentType 保持 null。',
     '不能在缺少用户选择或运行时诊断依据时默认使用 Codex。',
     'MCP、Skills、Rules 是 code-agent 可使用的工具/能力，不是 runtimeType。不要输出 runtimeType="mcp" 或 runtimeType="a2a"。',
     'sandboxPolicy 只能在 workspace-write 和 danger-full-access 中选择。研究/审查等低风险语义请通过角色职责和工具权限表达，不要再输出 read-only。',

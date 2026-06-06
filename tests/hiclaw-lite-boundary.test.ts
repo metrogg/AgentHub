@@ -179,7 +179,7 @@ describe('HiClaw-lite kernel boundary', () => {
 
   test('AgentHub Controller CLI requires explicit Worker runtime base', () => {
     const cli = readFileSync(join(process.cwd(), 'infra/agenthub-cli/agenthub.ts'), 'utf8')
-    expect(cli).toContain('--runtime-base <openclaw|opencode|claude-code|codex|gemini> is required')
+    expect(cli).toContain('--runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> is required')
     expect(cli).not.toContain("|| 'codex'")
     expect(cli).not.toContain('|| "codex"')
   })

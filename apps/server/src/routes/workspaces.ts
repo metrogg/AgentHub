@@ -785,6 +785,8 @@ function readWorkerRuntimeBase(
   const value = input.roleProfile?.workerRuntimeBase
   if (
     value === 'openclaw' ||
+    value === 'qwenpaw' ||
+    value === 'copaw' ||
     value === 'codex' ||
     value === 'claude-code' ||
     value === 'opencode' ||
