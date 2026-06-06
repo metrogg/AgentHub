@@ -50,6 +50,7 @@ import { cn } from '../lib/utils'
 import { useChatStore } from '../stores/chatStore'
 
 const WORKER_BASE_OPTIONS = [
+  { value: '', label: '未选择 Worker 基座' },
   { value: 'openclaw', label: 'OpenClaw' },
   { value: 'codex', label: 'Codex CLI' },
   { value: 'claude-code', label: 'Claude Code' },
@@ -75,7 +76,7 @@ const emptyDraft: AgentConfigInput = {
   color: '#111827',
   modelId: null,
   runtimeType: 'code-agent',
-  codeAgentType: 'codex',
+  codeAgentType: null,
   capabilityTags: [],
   skillIds: [],
   toolPermissions: ['chat'],
@@ -433,10 +434,10 @@ export default function AgentConfigPage() {
       ...preset,
       name: preset.name,
       role: preset.role,
-      codeAgentType: nextIsManager ? null : (preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'codex') : null),
+      codeAgentType: nextIsManager ? null : (preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? null) : null),
       roleProfile: withAgentRuntimeBases(
         preset.roleProfile ?? null,
-        preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'codex') : 'codex',
+        getWorkerRuntimeBaseFromDraft(preset),
         preset.roleProfile?.managerRuntimeType === 'qwenpaw' ? 'qwenpaw' : 'openclaw',
         nextIsManager,
       ),
@@ -731,7 +732,7 @@ export default function AgentConfigPage() {
                                       setDraft({
                                         ...draft,
                                         runtimeType: nextRuntime,
-                                        codeAgentType: draft.codeAgentType ?? 'codex',
+                                        codeAgentType: draft.codeAgentType ?? null,
                                         approvalRequired: false,
                                       })
                                     }}>
@@ -1053,7 +1054,7 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     color: draft.color || '#111827',
     modelId: managerAgent ? null : (draft.modelId ?? null),
     runtimeType: 'code-agent' as const,
-    codeAgentType: managerAgent ? null : (cliWorkerBaseFromRuntimeBase(workerRuntimeBase) ?? draft.codeAgentType ?? 'codex'),
+    codeAgentType: managerAgent ? null : (cliWorkerBaseFromRuntimeBase(workerRuntimeBase) ?? draft.codeAgentType ?? null),
     capabilityTags,
     toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
@@ -1103,11 +1104,13 @@ function labelForCodeAgentType(type: WorkspaceAgent['codeAgentType'] | null | un
   if (type === 'claude-code') return 'Claude Code'
   if (type === 'opencode') return 'OpenCode'
   if (type === 'gemini') return 'Gemini CLI'
-  return 'Codex CLI'
+  if (type === 'codex') return 'Codex CLI'
+  return '未选择 Worker 基座'
 }
 
 function labelForWorkerRuntimeBase(type: WorkerRuntimeBase | null | undefined) {
   if (type === 'openclaw') return 'OpenClaw'
+  if (!type) return '未选择 Worker 基座'
   return labelForCodeAgentType(type as WorkspaceAgent['codeAgentType'])
 }
 
@@ -1133,7 +1136,7 @@ function getWorkerRuntimeBaseFromDraft(draft: AgentConfigInput): WorkerRuntimeBa
   if (value === 'openclaw' || value === 'claude-code' || value === 'opencode' || value === 'gemini' || value === 'codex') {
     return value
   }
-  return draft.codeAgentType ?? 'codex'
+  return draft.codeAgentType ?? ''
 }
 
 function cliWorkerBaseFromRuntimeBase(value: WorkerRuntimeBase | null | undefined): CliWorkerBase | null {
@@ -1150,13 +1153,15 @@ function withAgentRuntimeBases(
   const { workerRuntimeBase: _workerRuntimeBase, ...rest } = roleProfile ?? {}
   return {
     ...rest,
-    ...(managerAgent ? {} : { workerRuntimeBase }),
+    ...(managerAgent || !workerRuntimeBase ? {} : { workerRuntimeBase }),
     managerRuntimeType: managerRuntimeBase,
   }
 }
 
 function applyWorkerRuntimeBase(draft: AgentConfigInput, workerRuntimeBase: WorkerRuntimeBase): AgentConfigInput {
-  const codeAgentType = cliWorkerBaseFromRuntimeBase(workerRuntimeBase) ?? draft.codeAgentType ?? 'codex'
+  const codeAgentType = workerRuntimeBase === 'openclaw' || !workerRuntimeBase
+    ? null
+    : cliWorkerBaseFromRuntimeBase(workerRuntimeBase)
   return {
     ...draft,
     codeAgentType,

@@ -313,4 +313,5 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 状态：第一刀已落地。
    - OpenCode / Claude / Codex / Gemini bridge 执行目录现在能看到同一套规范 workspace、SOUL/AGENTS、skills 和 runtime/profile/state 文件；prompt 也会显式指向本次投影 contract 和 Controller 标准 contract。
    - 后端 Worker 创建、workspace 查询、room bridge 和 profile builder 已加护栏：缺 `codeAgentType / workerRuntimeBase` 不再静默改成 Codex。
+   - 前端 Agent 配置、本地 Agent library、专家模板导入和启动修复逻辑也已收紧：新建 Worker 默认是“未选择 Worker 基座”，只有用户、模板或 Manager proposal 明确选择时才会写入 Codex / OpenCode / Claude Code / Gemini / OpenClaw。
    - 剩余：把 bridge `inspect / health` 诊断前端化，并继续把 heartbeat / artifact contract 和长期 session bridge 做到各基座能力对等。

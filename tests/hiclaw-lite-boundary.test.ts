@@ -209,6 +209,30 @@ describe('HiClaw-lite kernel boundary', () => {
     expect(violations).toEqual([])
   })
 
+  test('frontend Agent configuration does not silently default missing Worker bases to Codex', () => {
+    const guardedFiles = [
+      'apps/web/src/pages/AgentConfigPage.tsx',
+      'apps/web/src/lib/agentLibrary.ts',
+      'apps/web/src/lib/expertProfiles.ts',
+      'apps/web/src/lib/codingToolsLifecycle.ts',
+      'packages/shared/src/agent-role-presets.ts',
+    ]
+    const forbiddenPatterns = [
+      /\?\?\s*['"]codex['"]/,
+      /\|\|\s*['"]codex['"]/,
+      /codeAgentType:\s*['"]codex['"]/,
+      /defaultCodeAgentTypeFor/,
+    ]
+    const violations: string[] = []
+    for (const file of guardedFiles) {
+      const text = readFileSync(join(process.cwd(), file), 'utf8')
+      for (const pattern of forbiddenPatterns) {
+        if (pattern.test(text)) violations.push(`${file} matches ${pattern}`)
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
   test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {
     const guardedDirs = [
       'apps/server/src/services/rooms',

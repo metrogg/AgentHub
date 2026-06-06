@@ -305,7 +305,9 @@ export function rolePresetValues(roleType: Exclude<AgentRoleType, 'custom'>) {
       managerRuntimeType: preset.managerRuntimeType ?? preset.roleProfile.managerRuntimeType ?? null,
       ...(preset.roleType === 'orchestrator'
         ? {}
-        : { workerRuntimeBase: preset.workerRuntimeBase ?? preset.roleProfile.workerRuntimeBase ?? preset.codeAgentType ?? 'codex' }),
+        : preset.workerRuntimeBase ?? preset.roleProfile.workerRuntimeBase ?? preset.codeAgentType
+          ? { workerRuntimeBase: preset.workerRuntimeBase ?? preset.roleProfile.workerRuntimeBase ?? preset.codeAgentType }
+          : {}),
     },
     color: preset.color,
     runtimeType: preset.runtimeType,

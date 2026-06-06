@@ -1,6 +1,6 @@
 import { api } from './api'
 import type { AgentConfigInput, AgentRelationType } from './api'
-import { inferRoleType, presetForRole } from './agentRolePresets'
+import { inferRoleType } from './agentRolePresets'
 
 export interface SavedAgentConfig extends AgentConfigInput {
   id: string
@@ -224,7 +224,7 @@ export function createSavedAgent(
     color: input.color ?? '#111827',
     modelId: managerAgent ? null : (input.modelId ?? null),
     runtimeType,
-    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null),
+    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? null) : null),
     capabilityTags: input.capabilityTags ?? [],
     skillIds: input.skillIds ?? [],
     toolPermissions: input.toolPermissions ?? [],
@@ -251,7 +251,7 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     color: agent.color ?? '#111827',
     modelId: managerAgent ? null : (agent.modelId ?? null),
     runtimeType,
-    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null),
+    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (agent.codeAgentType ?? null) : null),
     capabilityTags: [...(agent.capabilityTags ?? [])],
     skillIds: [...(agent.skillIds ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
@@ -306,7 +306,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     color: input.color || '#111827',
     modelId: managerAgent ? null : (input.modelId ?? null),
     runtimeType,
-    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null),
+    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? null) : null),
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags : [],
     skillIds: Array.isArray(input.skillIds) ? input.skillIds : [],
     toolPermissions:
@@ -347,20 +347,12 @@ function isPlaceholderSavedAgent(agent: SavedAgentConfig) {
     normalizeAgentText(agent.systemPrompt ?? '') ===
       normalizeAgentText('你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。') &&
     runtimeType === 'code-agent' &&
-    (agent.codeAgentType ?? 'codex') === 'codex'
+    (!agent.codeAgentType || agent.codeAgentType === 'codex')
   )
 }
 
 function normalizeAgentText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function defaultCodeAgentTypeFor(
-  input: Partial<Pick<AgentConfigInput, 'roleType' | 'name' | 'role' | 'capabilityTags'>>,
-) {
-  const roleType = input.roleType ?? inferRoleType(input)
-  const preset = roleType === 'custom' ? undefined : presetForRole(roleType)
-  return preset?.codeAgentType ?? 'codex'
 }
 
 function isManagerAgent(input: Partial<Pick<AgentConfigInput, 'roleType' | 'name' | 'role' | 'roleProfile'>>) {
