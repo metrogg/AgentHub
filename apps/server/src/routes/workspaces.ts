@@ -61,6 +61,11 @@ const cloneGithubWorkspaceSchema = z.object({
   goal: z.string().max(2000).default(''),
 })
 
+const workspaceCodeAgentTypeSchema = z.preprocess(
+  (value) => (value === 'openclaw' ? 'codex' : value),
+  z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+)
+
 const workspaceFileListQuerySchema = z.object({
   path: z.string().max(1000).optional(),
 })
@@ -80,7 +85,7 @@ const createAgentSchema = z.object({
   color: z.string().max(20).default('#6366f1'),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['code-agent']).default('code-agent'),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+  codeAgentType: workspaceCodeAgentTypeSchema,
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default([]),

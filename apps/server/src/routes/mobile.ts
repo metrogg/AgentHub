@@ -20,6 +20,7 @@ import { listRoomLastMessagePreviews } from '../services/rooms/room-last-message
 const PAIRING_TTL_MS = 2 * 60 * 1000
 const AGENT_LIBRARY_SETTING_KEY = 'AGENT_LIBRARY'
 const execFileAsync = promisify(execFile)
+type WorkspaceCodeAgentType = 'codex' | 'claude-code' | 'opencode' | 'gemini'
 
 interface PairingRecord {
   code: string
@@ -825,8 +826,9 @@ function normalizeRuntimeType(value?: string | null) {
   return allowed.includes(value ?? '') ? value! as any : 'llm'
 }
 
-function normalizeCodeAgentType(value?: string | null) {
-  return CODE_AGENT_TYPES.includes(value as any) ? value! as any : null
+function normalizeCodeAgentType(value?: string | null): WorkspaceCodeAgentType | null {
+  if (value === 'codex' || value === 'claude-code' || value === 'opencode' || value === 'gemini') return value
+  return null
 }
 
 function normalizeSandboxPolicy(value?: string | null) {

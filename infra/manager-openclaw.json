@@ -22,7 +22,7 @@
       "enabled": true,
       "homeserver": "http://localhost:6167",
       "userId": "@manager:agenthub.local",
-      "accessToken": "mZdaPtPc9U5AgXFvTrYHWq8XDttNtFlR",
+      "accessToken": "6MfNRhhswcPXRM3CPIjyhA1JeWkarY5x",
       "encryption": false,
       "network": {
         "dangerouslyAllowPrivateNetwork": true

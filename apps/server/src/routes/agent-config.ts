@@ -6,7 +6,11 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 import { streamReply } from '../services/llm'
 import { AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
-import { CODE_AGENT_TYPES } from '@agenthub/shared'
+
+const workspaceCodeAgentTypeSchema = z.preprocess(
+  (value) => (value === 'openclaw' ? 'codex' : value),
+  z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+)
 
 const agentConfigDraftSchema = z.object({
   name: z.string().max(60),
@@ -19,7 +23,7 @@ const agentConfigDraftSchema = z.object({
   color: z.string().max(20).default('#111827'),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['code-agent']).default('code-agent'),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+  codeAgentType: workspaceCodeAgentTypeSchema,
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
@@ -40,7 +44,7 @@ const agentConfigPatchSchema = z.object({
   color: z.string().max(20).optional(),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['code-agent']).optional(),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+  codeAgentType: workspaceCodeAgentTypeSchema,
   capabilityTags: z.array(z.string().max(40)).max(12).optional(),
   skillIds: z.array(z.string().max(120)).max(40).optional(),
   toolPermissions: z.array(z.string().max(80)).max(30).optional(),

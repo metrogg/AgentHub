@@ -22,6 +22,7 @@ import {
   createSavedAgent,
   flushAgentLibraryServerSync,
   loadAgentLibraryState,
+  normalizeCodeAgentType,
   saveAgentLibraryState,
   saveAgentToLibrary,
   syncOpenClawAgentsIntoLibrary,
@@ -695,19 +696,18 @@ export default function AgentConfigPage() {
                                   setDraft({
                                     ...draft,
                                     runtimeType: nextRuntime,
-                                    codeAgentType: draft.codeAgentType ?? 'codex',
+                                    codeAgentType: normalizeCodeAgentType(draft.codeAgentType),
                                     approvalRequired: false,
                                   })
                                 }}>
                                   <option value="code-agent">Worker Runtime / CLI 基底</option>
                                 </SelectField>
-                                <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                                <SelectField label="CLI 运行器" value={normalizeCodeAgentType(draft.codeAgentType)} onChange={(value) => setDraft({ ...draft, codeAgentType: normalizeCodeAgentType(value) })}>
                                   <option value="">{t('不绑定 CLI')}</option>
                                   <option value="codex">Codex CLI</option>
                                   <option value="claude-code">Claude Code</option>
                                   <option value="opencode">OpenCode</option>
                                   <option value="gemini">Gemini CLI</option>
-                                  <option value="openclaw">OpenClaw</option>
                                 </SelectField>
                                 <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
                                   <option value="">未绑定模型，运行前需补齐</option>
@@ -1013,7 +1013,7 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     color: draft.color || '#111827',
     modelId: draft.modelId ?? null,
     runtimeType: 'code-agent' as const,
-    codeAgentType: draft.codeAgentType ?? 'codex',
+    codeAgentType: normalizeCodeAgentType(draft.codeAgentType),
     capabilityTags,
     toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
@@ -1058,7 +1058,6 @@ function labelForCodeAgentType(type: WorkspaceAgent['codeAgentType'] | null | un
   if (type === 'claude-code') return 'Claude Code'
   if (type === 'opencode') return 'OpenCode'
   if (type === 'gemini') return 'Gemini CLI'
-  if (type === 'openclaw') return 'OpenClaw'
   return 'Codex CLI'
 }
 

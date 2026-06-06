@@ -1,7 +1,11 @@
 import { z } from 'zod'
-import { CODE_AGENT_TYPES } from '@agenthub/shared'
 import { streamReply } from './llm'
 import { AGENT_ROLE_TYPES } from './workspace/agent-role-presets'
+
+const workspaceCodeAgentTypeSchema = z.preprocess(
+  (value) => (value === 'openclaw' ? 'codex' : value),
+  z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+)
 
 export const confirmAgentDraftSchema = z.object({
   draft: z
@@ -16,7 +20,7 @@ export const confirmAgentDraftSchema = z.object({
       color: z.string().max(20).default('#111827'),
       modelId: z.string().max(120).nullable().optional(),
       runtimeType: z.enum(['code-agent']).default('code-agent'),
-      codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+      codeAgentType: workspaceCodeAgentTypeSchema,
       capabilityTags: z.array(z.string().max(40)).max(12).default([]),
       skillIds: z.array(z.string().max(120)).max(40).default([]),
       toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
@@ -41,7 +45,7 @@ const modelAgentDraftSchema = z.object({
   color: z.string().max(20),
   modelId: z.string().max(120).nullable(),
   runtimeType: z.enum(['code-agent']),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable(),
+  codeAgentType: workspaceCodeAgentTypeSchema,
   capabilityTags: z.array(z.string().max(40)).max(12),
   skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30),
@@ -53,7 +57,7 @@ const modelAgentDraftSchema = z.object({
 
 export async function buildAgentDraft(content: string): Promise<AgentDraft> {
   const system = [
-    'Valid codeAgentType values are "codex", "claude-code", "opencode", "gemini", and "openclaw"; OpenClaw uses local OpenClaw agent identities.',
+    'Valid codeAgentType values are "codex", "claude-code", "opencode", and "gemini". OpenClaw/QwenPaw are coordinator or resident runtime bases, not workspace codeAgentType values.',
     '你是 AgentHub 的 Agent 草案生成器。',
     '根据用户的自然语言需求，动态生成一个可加入当前 Agent Group 的 Agent 配置草案。',
     '只返回严格 JSON，不要 Markdown，不要解释。',

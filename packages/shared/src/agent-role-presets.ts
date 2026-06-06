@@ -41,7 +41,7 @@ export interface AgentRolePreset {
   description: string
   systemPrompt: string
   color: string
-  runtimeType: 'llm' | 'code-agent'
+  runtimeType: 'code-agent'
   codeAgentType?: CodeAgentType | null
   capabilityTags: string[]
   toolPermissions: string[]
@@ -106,7 +106,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     systemPrompt:
       '你是需求澄清 Agent。先判断目标是否清楚；如有关键缺口，提出少量可回答的问题；输出假设、边界和验收标准。',
     color: '#0f766e',
-    runtimeType: 'llm',
+    runtimeType: 'code-agent',
+    codeAgentType: 'codex',
     capabilityTags: ['clarify', 'requirements', 'acceptance'],
     toolPermissions: ['chat'],
     sandboxPolicy: 'workspace-write',

@@ -360,8 +360,5 @@ function resolveRuntimeBinding(agent: WorkerRuntimeAgentConfig): {
   if (agent.codeAgentType === 'gemini') {
     return { runtimeFamily: 'worker', runtimeBase: 'gemini' }
   }
-  if (agent.codeAgentType === 'openclaw') {
-    return { runtimeFamily: 'worker', runtimeBase: 'openclaw' }
-  }
   return { runtimeFamily: 'worker', runtimeBase: 'codex' }
 }

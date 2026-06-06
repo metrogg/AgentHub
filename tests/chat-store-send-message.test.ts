@@ -139,4 +139,40 @@ describe('chat store send message', () => {
     expect(useChatStore.getState().agentActivity?.phase).toBe('replying')
     expect(useChatStore.getState().agentActivity?.agentName).toBe('Builder')
   })
+
+  test('does not clear live agent output when a user message completion event arrives', () => {
+    const activeSession = session({
+      id: 'direct-session-2',
+      type: SessionType.Direct,
+      workspaceId: 'workspace-1',
+      workspaceAgentId: 'agent-1',
+    })
+    resetChatStore(activeSession)
+    useChatStore.setState({
+      agentTyping: false,
+      agentActivity: null,
+      streamingMessage: {
+        id: 'agent-stream-1',
+        content: 'partial output',
+        agentId: 'agent-1',
+        agentName: 'Builder',
+      },
+    })
+
+    useChatStore.getState().handleWSEvent({
+      type: 'message:completed',
+      payload: {
+        sessionId: activeSession.id,
+        message: message({
+          id: 'user-message-1',
+          sessionId: activeSession.id,
+          senderType: SenderType.User,
+          content: 'hello',
+        }),
+      },
+    })
+
+    expect(useChatStore.getState().streamingMessage?.id).toBe('agent-stream-1')
+    expect(useChatStore.getState().streamingMessage?.content).toBe('partial output')
+  })
 })

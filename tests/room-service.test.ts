@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
 const roomBridgeApi = await import('../apps/server/src/services/rooms/room-chat-bridge')
+const roomSessionSnapshotApi = await import('../apps/server/src/services/rooms/room-session-snapshot')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const agentRunnerApi = await import('../apps/server/src/services/agent-runner')
 const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime/worker-runtime-service')
@@ -858,6 +859,99 @@ describe('RoomService Matrix room adapter contract', () => {
       globalThis.fetch = originalFetch
       if (originalHomeserverUrl === undefined) delete process.env.AGENTHUB_MATRIX_HOMESERVER_URL
       else process.env.AGENTHUB_MATRIX_HOMESERVER_URL = originalHomeserverUrl
+    }
+  })
+
+  test('Room session snapshot skips Matrix room repair when admin token is unavailable', async () => {
+    const originalAccessToken = process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+    const originalHomeserverUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    const originalRoomAdapter = (roomService as any).adapter
+    const originalFetch = globalThis.fetch
+    process.env.AGENTHUB_MATRIX_HOMESERVER_URL = 'http://matrix.test'
+    delete process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      if (parsed.pathname.includes('/directory/room/')) {
+        return Response.json({ errcode: 'M_NOT_FOUND' }, { status: 404 })
+      }
+      if (parsed.pathname.endsWith('/register')) {
+        return Response.json({
+          user_id: '@human-default-user:agenthub.local',
+          access_token: 'token-human-default-user',
+        })
+      }
+      if (parsed.pathname.includes('/profile/')) {
+        return Response.json({})
+      }
+      if (parsed.pathname.endsWith('/createRoom')) {
+        return Response.json({
+          room_id: `!snapshot-no-admin-token-${body?.room_alias_name ?? 'room'}:agenthub.local`,
+        })
+      }
+      return Response.json({}, { status: 404 })
+    }) as typeof fetch
+
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Snapshot No Admin Token Workspace',
+        goal: 'Verify snapshot open without admin token',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Matrix Snapshot No Admin Token Session',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: null,
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!snapshot-no-admin-token:local.agenthub',
+        kind: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        sessionId: session!.id,
+        title: session!.title,
+        metadata: {
+          kind: 'agent-direct',
+          matrix: {
+            homeserverUrl: 'http://old-matrix.test',
+          },
+        },
+      })
+      .returning()
+
+    try {
+      ;(roomService as any).adapter = new MatrixRoomAdapter({
+        homeserverUrl: 'http://matrix.test',
+        accessToken: undefined,
+        serverName: 'agenthub.local',
+        autoInviteParticipants: false,
+        autoJoinParticipants: false,
+      })
+
+      const snapshot = await loadRoomSessionSnapshot({
+        sessionId: session!.id,
+        ownerId: 'default-user',
+      })
+
+      expect(snapshot.room.id).toBe(room!.id)
+      expect(snapshot.room.providerRoomId).toContain('snapshot-no-admin-token')
+    } finally {
+      ;(roomService as any).adapter = originalRoomAdapter
+      globalThis.fetch = originalFetch
+      if (originalHomeserverUrl === undefined) delete process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+      else process.env.AGENTHUB_MATRIX_HOMESERVER_URL = originalHomeserverUrl
+      if (originalAccessToken === undefined) delete process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+      else process.env.AGENTHUB_MATRIX_ACCESS_TOKEN = originalAccessToken
     }
   })
 

@@ -284,15 +284,16 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       return args
     },
   },
-  openclaw: {
-    command: 'openclaw',
-    displayName: 'OpenClaw',
-    envKey: 'AGENTHUB_MODEL_API_KEY',
-    docsHint:
-      'OpenClaw uses the local OpenClaw agent identity and config. AgentHub passes --agent and --message to the OpenClaw CLI.',
-    promptMode: 'file',
-    buildArgs: buildOpenClawArgs,
-  },
+}
+
+const openClawAdapter: CodeAgentAdapter = {
+  command: 'openclaw',
+  displayName: 'OpenClaw',
+  envKey: 'AGENTHUB_MODEL_API_KEY',
+  docsHint:
+    'OpenClaw uses the local OpenClaw agent identity and config. AgentHub passes --agent and --message to the OpenClaw CLI.',
+  promptMode: 'file',
+  buildArgs: buildOpenClawArgs,
 }
 
 export const __codeAgentAdapterTestHooks = {
@@ -301,7 +302,7 @@ export const __codeAgentAdapterTestHooks = {
   buildOpencodeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
     adapters.opencode.buildArgs(prompt, options),
   buildOpenClawArgs: (prompt: string, options?: CodeAgentRunOptions) =>
-    adapters.openclaw.buildArgs(prompt, options),
+    openClawAdapter.buildArgs(prompt, options),
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
   extractOpenClawResultMessage,
@@ -343,8 +344,8 @@ export async function inspectCodeAgentRuntime(
   }
 
   const toolConfig = await resolveToolConfig(type)
-  const requestedModelId = type === 'openclaw' ? null : resolveCodeAgentModelId(profile.modelId, toolConfig)
-  let modelTarget = type === 'openclaw' ? null : await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
+  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
   const nativeOpenCodeModelRef =
     !modelTarget && type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId)
       ? requestedModelId
@@ -445,8 +446,8 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext, envelope)
   const toolConfig = await resolveToolConfig(type)
-  const requestedModelId = type === 'openclaw' ? null : resolveCodeAgentModelId(profile.modelId, toolConfig)
-  let modelTarget = type === 'openclaw' ? null : await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
+  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
   const nativeOpenCodeModelRef =
     !modelTarget && type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId)
       ? requestedModelId
@@ -463,7 +464,7 @@ export async function* streamCodeAgentReply(
     modelTarget = await resolveRuntimeModelTarget(requestedModelId)
   }
   // 直接使用用户配置的 agent 类型，不因模型 provider 不匹配而静默切换到 OpenCode
-  let runtimeModelTarget = type === 'openclaw' ? null : (modelTarget ?? null)
+  let runtimeModelTarget = modelTarget ?? null
   let installed = await isCommandInstalled(adapter.command)
   let ignoreModelEnv = false
   let skipLocalCodexConfig = false
@@ -785,7 +786,6 @@ async function isRuntimeConfigured(
 ) {
   if (modelTarget?.apiKey) return true
   if (readEnv(adapter.envKey)) return true
-  if (type === 'openclaw') return true
   if (type === 'opencode' && !env.ENABLE_LOCAL_CLI_PROBES) return false
   if (type === 'codex' && !modelId) return true
 

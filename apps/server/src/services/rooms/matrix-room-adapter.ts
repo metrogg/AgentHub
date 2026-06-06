@@ -35,6 +35,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
 
   async createRoom(input: CreateRoomInput) {
     const client = this.client()
+    const accessToken = await this.getRoomCreationAccessToken(input.ownerId)
     const aliasName = roomAliasName(input)
     const alias = aliasName ? `#${aliasName}:${client.serverName}` : null
     let providerRoomId: string | null = null
@@ -55,6 +56,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
         name: input.title,
         topic: input.topic ?? null,
         aliasName,
+        accessToken,
       })
       providerRoomId = matrixRoom.room_id
     }
@@ -473,6 +475,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
   ): Promise<typeof rooms.$inferSelect> {
     const client = this.client()
     if (matrixRoomServerName(room.providerRoomId) === client.serverName) return room
+    const accessToken = await this.getRoomCreationAccessToken(room.ownerId)
 
     const aliasName = roomAliasName(input)
     const alias = aliasName ? `#${aliasName}:${client.serverName}` : null
@@ -492,6 +495,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
         name: input.title || room.title,
         topic: input.topic ?? room.topic ?? null,
         aliasName,
+        accessToken,
       })
       providerRoomId = matrixRoom.room_id
     }
@@ -581,6 +585,24 @@ export class MatrixRoomAdapter implements RoomAdapter {
     this.identityServiceInstance = new MatrixIdentityService(this.client())
     return this.identityServiceInstance
   }
+
+  private getAdminAccessToken() {
+    return (this.options.accessToken ?? process.env.AGENTHUB_MATRIX_ACCESS_TOKEN)?.trim() || null
+  }
+
+  private async getRoomCreationAccessToken(ownerId: string) {
+    const adminAccessToken = this.getAdminAccessToken()
+    if (adminAccessToken) return adminAccessToken
+    const identity = await this.identityService().ensureIdentity({
+      ownerType: 'human',
+      ownerId,
+      displayName: 'You',
+    })
+    if (!identity.accessToken) {
+      throw new Error(`Matrix room provider could not obtain an access token for room owner ${ownerId}`)
+    }
+    return identity.accessToken
+  }
 }
 
 function roomKindForSession(input: EnsureRoomForSessionInput): RoomKind {
@@ -600,6 +622,14 @@ function roomAliasName(input: CreateRoomInput) {
   if (input.sessionId) return `agenthub-session-${matrixLocalpart(input.sessionId)}`
   if (input.runId) return `agenthub-run-${matrixLocalpart(input.runId)}`
   return null
+}
+
+function matrixRoomServerName(roomId: string | null | undefined) {
+  if (!roomId) return null
+  const trimmed = roomId.trim()
+  const colonIndex = trimmed.lastIndexOf(':')
+  if (colonIndex <= 1 || colonIndex >= trimmed.length - 1) return null
+  return trimmed.slice(colonIndex + 1).trim() || null
 }
 
 function readMatrixMetadata(metadata: Record<string, unknown> | null | undefined) {

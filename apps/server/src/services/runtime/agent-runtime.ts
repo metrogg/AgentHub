@@ -1,5 +1,4 @@
 import type { AgentArtifact } from '@agenthub/db'
-import type { CodeAgentType } from '@agenthub/shared'
 
 export interface AgentProfile {
   id: string
@@ -8,6 +7,7 @@ export interface AgentProfile {
   roleType?: string
   description?: string
   systemPrompt?: string
+  roleProfile?: Record<string, unknown> | null
   color?: string
   modelId?: string | null
   runtimeType: 'code-agent'

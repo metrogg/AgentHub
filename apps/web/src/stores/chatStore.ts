@@ -3596,12 +3596,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case WsEvent.MessageCompleted: {
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
-        clearPendingStream()
         updateCachedMessages(sessionId, (messages) => upsertMessage(messages, message))
-        set((s) => ({
-          messages: upsertMessage(s.messages, message),
-          ...clearLiveRuntimeProjection(),
-        }))
+        const shouldClearLiveRuntime = message.senderType !== SenderType.User
+        if (shouldClearLiveRuntime) {
+          clearPendingStream()
+          set((s) => ({
+            messages: upsertMessage(s.messages, message),
+            ...clearLiveRuntimeProjection(),
+          }))
+        } else {
+          set((s) => ({
+            messages: upsertMessage(s.messages, message),
+          }))
+        }
         break
       }
       case WsEvent.RoomTimelineEvent: {

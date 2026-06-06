@@ -24,6 +24,8 @@ export interface AgentLibraryState {
   relations: SavedAgentRelation[]
 }
 
+export type WorkspaceCliCodeAgentType = 'codex' | 'claude-code' | 'opencode' | 'gemini'
+
 export const agentLibraryStorageKey = 'agenthub.agentLibrary'
 export const agentLibraryChangeEvent = 'agenthub:agent-library-change'
 export const agentLibrarySyncErrorEvent = 'agenthub:agent-library-sync-error'
@@ -267,7 +269,7 @@ export function createSavedAgent(
     color: input.color ?? '#111827',
     modelId: input.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
+    codeAgentType: runtimeType === 'code-agent' ? normalizeCodeAgentType(input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
     capabilityTags: input.capabilityTags ?? [],
     skillIds: input.skillIds ?? [],
     toolPermissions: input.toolPermissions ?? [],
@@ -293,7 +295,7 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     color: agent.color ?? '#111827',
     modelId: agent.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null,
+    codeAgentType: runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null,
     capabilityTags: [...(agent.capabilityTags ?? [])],
     skillIds: [...(agent.skillIds ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
@@ -347,7 +349,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     color: input.color || '#111827',
     modelId: input.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
+    codeAgentType: runtimeType === 'code-agent' ? normalizeCodeAgentType(input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags : [],
     skillIds: Array.isArray(input.skillIds) ? input.skillIds : [],
     toolPermissions:
@@ -419,14 +421,19 @@ function defaultCodeAgentTypeFor(
 ) {
   const roleType = input.roleType ?? inferRoleType(input)
   const preset = roleType === 'custom' ? undefined : presetForRole(roleType)
-  return preset?.codeAgentType ?? 'codex'
+  return normalizeCodeAgentType(preset?.codeAgentType)
+}
+
+export function normalizeCodeAgentType(value?: string | null): WorkspaceCliCodeAgentType {
+  if (value === 'claude-code' || value === 'opencode' || value === 'gemini') return value
+  return 'codex'
 }
 
 function dedupeSavedAgents(agents: SavedAgentConfig[]) {
   const seen = new Set<string>()
   return agents.filter((agent) => {
     const runtimeType = normalizeRuntimeType(agent.runtimeType)
-    const codeAgentType = runtimeType === 'code-agent' ? (agent.codeAgentType ?? '').trim().toLowerCase() : ''
+    const codeAgentType = runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType) : ''
     const key = [
       agent.name.trim().toLowerCase(),
       agent.role.trim().toLowerCase(),
@@ -441,13 +448,13 @@ function dedupeSavedAgents(agents: SavedAgentConfig[]) {
 }
 
 function openClawIdentityKey(agent: SavedAgentConfig) {
-  if (agent.codeAgentType !== 'openclaw') return ''
+  if (agent.roleProfile?.source !== 'openclaw') return ''
   const id = agent.roleProfile?.openclawAgentId
   return typeof id === 'string' ? id.trim().toLowerCase() : ''
 }
 
-function normalizeRuntimeType(value?: string | null): SavedAgentConfig['runtimeType'] {
-  return value === 'llm' ? 'llm' : 'code-agent'
+function normalizeRuntimeType(_value?: string | null): SavedAgentConfig['runtimeType'] {
+  return 'code-agent'
 }
 
 function normalizeSandboxPolicy(value?: string | null): SavedAgentConfig['sandboxPolicy'] {
