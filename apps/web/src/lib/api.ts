@@ -726,6 +726,15 @@ export interface WorkerRuntimeDiagnostic {
     cwdValid: boolean
     canExecute: boolean
     commandPreview?: string
+    nativeProbe?: {
+      command: string
+      args: string[]
+      ok: boolean
+      exitCode: number | null
+      timedOut: boolean
+      output: string
+      version: string | null
+    }
     blockers: string[]
   } | null
 }

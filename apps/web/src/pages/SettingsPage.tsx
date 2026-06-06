@@ -3760,8 +3760,8 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
   const runtimeReady = inspection ? inspection.canExecute : worker.observedState === 'listening'
   const runtimeStatus = inspection
     ? inspection.canExecute
-      ? 'runtime ready'
-      : inspection.blockers[0] ?? 'runtime blocked'
+      ? `runtime ready${inspection.nativeProbe?.version ? ` · ${inspection.nativeProbe.version}` : ''}`
+      : inspection.blockers[0] ?? inspection.nativeProbe?.output ?? 'runtime blocked'
     : worker.mode === 'bridge'
       ? 'no bridge probe'
       : participantSummary
@@ -3785,8 +3785,8 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
       </div>
       <div className="min-w-0">
         <div className="font-mono" style={{ color: 'var(--settings-text)' }}>{inspection?.adapterName ?? worker.runtimeBase}</div>
-        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={`${modeLabel}${inspection?.command ? ` / ${inspection.command}` : ''}`}>
-          {modeLabel}{inspection?.command ? ` / ${inspection.command}` : ''}
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={`${modeLabel}${inspection?.nativeProbe?.command ? ` / ${inspection.nativeProbe.command}` : inspection?.command ? ` / ${inspection.command}` : ''}`}>
+          {modeLabel}{inspection?.nativeProbe?.version ? ` / ${inspection.nativeProbe.version}` : inspection?.command ? ` / ${inspection.command}` : ''}
         </div>
       </div>
       <div className="min-w-0">

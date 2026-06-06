@@ -118,6 +118,15 @@ export interface CodeAgentRuntimeInspection {
   cwdValid: boolean
   canExecute: boolean
   commandPreview?: string
+  nativeProbe?: {
+    command: string
+    args: string[]
+    ok: boolean
+    exitCode: number | null
+    timedOut: boolean
+    output: string
+    version: string | null
+  }
   blockers: string[]
 }
 
@@ -347,13 +356,25 @@ export async function inspectCodeAgentRuntime(
   }
 
   const installed = await isCommandInstalled(adapter.command)
+  const nativeProbe = installed ? await probeCodeAgentNativeCli(adapter.command) : null
   const configured = await isRuntimeConfigured(type, adapter, modelTarget?.modelId ?? requestedModelId, modelTarget)
   const executionEnabled = await getBooleanSetting(
     'AGENTHUB_ENABLE_CODE_AGENT_EXECUTION',
     env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION,
   )
-  const canExecute = executionEnabled && installed && configured && cwdValid
+  const nativeProbeOk = nativeProbe?.ok ?? false
+  const canExecute = executionEnabled && installed && nativeProbeOk && configured && cwdValid
   const baseUrl = sanitizeInspectableBaseUrl(modelTarget?.anthropicBaseUrl ?? modelTarget?.openaiBaseUrl)
+  const blockers = codeAgentReadinessBlockers({
+    configured,
+    cwdValid,
+    executionEnabled,
+    installed,
+    profile,
+  })
+  if (installed && !nativeProbeOk) {
+    blockers.push(nativeProbe?.timedOut ? 'CLI native probe timed out' : 'CLI native probe failed')
+  }
 
   return {
     runtimeType: 'code-agent',
@@ -372,13 +393,8 @@ export async function inspectCodeAgentRuntime(
     cwdValid,
     canExecute,
     commandPreview: previewCommand(adapter, cwd ?? profile.projectPath ?? undefined, profile.sandboxPolicy, modelTarget),
-    blockers: codeAgentReadinessBlockers({
-      configured,
-      cwdValid,
-      executionEnabled,
-      installed,
-      profile,
-    }),
+    nativeProbe: nativeProbe ?? undefined,
+    blockers,
   }
 }
 
@@ -976,6 +992,74 @@ async function isCommandInstalled(command: string) {
   } catch {
     return false
   }
+}
+
+async function probeCodeAgentNativeCli(command: string): Promise<NonNullable<CodeAgentRuntimeInspection['nativeProbe']>> {
+  const args = nativeProbeArgs(command)
+  const displayCommand = formatCommand(command, args)
+  const timeoutMs = 3000
+  let timedOut = false
+  let proc: ReturnType<typeof Bun.spawn> | null = null
+  try {
+    proc = Bun.spawn(buildRuntimeCommand(command, args), {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    })
+    const timer = setTimeout(() => {
+      timedOut = true
+      try {
+        proc?.kill()
+      } catch {
+        // Best-effort; the probe is intentionally non-critical.
+      }
+    }, timeoutMs)
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited.catch(() => 1),
+      readBunSpawnOutput(proc.stdout).catch(() => ''),
+      readBunSpawnOutput(proc.stderr).catch(() => ''),
+    ])
+    clearTimeout(timer)
+    const output = limitOutput([stdout, stderr].filter(Boolean).join('\n').trim(), 1000)
+    return {
+      command: displayCommand,
+      args,
+      ok: exitCode === 0 && !timedOut,
+      exitCode,
+      timedOut,
+      output,
+      version: parseNativeProbeVersion(output),
+    }
+  } catch (error) {
+    return {
+      command: displayCommand,
+      args,
+      ok: false,
+      exitCode: null,
+      timedOut,
+      output: error instanceof Error ? error.message : String(error),
+      version: null,
+    }
+  }
+}
+
+async function readBunSpawnOutput(stream: unknown) {
+  if (!stream || typeof stream === 'number') return ''
+  return await new Response(stream as ReadableStream<Uint8Array>).text()
+}
+
+function nativeProbeArgs(_command: string) {
+  return ['--version']
+}
+
+function parseNativeProbeVersion(output: string) {
+  const firstLine = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+  if (!firstLine) return null
+  const versionMatch = firstLine.match(/(?:v|version\s*)?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)/i)
+  return versionMatch?.[1] ?? firstLine.slice(0, 120)
 }
 
 async function runCodeAgentCommand(

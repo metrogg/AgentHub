@@ -352,5 +352,9 @@ describe('Controller Plane', () => {
     expect(typeof workerRuntime?.runtimeInspection?.configured).toBe('boolean')
     expect(typeof workerRuntime?.runtimeInspection?.canExecute).toBe('boolean')
     expect(workerRuntime?.runtimeInspection?.cwdValid).toBe(true)
+    if (workerRuntime?.runtimeInspection?.installed) {
+      expect(workerRuntime.runtimeInspection.nativeProbe).toBeTruthy()
+      expect(typeof workerRuntime.runtimeInspection.nativeProbe?.ok).toBe('boolean')
+    }
   })
 })

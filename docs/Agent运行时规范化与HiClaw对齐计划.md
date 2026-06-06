@@ -298,7 +298,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 为 OpenClaw、OpenCode、Claude Code、Codex、Gemini 建立同一组 `inspect / prepare / start / stop / syncConfig / health` 能力。
    - Bridge Worker 执行前已开始投影标准 contract：`EphemeralCodeAgentWorkerRuntime` 会确保 Worker contract 最新，并把 `AGENTS.md`、`SOUL.md`、`profile.json`、`runtime.json`、`state.json`、`rooms.json`、`tasks.json` 和 `skills/` 投影到本次 CLI cwd 的 `.agenthub/worker-contract/`，同时在 cwd 根 `AGENTS.md` 注入 `AGENTHUB:BRIDGE-RUNTIME-CONTEXT`。
    - Controller Plane 诊断已开始暴露每个 Worker 的 runtime mode、runtime base、Matrix identity、Room participant、listener owner、heartbeat、last error 和标准 contract 文件完整性。设置页“控制台 / AgentHub 内部 Controller Plane”可以直接看到 resident OpenClaw/QwenPaw 与 AgentHub-managed bridge 的区别。
-   - Bridge Worker 诊断已接入 `inspectCodeAgentRuntime()`：OpenCode / Claude Code / Codex / Gemini 会检查 CLI 是否安装、模型凭据是否可用、执行开关是否开启、cwd 是否有效、当前 blocker 是什么。它不再只是看 SOUL/AGENTS 文件是否存在。
+   - Bridge Worker 诊断已接入 `inspectCodeAgentRuntime()`：OpenCode / Claude Code / Codex / Gemini 会检查 CLI 是否在 PATH、原生 `--version` probe 是否能真正启动、模型凭据是否可用、执行开关是否开启、cwd 是否有效、当前 blocker 是什么。它不再只是看 SOUL/AGENTS 文件是否存在。
 3. **Member Reconcile**
    - 状态：第一刀已落地。
    - 新增 `apps/server/src/services/controller-plane/member-reconciler.ts`，`ControllerApi.createWorker()` 已委托它执行 `ResolveMemberSpec -> ApplyWorkspaceAgent -> ApplyWorkerInstance -> JoinRooms -> AnnounceAndObserve`。
@@ -317,4 +317,4 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 后端 Worker 创建、workspace 查询、room bridge 和 profile builder 已加护栏：缺 `codeAgentType / workerRuntimeBase` 不再静默改成 Codex。
    - 前端 Agent 配置、本地 Agent library、专家模板导入和启动修复逻辑也已收紧：新建 Worker 默认是“未选择 Worker 基座”，只有用户、模板或 Manager proposal 明确选择时才会写入 Codex / OpenCode / Claude Code / Gemini / OpenClaw。
    - `describeControllerPlane()` 和设置页已经能显示 bridge/resident、contract ready/missing、listener owner、Matrix participant、heartbeat/error，以及 bridge CLI readiness probe。
-   - 剩余：把 bridge `inspect / health` 从通用 readiness probe 继续推进到各 CLI 的原生 doctor/test 命令，并继续把 heartbeat / artifact contract 和长期 session bridge 做到各基座能力对等。
+   - 剩余：把 bridge `inspect / health` 从 PATH + `--version` probe 继续推进到各 CLI 更完整的原生 doctor/test 命令，并继续把 heartbeat / artifact contract 和长期 session bridge 做到各基座能力对等。
