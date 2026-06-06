@@ -39,6 +39,7 @@ export function expertProfileIdFromDraft(draft: Pick<AgentConfigInput, 'roleProf
 }
 
 export function expertProfileToAgentConfig(profile: AgentExpertProfile): AgentConfigInput {
+  const managerProfile = profile.roleType === 'orchestrator'
   return {
     name: profile.name,
     role: profile.role,
@@ -60,11 +61,13 @@ export function expertProfileToAgentConfig(profile: AgentExpertProfile): AgentCo
       recommendedMcpServers: profile.recommendedMcpServers,
       preferredTopologies: profile.preferredTopologies,
       riskLevel: profile.riskLevel,
+      managerRuntimeType: profile.managerRuntimeType ?? null,
+      ...(managerProfile ? {} : { workerRuntimeBase: profile.workerRuntimeBase ?? profile.codeAgentType ?? 'codex' }),
     },
     color: profile.color,
     modelId: null,
     runtimeType: profile.runtimeType,
-    codeAgentType: profile.runtimeType === 'code-agent' ? (profile.codeAgentType ?? 'codex') : null,
+    codeAgentType: managerProfile ? null : (profile.runtimeType === 'code-agent' ? (profile.codeAgentType ?? 'codex') : null),
     capabilityTags: profile.capabilityTags,
     skillIds: profile.defaultSkillIds,
     toolPermissions: profile.toolPermissions,

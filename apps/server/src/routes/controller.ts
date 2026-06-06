@@ -37,6 +37,7 @@ controllerRoutes.post('/workers', async (c) => {
     workspaceId: requireP(body, 'workspaceId'),
     name: requireP(body, 'name'),
     runtimeType: body.runtimeType || 'code-agent',
+    runtimeBase: body.runtimeBase || body.workerRuntimeBase,
     codeAgentType: body.codeAgentType || body['code-agent'] || 'codex',
     modelId: body.modelId || body.model || null,
     skillIds: body.skillIds || body.skills || undefined,

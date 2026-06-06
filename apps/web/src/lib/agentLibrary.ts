@@ -208,6 +208,7 @@ export function createSavedAgent(
 ): SavedAgentConfig {
   const now = new Date().toISOString()
   const runtimeType = normalizeRuntimeType(input.runtimeType)
+  const managerAgent = isManagerAgent(input)
   return normalizeSavedAgent({
     id:
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -221,9 +222,9 @@ export function createSavedAgent(
     systemPrompt: input.systemPrompt ?? '',
     roleProfile: input.roleProfile ?? null,
     color: input.color ?? '#111827',
-    modelId: input.modelId ?? null,
+    modelId: managerAgent ? null : (input.modelId ?? null),
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
+    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null),
     capabilityTags: input.capabilityTags ?? [],
     skillIds: input.skillIds ?? [],
     toolPermissions: input.toolPermissions ?? [],
@@ -238,6 +239,7 @@ export function createSavedAgent(
 
 export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
   const runtimeType = normalizeRuntimeType(agent.runtimeType)
+  const managerAgent = isManagerAgent(agent)
   return {
     name: agent.name,
     role: agent.role,
@@ -247,9 +249,9 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     systemPrompt: agent.systemPrompt ?? '',
     roleProfile: agent.roleProfile ?? null,
     color: agent.color ?? '#111827',
-    modelId: agent.modelId ?? null,
+    modelId: managerAgent ? null : (agent.modelId ?? null),
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null,
+    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null),
     capabilityTags: [...(agent.capabilityTags ?? [])],
     skillIds: [...(agent.skillIds ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
@@ -291,6 +293,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
   const input = value as Partial<SavedAgentConfig>
   if (!input.name?.trim() || !input.role?.trim()) return null
   const runtimeType = normalizeRuntimeType(input.runtimeType)
+  const managerAgent = isManagerAgent(input)
   return {
     id: input.id || `${Date.now()}-${Math.random()}`,
     name: input.name.trim(),
@@ -299,11 +302,11 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     description: input.description?.trim() ?? '',
     avatar: input.avatar ?? null,
     systemPrompt: input.systemPrompt?.trim() ?? '',
-    roleProfile: input.roleProfile ?? null,
+    roleProfile: managerAgent ? normalizeManagerRoleProfile(input.roleProfile) : (input.roleProfile ?? null),
     color: input.color || '#111827',
-    modelId: input.modelId ?? null,
+    modelId: managerAgent ? null : (input.modelId ?? null),
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
+    codeAgentType: managerAgent ? null : (runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null),
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags : [],
     skillIds: Array.isArray(input.skillIds) ? input.skillIds : [],
     toolPermissions:
@@ -358,6 +361,18 @@ function defaultCodeAgentTypeFor(
   const roleType = input.roleType ?? inferRoleType(input)
   const preset = roleType === 'custom' ? undefined : presetForRole(roleType)
   return preset?.codeAgentType ?? 'codex'
+}
+
+function isManagerAgent(input: Partial<Pick<AgentConfigInput, 'roleType' | 'name' | 'role' | 'roleProfile'>>) {
+  return (input.roleType ?? inferRoleType(input)) === 'orchestrator'
+}
+
+function normalizeManagerRoleProfile(value: Record<string, unknown> | null | undefined) {
+  const { workerRuntimeBase: _workerRuntimeBase, ...rest } = value ?? {}
+  return {
+    ...rest,
+    managerRuntimeType: rest.managerRuntimeType === 'qwenpaw' ? 'qwenpaw' : 'openclaw',
+  }
 }
 
 function dedupeSavedAgents(agents: SavedAgentConfig[]) {

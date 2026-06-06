@@ -142,6 +142,7 @@ function memberProposals(value: unknown): ManagerAction['memberProposals'] {
         systemPrompt: optionalText(record.systemPrompt),
         runtimeType: optionalText(record.runtimeType) as NonNullable<ManagerAction['memberProposals']>[number]['runtimeType'],
         codeAgentType: optionalText(record.codeAgentType) as NonNullable<ManagerAction['memberProposals']>[number]['codeAgentType'],
+        workerRuntimeBase: optionalText(record.workerRuntimeBase) as NonNullable<ManagerAction['memberProposals']>[number]['workerRuntimeBase'],
         color: optionalText(record.color),
         modelId: optionalText(record.modelId) ?? null,
         capabilityTags: stringArray(record.capabilityTags),

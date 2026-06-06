@@ -1,5 +1,6 @@
-import { and, db, eq, matrixIdentities, roomParticipants, rooms, timelineEvents } from '@agenthub/db'
+import { and, desc, db, eq, matrixIdentities, roomParticipants, rooms, timelineEvents } from '@agenthub/db'
 import { createMatrixClientFromEnv, type MatrixClient, type MatrixSyncRoomEvent } from './matrix-client'
+import { ensureManagerParticipantForRoom } from './manager-participant'
 import { roomService } from './room-service'
 import type { ParticipantType, TimelineEventType } from './types'
 
@@ -183,6 +184,18 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   const mentions = parseMatrixMentions(content, body)
   const mentionedParticipantIds = await findMentionedParticipantIds(roomId, mentions)
   const eventType = timelineEventTypeFor(msgtype, senderParticipant?.participantType)
+  if (
+    eventType === 'manager.message' &&
+    senderParticipant &&
+    (await isDuplicateManagerReply({
+      roomId,
+      senderParticipantId: senderParticipant.id,
+      body,
+      originServerTs: event.origin_server_ts ?? null,
+    }))
+  ) {
+    return null
+  }
   return roomService.importTimelineEvent({
     roomId,
     providerEventId: event.event_id,
@@ -205,6 +218,49 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   })
 }
 
+async function isDuplicateManagerReply(input: {
+  roomId: string
+  senderParticipantId: string
+  body: string
+  originServerTs: number | null
+}) {
+  const normalizedBody = normalizeDedupeBody(input.body)
+  if (!normalizedBody) return false
+  const recent = await db
+    .select({
+      id: timelineEvents.id,
+      body: timelineEvents.body,
+      createdAt: timelineEvents.createdAt,
+      metadata: timelineEvents.metadata,
+    })
+    .from(timelineEvents)
+    .where(
+      and(
+        eq(timelineEvents.roomId, input.roomId),
+        eq(timelineEvents.senderParticipantId, input.senderParticipantId),
+        eq(timelineEvents.senderType, 'manager'),
+        eq(timelineEvents.type, 'manager.message'),
+      ),
+    )
+    .orderBy(desc(timelineEvents.sequence))
+    .limit(12)
+
+  const incomingAt = input.originServerTs ? input.originServerTs : Date.now()
+  return recent.some((event) => {
+    const metadata = event.metadata ?? {}
+    const kind = typeof metadata.kind === 'string' ? metadata.kind : ''
+    if (kind.startsWith('manager.status.')) return false
+    if (normalizeDedupeBody(event.body) !== normalizedBody) return false
+    const existingAt = new Date(event.createdAt).getTime()
+    if (!Number.isFinite(existingAt)) return false
+    return Math.abs(incomingAt - existingAt) <= 10_000
+  })
+}
+
+function normalizeDedupeBody(body: string) {
+  return body.replace(/\s+/g, ' ').trim()
+}
+
 async function dispatchImportedEvents(eventIds: string[]) {
   const { matrixRoomEventDispatcher } = await import('./matrix-event-dispatcher')
   const result = await matrixRoomEventDispatcher.dispatchImportedEvents({ eventIds })
@@ -221,13 +277,29 @@ async function findLocalRoom(providerRoomId: string) {
 }
 
 async function ensureParticipantForMatrixSender(roomId: string, matrixUserId: string) {
+  const participantType = participantTypeFromMatrixUserId(matrixUserId)
+  if (participantType === 'manager') {
+    const manager = await ensureManagerParticipantForRoom(roomId)
+    if (manager.providerUserId === matrixUserId) return manager
+    await db
+      .update(roomParticipants)
+      .set({
+        metadata: {
+          ...(manager.metadata ?? {}),
+          matrixAliases: Array.from(new Set([...(asStringArray(manager.metadata?.matrixAliases)), matrixUserId])),
+          lastImportedMatrixSenderUserId: matrixUserId,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(roomParticipants.id, manager.id))
+    return manager
+  }
   const [existing] = await db
     .select()
     .from(roomParticipants)
     .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.providerUserId, matrixUserId)))
     .limit(1)
   if (existing) return existing
-  const participantType = participantTypeFromMatrixUserId(matrixUserId)
   const [participant] = await db
     .insert(roomParticipants)
     .values({
@@ -235,7 +307,7 @@ async function ensureParticipantForMatrixSender(roomId: string, matrixUserId: st
       providerUserId: matrixUserId,
       participantType,
       displayName: displayNameFromMatrixUserId(matrixUserId),
-      role: participantType === 'human' ? 'observer' : participantType === 'manager' ? 'manager' : 'member',
+      role: participantType === 'human' ? 'observer' : 'member',
       status: 'joined',
       metadata: {
         matrixMembership: {
@@ -309,6 +381,12 @@ function fileRefFromContent(content: Record<string, unknown>) {
     url: typeof content.url === 'string' ? content.url : null,
     info: content.info && typeof content.info === 'object' ? content.info : null,
   }
+}
+
+function asStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
 }
 
 function matrixSyncState(metadata: Record<string, unknown> | null | undefined) {

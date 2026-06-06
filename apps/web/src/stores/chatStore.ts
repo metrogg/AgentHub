@@ -96,7 +96,11 @@ function roomTimelineShouldRefreshResources(
       kind === 'worker.instance.updated' ||
       kind === 'worker.claimed' ||
       kind === 'worker.progress' ||
-      kind === 'artifact.created'
+      kind === 'artifact.created' ||
+      kind === 'manager.status.pending' ||
+      kind === 'manager.status.slow' ||
+      kind === 'manager.status.timeout' ||
+      kind === 'manager.dispatch.diagnostic'
     )
   })
 }

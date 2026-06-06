@@ -12,6 +12,7 @@ const ROLE_TYPES = new Set([
 ])
 
 const CODE_AGENT_TYPES = new Set(['codex', 'claude-code', 'opencode', 'gemini'])
+const WORKER_RUNTIME_BASES = new Set(['openclaw', 'qwenpaw', 'codex', 'claude-code', 'opencode', 'gemini'])
 const SANDBOX_POLICIES = new Set(['workspace-write', 'danger-full-access'])
 const CONTEXT_POLICIES = new Set(['recent-only', 'pinned-recent', 'workspace-aware'])
 
@@ -56,6 +57,7 @@ export function memberProposalsFromManagerAction(action: ManagerAction): MemberP
     systemPrompt: stringValue(metadata.systemPrompt) ?? stringValue(explicitProposal.systemPrompt),
     runtimeType: stringValue(metadata.runtimeType) ?? stringValue(explicitProposal.runtimeType),
     codeAgentType: stringValue(metadata.codeAgentType) ?? stringValue(explicitProposal.codeAgentType),
+    workerRuntimeBase: stringValue(metadata.workerRuntimeBase) ?? stringValue(explicitProposal.workerRuntimeBase),
     color: stringValue(metadata.color) ?? stringValue(explicitProposal.color),
     modelId: stringValue(metadata.modelId) ?? stringValue(explicitProposal.modelId),
     capabilityTags: stringArray(metadata.capabilityTags) ?? stringArray(explicitProposal.capabilityTags),
@@ -83,6 +85,7 @@ export function normalizeMemberProposal(value: unknown): MemberProposal | null {
   const id = stringValue(record.expertProfileId) ?? `manager-worker:${slug(name)}`
   const roleType = stringValue(record.roleType)
   const codeAgentType = stringValue(record.codeAgentType)
+  const workerRuntimeBase = stringValue(record.workerRuntimeBase)
   const sandboxPolicy = stringValue(record.sandboxPolicy)
   const contextPolicy = stringValue(record.contextPolicy)
   return {
@@ -98,6 +101,12 @@ export function normalizeMemberProposal(value: unknown): MemberProposal | null {
       `你是 ${name}，角色是 ${role}。请根据任务目标、Room timeline 和共享产物完成被 @ 分配的工作。`,
     runtimeType: 'code-agent',
     codeAgentType: codeAgentType && CODE_AGENT_TYPES.has(codeAgentType) ? (codeAgentType as MemberProposal['codeAgentType']) : 'codex',
+    workerRuntimeBase:
+      workerRuntimeBase && WORKER_RUNTIME_BASES.has(workerRuntimeBase)
+        ? (workerRuntimeBase as MemberProposal['workerRuntimeBase'])
+        : codeAgentType && WORKER_RUNTIME_BASES.has(codeAgentType)
+          ? (codeAgentType as MemberProposal['workerRuntimeBase'])
+          : 'codex',
     color: stringValue(record.color) ?? '#0f766e',
     modelId: stringValue(record.modelId) ?? null,
     capabilityTags: stringArray(record.capabilityTags) ?? [],

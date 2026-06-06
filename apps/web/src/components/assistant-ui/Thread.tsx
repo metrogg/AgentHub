@@ -1237,7 +1237,7 @@ function buildDirectRunSteps(run: CodeAgentRunMetadata): DirectRunProgress['step
       id: 'direct-start',
       status: run.status === 'running' ? 'running' : directRunStatusFromCodeAgent(run.status),
       subtitle: [codeAgentRuntimeLabel(run.runtime), run.command].filter(Boolean).join(' · '),
-      title: '启动 Coding Tools',
+      title: '启动 Agent Runtime',
     },
   ]
 
@@ -2080,7 +2080,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                     </button>
                   </div>
                   <div className="mt-2 text-neutral-400">
-                    模型、CLI 基底、Skills 和沙箱只在 Agent 配置页装配；这里保留角色、简介和系统提示词的轻量编辑。
+                    模型、Worker 基座、Skills 和沙箱只在 Agent 配置页装配；这里保留角色、简介和系统提示词的轻量编辑。
                   </div>
                 </div>
 
@@ -7775,18 +7775,31 @@ const Avatar: FC<{ role: 'user' | 'assistant'; className?: string }> = ({ classN
   const streamingMessage = useChatStore((state) => state.streamingMessage)
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
 
-  // 尝试匹配发送者 workspace agent（优先 senderId，其次 metadata.agentName）
+  const sourceMetadata =
+    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
+      ? (sourceMessage.metadata as Record<string, unknown>)
+      : null
+  // 尝试匹配发送者 workspace agent（优先 timeline 明示身份，其次 senderId/名字）
+  const senderWorkspaceAgentId =
+    typeof sourceMetadata?.senderWorkspaceAgentId === 'string'
+      ? sourceMetadata.senderWorkspaceAgentId
+      : undefined
   const senderId =
     sourceMessage?.senderId ??
     (messageId === streamingMessage?.id ? streamingMessage?.agentId : undefined)
   const senderName =
-    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
-      ? ((sourceMessage.metadata as Record<string, unknown>).agentName as string | undefined)
+    typeof sourceMetadata?.agentName === 'string'
+      ? sourceMetadata.agentName
+      : typeof sourceMetadata?.senderName === 'string'
+        ? sourceMetadata.senderName
       : messageId === streamingMessage?.id
         ? streamingMessage.agentName
         : undefined
   const senderAgent = workspaceAgents.find(
-    (a) => a.id === senderId || (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
+    (a) =>
+      a.id === senderWorkspaceAgentId ||
+      a.id === senderId ||
+      (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
   )
 
   const runtime = useMessage((message) =>

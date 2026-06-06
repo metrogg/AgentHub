@@ -1,4 +1,4 @@
-import { and, db, eq, matrixIdentities, runtimeLeases, workerInstances, workspaceAgents } from '@agenthub/db'
+import { and, db, eq, runtimeLeases, workerInstances, workspaceAgents } from '@agenthub/db'
 import { emitRunEvent } from './run-events'
 import {
   ensureWorkerInstance,
@@ -7,18 +7,12 @@ import {
 } from './worker-runtime-resources'
 import { runtimeLeaseController } from './runtime-lease-controller'
 import { ensureWorkerWorkspace } from '../worker-runtime/worker-workspace'
-import { deployWorkerConfig } from '../worker-runtime/worker-openclaw-config'
 import { logger } from '../../lib/logger'
 import type { ExecutionConfigSummary } from '../execution/execution-config-summary'
-import { createMatrixClientFromEnv } from '../rooms/matrix-client'
-import { MatrixIdentityService } from '../rooms/matrix-identity-service'
-import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
-import { agentHubUserDataRoot } from '../system-paths'
 import { roomService } from '../rooms'
-import { resolveLlmRuntimeConfig } from '../llm-client'
+import { spawnSync } from 'node:child_process'
 
 export interface ReconcileResult {
   phase: string
@@ -51,7 +45,7 @@ interface WorkerInstanceRow {
   workspaceId: string
   workspaceAgentId: string
   runtimeFamily: 'coordinator' | 'worker'
-  runtimeBase: 'openclaw' | 'copaw' | 'qwenpaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  runtimeBase: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
   modelId: string | null
   skillIds: string[]
   mcpServerIds: string[]
@@ -337,101 +331,19 @@ export class WorkerController {
       })
     }
 
-    // For resident workers, deploy openclaw.json + agent content with Matrix credentials
-    const isResident = worker.runtimeBase === 'openclaw' || worker.runtimeBase === 'copaw'
-    if (isResident) {
-      const [identity] = await db
-        .select()
-        .from(matrixIdentities)
-        .where(and(eq(matrixIdentities.ownerType, 'worker'), eq(matrixIdentities.ownerId, worker.id)))
-        .limit(1)
-      if (identity?.accessToken) {
-        const matrixUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167'
-        const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
-        const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
-        const llmBaseUrl = process.env.AGENTHUB_WORKER_LLM_BASE_URL || process.env.LLM_BASE_URL || resolvedLlm.baseUrl
-        const llmApiKey = process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || resolvedLlm.apiKey || 'agenthub-internal'
-        const llmModel = worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model
-        const gatewayPort = workerGatewayPort(worker.id)
-        const workerName = agent?.name ?? worker.id
-
-        deployWorkerConfig({
-          workerInstanceId: worker.id,
-          workerName,
-          matrixUrl,
-          matrixDomain,
-          matrixUserId: identity.userId,
-          matrixAccessToken: identity.accessToken,
-          llmBaseUrl,
-          llmApiKey,
-          llmModel,
-          gatewayPort,
-          dmAllowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
-          groupAllowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
-          timeoutSeconds: 600,
-          maxConcurrent: 4,
-        })
-      }
-    }
-
-    // For resident workers, launch OpenClaw process (it handles its own /sync)
-    // For ephemeral workers, start AgentHub-managed Matrix listener
-    let anyListenerStarted = false
-    if (isResident && !workerContainersEnabled()) {
-      const gatewayPort = workerGatewayPort(worker.id)
-      const launched = await this.launchResidentWorkerProcess(worker)
-      if (launched) {
-        // Wait for the worker's OpenClaw gateway to become healthy
-        const { waitForWorkerReadiness } = await import('../worker-runtime/worker-readiness-reporter')
-        const readiness = await waitForWorkerReadiness({
-          workerInstanceId: worker.id,
-          gatewayPort,
-          maxWaitMs: 60_000,
-        })
-        if (readiness.ready) {
-          anyListenerStarted = true
-          await markWorkerInstanceState(worker.id, 'listening', {
-            message: 'Resident Worker OpenClaw process launched, healthy, and listening via Matrix /sync.',
-            health: {
-              ...worker.health,
-              listeningAt: new Date().toISOString(),
-              gatewayPort,
-            },
-          })
-          await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
-            mode: 'listening',
-          }).catch(() => {})
-        } else {
-          logger.warn({ workerId: worker.id, error: readiness.error }, 'Worker gateway did not become healthy')
-        }
-      }
-    } else if (isResident && workerContainersEnabled()) {
-      anyListenerStarted = false
-      await markWorkerInstanceState(worker.id, 'ready', {
-        message: 'Resident Worker config prepared; Docker WorkerBackend will start the container.',
+    const listenerResults = await startMatrixWorkerListeners(worker.id)
+    const anyListenerStarted = listenerResults.some((r) => r.started)
+    if (anyListenerStarted) {
+      await markWorkerInstanceState(worker.id, 'listening', {
+        message: 'Worker Matrix listener started and waiting for tasks.',
         health: {
           ...worker.health,
-          containerBackendPending: true,
+          listeningAt: new Date().toISOString(),
         },
       })
       await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
-        mode: 'ready',
+        mode: 'listening',
       }).catch(() => {})
-    } else {
-      const listenerResults = await startMatrixWorkerListeners(worker.id)
-      anyListenerStarted = listenerResults.some((r) => r.started)
-      if (anyListenerStarted) {
-        await markWorkerInstanceState(worker.id, 'listening', {
-          message: 'Worker Matrix listener started and waiting for tasks.',
-          health: {
-            ...worker.health,
-            listeningAt: new Date().toISOString(),
-          },
-        })
-        await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
-          mode: 'listening',
-        }).catch(() => {})
-      }
     }
 
     if (ctx.runId && ctx.groupSessionId) {
@@ -705,27 +617,6 @@ export class WorkerController {
     const instance = await ensureWorkerInstance({ workspaceId, agent })
     if (!instance) return null
 
-    // For resident workers, ensure Matrix identity exists before reconcile
-    const isResident = instance.runtimeBase === 'openclaw' || instance.runtimeBase === 'copaw'
-    if (isResident) {
-      try {
-        const client = createMatrixClientFromEnv()
-        const identityService = new MatrixIdentityService(client)
-        await identityService.ensureIdentity({
-          ownerType: 'worker',
-          ownerId: instance.id,
-          displayName: agent.id,
-        })
-        logger.info({ workerInstanceId: instance.id }, 'Worker Matrix identity ensured')
-      } catch (err) {
-        logger.error({ err, workerInstanceId: instance.id }, 'Failed to ensure Worker Matrix identity')
-        await markWorkerInstanceState(instance.id, 'failed', {
-          message: `Failed to create Matrix identity: ${err}`,
-        })
-        return null
-      }
-    }
-
     // Run reconcile to bring it to ready state
     await this.reconcile(instance.id, { workspaceId })
     return instance.id
@@ -808,7 +699,7 @@ export class WorkerController {
     details.modelConfigured = true
 
     // Check runtime base is valid
-    const validRuntimes = ['codex', 'claude-code', 'opencode', 'gemini', 'openclaw', 'copaw', 'qwenpaw']
+    const validRuntimes = ['openclaw', 'codex', 'claude-code', 'opencode', 'gemini']
     if (!validRuntimes.includes(worker.runtimeBase)) {
       return {
         ready: false,
@@ -818,43 +709,6 @@ export class WorkerController {
     }
     details.runtimeBase = worker.runtimeBase
 
-    // Infer worker mode from runtimeBase
-    const mode: 'ephemeral' | 'resident' =
-      worker.runtimeBase === 'openclaw' || worker.runtimeBase === 'copaw' || worker.runtimeBase === 'qwenpaw'
-        ? 'resident'
-        : 'ephemeral'
-    details.mode = mode
-
-    // --- Resident mode checks ---
-    if (mode === 'resident') {
-      // Verify Matrix identity exists for this worker
-      const [identity] = await db
-        .select()
-        .from(matrixIdentities)
-        .where(and(eq(matrixIdentities.ownerType, 'worker'), eq(matrixIdentities.ownerId, worker.id)))
-        .limit(1)
-
-      if (!identity) {
-        return {
-          ready: false,
-          reason: `Resident Worker (${worker.runtimeBase}) 缺少 Matrix identity。`,
-          details: { ...details, missingMatrixIdentity: true },
-        }
-      }
-      if (!identity.accessToken) {
-        return {
-          ready: false,
-          reason: `Resident Worker (${worker.runtimeBase}) Matrix identity 没有 access token。`,
-          details: { ...details, missingMatrixAccessToken: true, matrixUserId: identity.userId },
-        }
-      }
-      details.matrixIdentity = { userId: identity.userId, serverName: identity.serverName }
-
-      // Resident workers do not need sandbox policy validation (they manage their own isolation)
-      return { ready: true, details }
-    }
-
-    // --- Ephemeral mode checks ---
     // For code agents, verify sandbox policy is valid
     if (worker.sandboxPolicy !== 'workspace-write' && worker.sandboxPolicy !== 'danger-full-access') {
       return {
@@ -867,159 +721,6 @@ export class WorkerController {
 
     return { ready: true, details }
   }
-
-  private async generateWorkerOpenClawConfig(
-    worker: WorkerInstanceRow,
-    identity: { userId: string; accessToken: string | null; serverName: string },
-  ): Promise<string> {
-    const matrixUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167'
-    const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
-    const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
-    const llmBaseUrl = process.env.AGENTHUB_WORKER_LLM_BASE_URL || process.env.LLM_BASE_URL || resolvedLlm.baseUrl
-    const llmApiKey = process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || resolvedLlm.apiKey || 'agenthub-internal'
-    const llmModel = worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model
-    const gatewayPort = workerGatewayPort(worker.id)
-    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', worker.id)
-
-    const config = {
-      gateway: {
-        mode: 'local',
-        port: gatewayPort,
-        bind: 'lan',
-        auth: { token: `agenthub-worker-token-${worker.id.slice(0, 8)}` },
-        remote: { token: `agenthub-worker-token-${worker.id.slice(0, 8)}` },
-        controlUi: {
-          dangerouslyDisableDeviceAuth: true,
-          allowInsecureAuth: true,
-          allowedOrigins: ['*'],
-        },
-      },
-      channels: {
-        matrix: {
-          enabled: true,
-          homeserver: matrixUrl,
-          userId: identity.userId,
-          accessToken: identity.accessToken ?? '',
-          encryption: false,
-          network: { dangerouslyAllowPrivateNetwork: true },
-          autoJoin: 'always',
-          dm: { policy: 'allowlist', allowFrom: [`@admin:${matrixDomain}`] },
-          groupPolicy: 'allowlist',
-          groupAllowFrom: [`@admin:${matrixDomain}`],
-          streaming: 'off',
-          blockStreaming: false,
-        },
-      },
-      models: {
-        mode: 'merge',
-        providers: {
-          'agenthub-llm': {
-            baseUrl: llmBaseUrl,
-            apiKey: llmApiKey,
-            api: 'openai-completions',
-            models: [{ id: llmModel, reasoning: false, contextWindow: 128000, maxTokens: 8192, input: ['text'] }],
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          timeoutSeconds: 1800,
-          workspace: '~',
-          model: { primary: `agenthub-llm/${llmModel}` },
-          maxConcurrent: 4,
-          subagents: { maxConcurrent: 8 },
-          elevatedDefault: 'full',
-          heartbeat: { every: '1h', prompt: 'Read ~/HEARTBEAT.md and follow the checklist.' },
-        },
-      },
-      tools: {
-        exec: { host: 'gateway', security: 'full', ask: 'off' },
-        elevated: { enabled: true, allowFrom: { matrix: ['*'] } },
-      },
-      session: {
-        dmScope: 'per-channel-peer',
-        resetByType: { dm: { mode: 'daily', atHour: 4 }, group: { mode: 'daily', atHour: 4 } },
-      },
-      plugins: { load: { paths: [] }, entries: { matrix: { enabled: true } } },
-      commands: { restart: true },
-    }
-
-    mkdirSync(workerWorkspace, { recursive: true })
-    const configPath = join(workerWorkspace, 'openclaw.json')
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
-    logger.info({ configPath, workerId: worker.id, gatewayPort }, 'Generated OpenClaw Worker config')
-    return configPath
-  }
-
-  private async launchResidentWorkerProcess(
-    worker: typeof workerInstances.$inferSelect,
-  ): Promise<boolean> {
-    const binaryPath = this.findOpenClawBinary()
-    if (!binaryPath) {
-      logger.error({ workerId: worker.id }, 'OpenClaw binary not found; cannot launch resident worker')
-      return false
-    }
-
-    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', worker.id)
-    const configPath = join(workerWorkspace, 'openclaw.json')
-    if (!existsSync(configPath)) {
-      logger.error({ workerId: worker.id, configPath }, 'OpenClaw config missing; cannot launch resident worker')
-      return false
-    }
-
-    try {
-      const child = spawn(binaryPath, ['gateway', 'run', '-c', configPath], {
-        cwd: workerWorkspace,
-        detached: true,
-        stdio: 'ignore',
-      })
-      child.unref()
-
-      logger.info(
-        { workerId: worker.id, pid: child.pid, configPath },
-        'Launched OpenClaw Worker resident process',
-      )
-      return true
-    } catch (e) {
-      logger.error({ workerId: worker.id, err: e }, 'Failed to launch OpenClaw Worker process')
-      return false
-    }
-  }
-
-  private findOpenClawBinary(): string | undefined {
-    // Try direct binary names
-    const candidates = ['openclaw', 'openclaw.exe']
-    for (const name of candidates) {
-      try {
-        const { status } = spawnSync(name, ['--version'], { stdio: 'ignore' })
-        if (status === 0) return name
-      } catch { /* noop */ }
-    }
-
-    // Try known package manager paths
-    const globalPaths: string[] = []
-    const envPaths = process.env.PATH?.split(process.platform === 'win32' ? ';' : ':') ?? []
-    for (const dir of [...envPaths]) {
-      globalPaths.push(join(dir, 'openclaw'))
-      if (process.platform === 'win32') globalPaths.push(join(dir, 'openclaw.exe'))
-    }
-    for (const p of globalPaths) {
-      try {
-        if (existsSync(p)) return p
-      } catch { /* noop */ }
-    }
-
-    return undefined
-  }
-}
-
-function workerGatewayPort(workerId: string): number {
-  let hash = 0
-  for (let i = 0; i < workerId.length; i++) {
-    hash = ((hash << 5) - hash) + workerId.charCodeAt(i)
-    hash |= 0
-  }
-  return 18800 + (Math.abs(hash) % 200)
 }
 
 export const workerController = new WorkerController()

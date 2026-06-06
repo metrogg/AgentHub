@@ -31,7 +31,7 @@ const routeLabels: Record<string, string> = {
   '/artifacts': '产物',
   '/agent-config': 'Agent',
   '/models': '模型管理',
-  '/coding-tools': 'Coding Tools',
+  '/coding-tools': 'Agent Runtime',
   '/office': '办公',
   '/profile': '个人资料',
   '/settings': '设置',

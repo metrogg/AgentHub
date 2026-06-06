@@ -294,7 +294,7 @@ export const __codeAgentAdapterTestHooks = {
   formatModelTargetLabel,
   createNativeOpenCodeModelTarget,
   buildCodeAgentPrompt,
-  friendlyCodeAgentError: (output: string, displayName = 'Coding Tools') =>
+  friendlyCodeAgentError: (output: string, displayName = 'Worker 基座') =>
     friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
 
@@ -393,13 +393,13 @@ export async function* streamCodeAgentReply(
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   let type = profile.codeAgentType
   if (!type) {
-    yield '这个 Agent 配置为 Coding Tools，但还没有绑定 CLI。'
+    yield '这个 Agent 还没有绑定 Worker 基座。请在 Agent 配置页选择 Codex、Claude Code、OpenCode 或 Gemini CLI。'
     return
   }
 
   let adapter = adapters[type]
   if (!adapter) {
-    yield `不支持的 Coding Tools 绑定：${type}。`
+    yield `不支持的 Worker 基座绑定：${type}。`
     return
   }
 
@@ -565,7 +565,7 @@ export async function* streamCodeAgentReply(
   const finalMessage = stripReasoningTags(finalResult.finalMessage?.trim() || '')
   const cleanedOutput = stripReasoningTags(stripToolNoise(finalResult.output))
   if (finalResult.code === 0 && options?.rawFinalOutput && !streamedText) {
-    yield limitFinalOutput(finalMessage || cleanedOutput || '(Coding Tools 没有返回正文)')
+    yield limitFinalOutput(finalMessage || cleanedOutput || '(Worker 基座没有返回正文)')
     return
   }
   if (finalResult.code === 0 && finalMessage && !streamedText) {
@@ -578,7 +578,7 @@ export async function* streamCodeAgentReply(
       yield buildCodeAgentCompletionMessage(finalResult.metadata, cleanedOutput)
       return
     }
-    yield limitFinalOutput(cleanedOutput || '(Coding Tools 没有返回正文)')
+    yield limitFinalOutput(cleanedOutput || '(Worker 基座没有返回正文)')
     return
   }
   if (finalResult.code === 0) return
@@ -1021,7 +1021,7 @@ async function runCodeAgentCommand(
     cleanupTempFile(promptFileHost)
     return {
       code: 130,
-      output: 'Coding Tools 执行已取消。',
+      output: 'Worker 基座执行已取消。',
       metadata: emptyCodeAgentRunMetadata(adapter, 'cancelled'),
     }
   }
@@ -1211,7 +1211,7 @@ async function runCodeAgentCommand(
   addStep(
     {
       kind: 'status',
-      title: '启动 Coding Tools',
+      title: '启动 Worker 基座',
       subtitle: `${adapter.displayName} · ${adapter.command}`,
       detail: cwd,
     },
@@ -1319,7 +1319,7 @@ async function runCodeAgentCommand(
     stdout.trim(),
     stderr.trim(),
     timedOut
-      ? `Coding Tools 超过 ${env.AGENTHUB_CODE_AGENT_TIMEOUT_MS}ms 未返回，已自动停止。`
+      ? `Worker 基座超过 ${env.AGENTHUB_CODE_AGENT_TIMEOUT_MS}ms 未返回，已自动停止。`
       : '',
   ]
     .filter(Boolean)
@@ -3308,7 +3308,7 @@ function buildCodeAgentCompletionMessage(metadata: CodeAgentRunMetadata, fallbac
   const visibleFallback = sanitizeCodeAgentFallbackText(fallback)
   if (!files.length && visibleFallback) return limitFinalOutput(visibleFallback)
 
-  const lines = ['Coding Tools 已执行完成。']
+  const lines = ['Worker 基座已执行完成。']
   if (metadata.runtime) lines.push(`运行时：${metadata.runtime}`)
   if (files.length > 0) {
     lines.push('')
@@ -3384,7 +3384,7 @@ function cleanDiagnosticOutput(output: string) {
 }
 
 function friendlyCodeAgentError(output: string, adapter?: CodeAgentAdapter) {
-  const cliName = adapter?.displayName ?? 'Coding Tools'
+  const cliName = adapter?.displayName ?? 'Worker 基座'
   if (/ProviderModelNotFoundError|Model not found:/i.test(output)) {
     const match = output.match(/providerID:\s*"([^"]+)"[\s\S]*?modelID:\s*"([^"]+)"/i)
     const detail = match
@@ -3393,7 +3393,7 @@ function friendlyCodeAgentError(output: string, adapter?: CodeAgentAdapter) {
     return [
       `${cliName} 已启动，但当前 OpenCode 模型标识无法匹配到可用 provider/model。`,
       detail,
-      '请在 Coding Tools 设置里重新选择 OpenCode 可识别的模型，或把该 Agent 绑定到模型库里已配置 API Key 的模型。不要把供应商路由前缀误当成 OpenCode provider。',
+      '请检查 OpenCode 本机原生配置，或把该 Agent 绑定到模型库里已配置 API Key 的模型。不要把供应商路由前缀误当成 OpenCode provider。',
     ].join('\n')
   }
   if (
@@ -3402,14 +3402,14 @@ function friendlyCodeAgentError(output: string, adapter?: CodeAgentAdapter) {
     )
   ) {
     return [
-      '当前 Coding Tools 使用的模型名称不被该 CLI 端点接受。',
-      'AgentHub 会在执行前拦截非原生模型并尝试改用 OpenCode；如果仍看到这个错误，通常是本机 CLI 配置里残留了不兼容模型。请清理该 CLI 的本机 model 配置，或把这个 Agent 的 Coding Tools 改为 OpenCode。',
+      '当前 Worker 基座使用的模型名称不被该 CLI 端点接受。',
+      'AgentHub 会在执行前拦截非原生模型并尝试改用 OpenCode；如果仍看到这个错误，通常是本机 CLI 配置里残留了不兼容模型。请清理该 CLI 的本机 model 配置，或把这个 Agent 的 Worker 基座改为 OpenCode。',
     ].join('\n')
   }
   if (/unsupported_vendor|specified model is not supported at this endpoint/i.test(output)) {
     return [
       'Claude Code 使用的端点拒绝了当前模型名。Claude Code 只能稳定运行 Claude/Anthropic 原生模型，非原生模型应交给 OpenCode。',
-      '请把这个 Agent 的 Coding Tools 改为 OpenCode，或把 Agent 模型换成 Claude Code 原生支持的 Claude/Sonnet/Opus/Haiku 模型。',
+      '请把这个 Agent 的 Worker 基座改为 OpenCode，或把 Agent 模型换成 Claude Code 原生支持的 Claude/Sonnet/Opus/Haiku 模型。',
     ].join('\n')
   }
   if (/Coding Tools timed out after/i.test(output)) {

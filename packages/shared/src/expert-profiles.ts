@@ -26,6 +26,8 @@ export interface AgentExpertProfile {
   color: string
   runtimeType: 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  managerRuntimeType?: 'openclaw' | 'qwenpaw' | null
+  workerRuntimeBase?: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   defaultSkillIds: string[]
   recommendedMcpServers: string[]
@@ -76,7 +78,8 @@ export const AGENT_EXPERT_PROFILES: AgentExpertProfile[] = [
     ].join('\n'),
     color: '#7c3aed',
     runtimeType: 'code-agent',
-    codeAgentType: 'opencode',
+    codeAgentType: null,
+    managerRuntimeType: 'openclaw',
     capabilityTags: ['orchestrate', 'team-builder', 'planning', 'dag', 'handoff', 'synthesize'],
     defaultSkillIds: ['zoom-out', 'ubiquitous-language', 'handoff'],
     recommendedMcpServers: ['memory'],

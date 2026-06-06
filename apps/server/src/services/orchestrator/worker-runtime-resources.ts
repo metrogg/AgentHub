@@ -6,6 +6,7 @@ export interface WorkerRuntimeAgentConfig {
   id: string
   runtimeType: RuntimeType
   codeAgentType?: CodeAgentType | null
+  roleProfile?: Record<string, unknown> | null
   modelId?: string | null
   skillIds?: string[] | null
   sandboxPolicy?: SandboxPolicy | null
@@ -349,8 +350,12 @@ async function findWorkerInstance(workspaceId: string, workspaceAgentId: string)
 
 function resolveRuntimeBinding(agent: WorkerRuntimeAgentConfig): {
   runtimeFamily: 'coordinator' | 'worker'
-  runtimeBase: 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  runtimeBase: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
 } {
+  const workerRuntimeBase = readWorkerRuntimeBase(agent.roleProfile)
+  if (workerRuntimeBase) {
+    return { runtimeFamily: 'worker', runtimeBase: workerRuntimeBase }
+  }
   if (agent.codeAgentType === 'claude-code') {
     return { runtimeFamily: 'worker', runtimeBase: 'claude-code' }
   }
@@ -361,4 +366,19 @@ function resolveRuntimeBinding(agent: WorkerRuntimeAgentConfig): {
     return { runtimeFamily: 'worker', runtimeBase: 'gemini' }
   }
   return { runtimeFamily: 'worker', runtimeBase: 'codex' }
+}
+
+function readWorkerRuntimeBase(roleProfile: unknown) {
+  if (!roleProfile || typeof roleProfile !== 'object') return null
+  const value = (roleProfile as Record<string, unknown>).workerRuntimeBase
+  if (
+    value === 'codex' ||
+    value === 'openclaw' ||
+    value === 'claude-code' ||
+    value === 'opencode' ||
+    value === 'gemini'
+  ) {
+    return value
+  }
+  return null
 }

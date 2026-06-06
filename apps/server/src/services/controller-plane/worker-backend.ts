@@ -1,5 +1,6 @@
 import { workerRuntimeService } from '../worker-runtime'
 import { workerController, type WorkerReconcileContext } from '../orchestrator/worker-controller'
+import { db, eq, workerInstances } from '@agenthub/db'
 
 export interface WorkerBackendInspectResult {
   workerInstanceId: string
@@ -40,6 +41,21 @@ export class LocalCliWorkerBackend implements WorkerBackend {
   readonly id = 'local-cli'
 
   async ensureRuntime(input: WorkerBackendEnsureInput): Promise<WorkerBackendInspectResult> {
+    const [worker] = await db
+      .select({ runtimeBase: workerInstances.runtimeBase })
+      .from(workerInstances)
+      .where(eq(workerInstances.id, input.workerInstanceId))
+      .limit(1)
+    if (worker?.runtimeBase === 'openclaw') {
+      return {
+        workerInstanceId: input.workerInstanceId,
+        ready: false,
+        state: 'resident-backend-required',
+        message:
+          'OpenClaw Worker requires a resident Worker backend. Enable AGENTHUB_WORKER_BACKEND=docker or AGENTHUB_CONTAINER_RUNTIME=docker.',
+      }
+    }
+
     const result = await workerController.reconcile(input.workerInstanceId, input.context)
     return {
       workerInstanceId: input.workerInstanceId,

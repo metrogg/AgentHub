@@ -223,7 +223,7 @@ const zhToEn: Record<string, string> = {
   '输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。':
     'Type an @Agent name to have that member reply in the group chat. If no member is specified, Orchestrator takes over.',
   项目文件夹: 'Project folder',
-  '本机 Coding Tools 工具台': 'Local Coding Tools Desk',
+  '本机 Agent Runtime 工具台': 'Local Agent Runtime Desk',
   '本机运行的 OpenAI 编程代理，用于仓库理解、修改和验证。':
     'Local OpenAI coding agent for repository understanding, edits, and verification.',
   'Anthropic 终端编程助手，适合长上下文代码协作。':
@@ -384,7 +384,7 @@ const zhToEn: Record<string, string> = {
   '名称，如 Designer': 'Name, e.g. Designer',
   '角色，如 设计': 'Role, e.g. Design',
   '能力说明，如 前端实现、接口联调、审查风险': 'Capability description, e.g. frontend implementation, API integration, risk review',
-  '绑定 Coding Tools': 'Bind Coding Tools',
+  '绑定 Agent Runtime': 'Bind Agent Runtime',
   '普通 LLM Agent': 'Standard LLM Agent',
   '不绑定 CLI': 'No CLI binding',
   自动模型: 'Auto model',

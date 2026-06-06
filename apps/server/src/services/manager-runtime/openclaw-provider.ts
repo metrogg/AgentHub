@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
-import { db, eq, rooms } from '@agenthub/db'
+import { and, desc, db, eq, matrixIdentities, roomParticipants, rooms, timelineEvents } from '@agenthub/db'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
 import { getRuntimeServerPort } from '../../lib/runtime-server'
@@ -92,12 +92,21 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       : this.process !== null && !this.process.killed
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const configInspection = inspectOpenClawManagerConfig(this.getConfigPath(), matrixDomain)
+    const managerDiagnostics = await describeOpenClawManagerDiagnostics({
+      workspace: this.managerWorkspace,
+      configPath: this.getConfigPath(),
+      configInspection,
+      endpoint,
+      gatewayPort: this.managerGatewayPort,
+    })
     const configError =
       !endpoint && configInspection.exists && !configInspection.matrixPluginEnabled
         ? 'OpenClaw Manager config has channels.matrix enabled but plugins.entries.matrix is not enabled; restart/regenerate Manager runtime config.'
         : !endpoint && configInspection.exists && !configInspection.humanAllowed
           ? `OpenClaw Manager config does not allow the AgentHub human Matrix user (${configInspection.expectedHumanUserId}); restart/regenerate Manager runtime config.`
-          : null
+          : !endpoint && configInspection.exists && !configInspection.wildcardGroupEnabled
+            ? 'OpenClaw Manager config does not include channels.matrix.groups["*"]; restart/regenerate Manager runtime config so newly created rooms are observed.'
+            : null
 
     return {
       runtimeType: this.runtimeType,
@@ -120,8 +129,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         binaryInstalled: binaryPath !== null,
         endpointConfigured: endpoint !== null,
         synchronousStepReady: endpoint !== null,
-        gatewayPort: this.managerGatewayPort,
         configInspection,
+        ...managerDiagnostics,
         note: endpoint
           ? 'OpenClaw Manager endpoint is configured; AgentHub can call POST /step.'
           : containerMode
@@ -536,16 +545,134 @@ async function loadOpenClawMatrixGroups() {
     .from(rooms)
     .where(eq(rooms.status, 'active'))
 
-  const groups: Record<string, { enabled: true; requireMention: false; autoReply: true }> = {}
+  const groups: Record<string, {
+    enabled: true
+    requireMention: false
+    autoReply: true
+    skills: string[]
+    systemPrompt: string
+  }> = {}
+  const agenthubManagerRoomConfig: {
+    enabled: true
+    requireMention: false
+    autoReply: true
+    skills: string[]
+    systemPrompt: string
+  } = {
+    enabled: true,
+    requireMention: false,
+    autoReply: true,
+    skills: ['agenthub-controller'],
+    systemPrompt:
+      'You are the AgentHub Manager. Coordinate through this Matrix room, use the agenthub-controller skill for workers, tasks, rooms, and status, and keep actions transparent to the human.',
+  }
+  groups['*'] = agenthubManagerRoomConfig
   for (const row of rows) {
     if (!row.providerRoomId) continue
-    groups[row.providerRoomId] = {
-      enabled: true,
-      requireMention: false,
-      autoReply: true,
-    }
+    groups[row.providerRoomId] = agenthubManagerRoomConfig
   }
   return groups
+}
+
+async function describeOpenClawManagerDiagnostics(input: {
+  workspace: string
+  configPath: string
+  configInspection: ReturnType<typeof inspectOpenClawManagerConfig>
+  endpoint: string | null
+  gatewayPort: number
+}) {
+  const roomRows = await db
+    .select({
+      roomId: rooms.id,
+      title: rooms.title,
+      kind: rooms.kind,
+      providerRoomId: rooms.providerRoomId,
+      participantId: roomParticipants.id,
+      participantStatus: roomParticipants.status,
+      participantUserId: roomParticipants.providerUserId,
+    })
+    .from(rooms)
+    .leftJoin(
+      roomParticipants,
+      and(eq(roomParticipants.roomId, rooms.id), eq(roomParticipants.participantType, 'manager')),
+    )
+    .where(eq(rooms.status, 'active'))
+
+  const [managerIdentity] = await db
+    .select()
+    .from(matrixIdentities)
+    .where(and(eq(matrixIdentities.ownerType, 'manager'), eq(matrixIdentities.ownerId, 'manager')))
+    .limit(1)
+
+  const [latestReply] = await db
+    .select({
+      id: timelineEvents.id,
+      roomId: timelineEvents.roomId,
+      body: timelineEvents.body,
+      metadata: timelineEvents.metadata,
+      createdAt: timelineEvents.createdAt,
+    })
+    .from(timelineEvents)
+    .where(and(eq(timelineEvents.senderType, 'manager'), eq(timelineEvents.type, 'manager.message')))
+    .orderBy(desc(timelineEvents.createdAt))
+    .limit(1)
+
+  const agenthubSkillPath = join(input.workspace, 'skills', 'agenthub-controller', 'SKILL.md')
+  const soulPath = join(input.workspace, 'SOUL.md')
+  const agentsPath = join(input.workspace, 'AGENTS.md')
+  const toolsPath = join(input.workspace, 'TOOLS.md')
+  const controllerUrl = `http://localhost:${getRuntimeServerPort() ?? Number(process.env.PORT || 3000)}`
+  const controllerReachable = await probeControllerHealth(controllerUrl)
+
+  const configuredRoomIds = new Set(input.configInspection.groupKeys)
+  const managerUserId = managerIdentity?.userId ?? null
+  const roomBindings = roomRows
+    .filter((room) => room.providerRoomId)
+    .map((room) => ({
+      roomId: room.roomId,
+      title: room.title,
+      kind: room.kind,
+      providerRoomId: room.providerRoomId,
+      configured: configuredRoomIds.has(room.providerRoomId!) || input.configInspection.wildcardGroupEnabled,
+      sessionKey: `agenthub:manager:room:${room.providerRoomId}`,
+      managerParticipantId: room.participantId ?? null,
+      managerParticipantStatus: room.participantStatus ?? null,
+      managerParticipantUserId: room.participantUserId ?? null,
+      boundToResidentManager: Boolean(managerUserId && room.participantUserId === managerUserId),
+    }))
+
+  return {
+    managerIdentity: {
+      userId: managerUserId,
+      hasAccessToken: Boolean(managerIdentity?.accessToken),
+      lastSync: managerIdentity?.metadata?.matrixSync ?? null,
+    },
+    agenthubSkillLoaded: existsSync(agenthubSkillPath),
+    managerPersonaReady: existsSync(soulPath) && existsSync(agentsPath) && existsSync(toolsPath),
+    controllerReachable,
+    matrixJoinedRooms: roomBindings.filter((room) => room.managerParticipantStatus === 'joined').length,
+    roomBindings,
+    configuredMatrixRooms: input.configInspection.groupKeys,
+    lastManagerReplyAt: latestReply ? new Date(latestReply.createdAt).toISOString() : null,
+    lastManagerReplyPreview: latestReply?.body?.slice(0, 160) ?? null,
+    lastManagerStatusKind:
+      latestReply?.metadata && typeof latestReply.metadata.kind === 'string'
+        ? latestReply.metadata.kind
+        : null,
+    lastQueueDepth: null,
+    expectedResidentSessionKeyPrefix: 'agenthub:manager:room:',
+    endpoint: input.endpoint,
+    gatewayPort: input.gatewayPort,
+  }
+}
+
+async function probeControllerHealth(controllerUrl: string) {
+  try {
+    const response = await fetch(`${controllerUrl}/health`, { signal: AbortSignal.timeout(1000) })
+    return { ok: response.ok, url: controllerUrl, status: response.status }
+  } catch (error) {
+    return { ok: false, url: controllerUrl, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 async function findAvailablePort(start: number, attempts: number) {
@@ -579,6 +706,9 @@ function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) 
     matrixChannelEnabled: false,
     matrixPluginEnabled: false,
     matrixGroupCount: 0,
+    groupKeys: [] as string[],
+    wildcardGroupEnabled: false,
+    wildcardAgentHubSkillEnabled: false,
     humanAllowed: false,
     error: null as string | null,
   }
@@ -596,7 +726,10 @@ function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) 
     result.requireMention = typeof wildcardGroup.requireMention === 'boolean' ? wildcardGroup.requireMention : null
     result.matrixChannelEnabled = matrix.enabled === true
     result.matrixPluginEnabled = matrixPlugin.enabled === true
-    result.matrixGroupCount = Object.keys(groups).length
+    result.groupKeys = Object.keys(groups)
+    result.matrixGroupCount = result.groupKeys.length
+    result.wildcardGroupEnabled = wildcardGroup.enabled === true
+    result.wildcardAgentHubSkillEnabled = arrayOfStrings(wildcardGroup.skills).includes('agenthub-controller')
     const allowed = new Set([...result.allowFrom, ...result.groupAllowFrom])
     result.humanAllowed = allowed.has(expectedHumanUserId) || allowed.has('*')
   } catch (err) {

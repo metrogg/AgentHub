@@ -28,6 +28,10 @@ function sharedPresetToFrontend(key: Exclude<AgentRoleType, 'custom'>): AgentRol
     role: p.role,
     description: p.description,
     systemPrompt: p.systemPrompt,
+    roleProfile: {
+      ...(p.roleProfile as unknown as Record<string, unknown>),
+      managerRuntimeType: p.managerRuntimeType ?? p.roleProfile.managerRuntimeType ?? null,
+    },
     color: p.color,
     runtimeType: p.runtimeType,
     codeAgentType: p.codeAgentType ?? null,

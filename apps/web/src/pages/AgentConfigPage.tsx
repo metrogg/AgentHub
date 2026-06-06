@@ -49,6 +49,23 @@ import { runtimeLabel } from '../lib/agentDisplay'
 import { cn } from '../lib/utils'
 import { useChatStore } from '../stores/chatStore'
 
+const WORKER_BASE_OPTIONS = [
+  { value: 'openclaw', label: 'OpenClaw' },
+  { value: 'codex', label: 'Codex CLI' },
+  { value: 'claude-code', label: 'Claude Code' },
+  { value: 'opencode', label: 'OpenCode' },
+  { value: 'gemini', label: 'Gemini CLI' },
+] as const
+
+const MANAGER_BASE_OPTIONS = [
+  { value: 'openclaw', label: 'OpenClaw' },
+  { value: 'qwenpaw', label: 'QwenPaw' },
+] as const
+
+type WorkerRuntimeBase = (typeof WORKER_BASE_OPTIONS)[number]['value']
+type ManagerRuntimeBase = (typeof MANAGER_BASE_OPTIONS)[number]['value']
+type CliWorkerBase = NonNullable<WorkspaceAgent['codeAgentType']>
+
 const emptyDraft: AgentConfigInput = {
   name: '',
   role: '',
@@ -158,13 +175,23 @@ export default function AgentConfigPage() {
       .filter((id): id is string => typeof id === 'string' && id.length > 0),
   )
   const runtimeType = draft.runtimeType ?? 'code-agent'
+  const workerRuntimeBase = getWorkerRuntimeBaseFromDraft(draft)
+  const managerRuntimeBase = getManagerRuntimeBaseFromDraft(draft)
+  const managerAgent = isManagerDraft(draft, selectedExpertProfile)
   const selectedModel = draft.modelId ? models.find((item) => item.id === draft.modelId || item.modelId === draft.modelId) ?? null : null
   const assistantChanges = assistantResult ? changedFieldsFromPatch(draft, assistantResult.patch) : []
   const modelCompatibilityMessage = (() => {
     const modelId = draft.modelId ?? null
-    const codeAgentType = draft.codeAgentType ?? null
+    if (managerAgent) {
+      return 'Orchestrator 是群聊 Manager / Team Leader；这里选择 Manager 基座，模型和运行状态由设置页的 Manager Runtime 接管。'
+    }
+    const codeAgentType = cliWorkerBaseFromRuntimeBase(workerRuntimeBase)
     const model = selectedModel
-    if (!modelId) return '未绑定模型不会使用内部 LLM 默认模型；Code Agent 执行前需要显式绑定或匹配到兼容模型。'
+    if (workerRuntimeBase === 'openclaw') {
+      if (!modelId) return 'OpenClaw Worker 需要绑定模型，并通过 OpenClaw resident runtime / Matrix 接单。'
+      return 'OpenClaw Worker 会使用独立 openclaw.json 和 resident backend；模型从当前 Agent 绑定生成。'
+    }
+    if (!modelId) return '未绑定模型不会使用内部 LLM 默认模型；Worker 执行前需要显式绑定或匹配到兼容模型。'
     if (!model) return '当前绑定的模型不在模型目录中，运行前需要先补齐模型条目。'
     if (codeAgentType === 'claude-code' && !/claude|sonnet|opus|haiku|anthropic/i.test(`${model.provider} ${model.modelId} ${model.apiEndpoint ?? ''} ${model.anthropicEndpoint ?? ''}`)) {
       return '建议 Claude Code 绑定 Claude/Anthropic 兼容模型。'
@@ -180,6 +207,9 @@ export default function AgentConfigPage() {
     }
     return '已绑定独立模型，运行时会随当前 CLI 注入。'
   })()
+  const runtimeHint = managerAgent
+    ? 'Orchestrator 是 Manager / Team Leader，不作为普通 Worker 接单；它通过 OpenClaw / QwenPaw 常驻监听 Matrix Room。'
+    : '执行成员选择 Worker 基座。Agent Runtime 页面只做安装、认证和原生诊断，不决定具体 Agent 用哪个模型。'
 
   function selectAgent(agent: SavedAgentConfig, replaceUrl = false) {
     setSelectedId(agent.id)
@@ -397,12 +427,19 @@ export default function AgentConfigPage() {
       return
     }
     const preset = expertProfileToAgentConfig(profile)
+    const nextIsManager = preset.roleType === 'orchestrator'
     setDraft({
       ...draft,
       ...preset,
       name: preset.name,
       role: preset.role,
-      codeAgentType: preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'codex') : null,
+      codeAgentType: nextIsManager ? null : (preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'codex') : null),
+      roleProfile: withAgentRuntimeBases(
+        preset.roleProfile ?? null,
+        preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'codex') : 'codex',
+        preset.roleProfile?.managerRuntimeType === 'qwenpaw' ? 'qwenpaw' : 'openclaw',
+        nextIsManager,
+      ),
     })
   }
 
@@ -607,7 +644,7 @@ export default function AgentConfigPage() {
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
                               <span className="truncate">{draft.role || '未设置角色'}</span>
                               <span className="text-neutral-300">·</span>
-                              <span>{labelForCodeAgentType(draft.codeAgentType ?? 'codex')}</span>
+                              <span>{managerAgent ? `Manager / ${labelForManagerRuntimeBase(managerRuntimeBase)}` : labelForWorkerRuntimeBase(workerRuntimeBase)}</span>
                               <span className="text-neutral-300">·</span>
                               <span>{modelName(draft.modelId ?? null, models)}</span>
                             </div>
@@ -668,35 +705,57 @@ export default function AgentConfigPage() {
 
                           <div className="space-y-4">
                             <div>
-                              <div className="mb-3 text-sm font-semibold text-neutral-950">运行方式</div>
+                              <div className="mb-3 text-sm font-semibold text-neutral-950">{managerAgent ? 'Manager 基座' : 'Agent 基座'}</div>
                               <div className="space-y-3">
-                                <SelectField label="Agent 基底" value={runtimeType} onChange={(value) => {
-                                  const nextRuntime = value as WorkspaceAgent['runtimeType']
-                                  setDraft({
-                                    ...draft,
-                                    runtimeType: nextRuntime,
-                                    codeAgentType: draft.codeAgentType ?? 'codex',
-                                    approvalRequired: false,
-                                  })
-                                }}>
-                                  <option value="code-agent">Worker Runtime / CLI 基底</option>
-                                </SelectField>
-                                <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
-                                  <option value="">{t('不绑定 CLI')}</option>
-                                  <option value="codex">Codex CLI</option>
-                                  <option value="claude-code">Claude Code</option>
-                                  <option value="opencode">OpenCode</option>
-                                  <option value="gemini">Gemini CLI</option>
-                                </SelectField>
-                                <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                                {managerAgent ? (
+                                  <SelectField
+                                    label="Manager 基座"
+                                    value={managerRuntimeBase}
+                                    onChange={(value) => {
+                                      setDraft({
+                                        ...draft,
+                                        roleProfile: {
+                                          ...(draft.roleProfile ?? {}),
+                                          managerRuntimeType: (value === 'qwenpaw' ? 'qwenpaw' : 'openclaw') as ManagerRuntimeBase,
+                                        },
+                                      })
+                                    }}
+                                  >
+                                    <option value="openclaw">OpenClaw</option>
+                                    <option value="qwenpaw">QwenPaw</option>
+                                  </SelectField>
+                                ) : (
+                                  <>
+                                    <SelectField label="Agent 基座类型" value={runtimeType} onChange={(value) => {
+                                      const nextRuntime = value as WorkspaceAgent['runtimeType']
+                                      setDraft({
+                                        ...draft,
+                                        runtimeType: nextRuntime,
+                                        codeAgentType: draft.codeAgentType ?? 'codex',
+                                        approvalRequired: false,
+                                      })
+                                    }}>
+                                      <option value="code-agent">Worker Runtime / CLI 基座</option>
+                                    </SelectField>
+                                    <SelectField label="Worker 基座" value={workerRuntimeBase} onChange={(value) => setDraft(applyWorkerRuntimeBase(draft, value as WorkerRuntimeBase))}>
+                                      {WORKER_BASE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                          {option.label}
+                                        </option>
+                                      ))}
+                                    </SelectField>
+                                  </>
+                                )}
+                                {!managerAgent && <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
                                   <option value="">未绑定模型，运行前需补齐</option>
                                   {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
-                                </SelectField>
-                                <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
+                                </SelectField>}
+                                {!managerAgent && <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
                                   <option value="workspace-write">{t('工作区写入')}</option>
                                   <option value="danger-full-access">{t('完全访问')}</option>
-                                </SelectField>
+                                </SelectField>}
                               </div>
+                              <p className="mt-3 text-xs leading-5 text-neutral-500">{runtimeHint}</p>
                               <p className="mt-3 text-xs leading-5 text-neutral-500">{modelCompatibilityMessage}</p>
                             </div>
 
@@ -982,6 +1041,8 @@ export default function AgentConfigPage() {
 }
 function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
   const capabilityTags = draft.capabilityTags ?? []
+  const workerRuntimeBase = getWorkerRuntimeBaseFromDraft(draft)
+  const managerAgent = isManagerDraft(draft)
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -990,9 +1051,9 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     systemPrompt: draft.systemPrompt?.trim() ?? '',
     skillIds: draft.skillIds ?? [],
     color: draft.color || '#111827',
-    modelId: draft.modelId ?? null,
+    modelId: managerAgent ? null : (draft.modelId ?? null),
     runtimeType: 'code-agent' as const,
-    codeAgentType: draft.codeAgentType ?? 'codex',
+    codeAgentType: managerAgent ? null : (cliWorkerBaseFromRuntimeBase(workerRuntimeBase) ?? draft.codeAgentType ?? 'codex'),
     capabilityTags,
     toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
@@ -1000,7 +1061,12 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     autoInvoke: draft.autoInvoke ?? true,
     approvalRequired: false,
     roleType: draft.roleType ?? 'custom',
-    roleProfile: draft.roleProfile ?? null,
+    roleProfile: withAgentRuntimeBases(
+      draft.roleProfile ?? null,
+      workerRuntimeBase,
+      getManagerRuntimeBaseFromDraft(draft),
+      managerAgent,
+    ),
   }
 }
 
@@ -1038,6 +1104,69 @@ function labelForCodeAgentType(type: WorkspaceAgent['codeAgentType'] | null | un
   if (type === 'opencode') return 'OpenCode'
   if (type === 'gemini') return 'Gemini CLI'
   return 'Codex CLI'
+}
+
+function labelForWorkerRuntimeBase(type: WorkerRuntimeBase | null | undefined) {
+  if (type === 'openclaw') return 'OpenClaw'
+  return labelForCodeAgentType(type as WorkspaceAgent['codeAgentType'])
+}
+
+function labelForManagerRuntimeBase(type: ManagerRuntimeBase | null | undefined) {
+  if (type === 'qwenpaw') return 'QwenPaw'
+  return 'OpenClaw'
+}
+
+function isManagerDraft(
+  draft: Pick<AgentConfigInput, 'roleType' | 'roleProfile'>,
+  selectedExpertProfile?: { roleType?: string | null } | null,
+) {
+  return draft.roleType === 'orchestrator' || selectedExpertProfile?.roleType === 'orchestrator'
+}
+
+function getManagerRuntimeBaseFromDraft(draft: AgentConfigInput): ManagerRuntimeBase {
+  const value = draft.roleProfile?.managerRuntimeType
+  return value === 'qwenpaw' ? 'qwenpaw' : 'openclaw'
+}
+
+function getWorkerRuntimeBaseFromDraft(draft: AgentConfigInput): WorkerRuntimeBase {
+  const value = draft.roleProfile?.workerRuntimeBase
+  if (value === 'openclaw' || value === 'claude-code' || value === 'opencode' || value === 'gemini' || value === 'codex') {
+    return value
+  }
+  return draft.codeAgentType ?? 'codex'
+}
+
+function cliWorkerBaseFromRuntimeBase(value: WorkerRuntimeBase | null | undefined): CliWorkerBase | null {
+  if (value === 'codex' || value === 'claude-code' || value === 'opencode' || value === 'gemini') return value
+  return null
+}
+
+function withAgentRuntimeBases(
+  roleProfile: AgentConfigInput['roleProfile'],
+  workerRuntimeBase: WorkerRuntimeBase,
+  managerRuntimeBase: ManagerRuntimeBase,
+  managerAgent = false,
+): AgentConfigInput['roleProfile'] {
+  const { workerRuntimeBase: _workerRuntimeBase, ...rest } = roleProfile ?? {}
+  return {
+    ...rest,
+    ...(managerAgent ? {} : { workerRuntimeBase }),
+    managerRuntimeType: managerRuntimeBase,
+  }
+}
+
+function applyWorkerRuntimeBase(draft: AgentConfigInput, workerRuntimeBase: WorkerRuntimeBase): AgentConfigInput {
+  const codeAgentType = cliWorkerBaseFromRuntimeBase(workerRuntimeBase) ?? draft.codeAgentType ?? 'codex'
+  return {
+    ...draft,
+    codeAgentType,
+    roleProfile: withAgentRuntimeBases(
+      draft.roleProfile ?? null,
+      workerRuntimeBase,
+      getManagerRuntimeBaseFromDraft(draft),
+      isManagerDraft(draft),
+    ),
+  }
 }
 
 function contextPolicyLabel(policy: WorkspaceAgent['contextPolicy'] | null | undefined) {
@@ -1109,8 +1238,8 @@ function agentConfigFieldLabel(key: keyof AgentConfigInput) {
     roleProfile: '角色画像',
     color: '颜色',
     modelId: '模型绑定',
-    runtimeType: 'Worker Runtime',
-    codeAgentType: 'CLI 基底',
+    runtimeType: 'Agent 基座类型',
+    codeAgentType: 'Worker 基座',
     capabilityTags: '能力标签',
     skillIds: 'Skills',
     toolPermissions: '工具权限',

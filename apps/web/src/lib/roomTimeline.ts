@@ -37,13 +37,13 @@ export function projectRoomTimeline(input: {
 }): RoomTimelineProjection {
   const participantsById = new Map(input.participants.map((participant) => [participant.id, participant]))
   const controls = timelineProjectionControls(input.timeline)
-  const messages = input.timeline
+  const messages = dedupeProjectedTimelineMessages(input.timeline
     .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
     .filter((event) => !isMessageControlEvent(event))
     .filter((event) => !timelineEventIsRedacted(event, controls))
     .map((event) => timelineEventToMessage(event, input.room, input.sessionId, participantsById))
     .filter((message): message is Message => Boolean(message))
-    .map((message) => applyTimelineControlsToMessage(message, controls))
+    .map((message) => applyTimelineControlsToMessage(message, controls)))
   const events = input.timeline.flatMap((event) => timelineEventToAgUiEvents(event, input.room, input.sessionId))
   return {
     room: input.room,
@@ -360,6 +360,11 @@ function timelineEventToMessage(
         eventType: event.type,
       },
       senderName,
+      senderParticipantId: participant?.id ?? event.senderParticipantId ?? null,
+      senderParticipantType: participant?.participantType ?? event.senderType,
+      senderWorkspaceAgentId: participant?.workspaceAgentId ?? null,
+      senderWorkerInstanceId: participant?.workerInstanceId ?? null,
+      senderUserId: participant?.userId ?? null,
       agentName: senderType === SenderType.Agent ? senderName : undefined,
       displayContent: content,
     },
@@ -556,7 +561,57 @@ function managerTimelineEventToRunStatus(
     }
   }
 
+  const kind = asString(event.metadata?.kind)
+  if (kind === 'manager.status.pending' || kind === 'manager.status.slow' || kind === 'manager.status.timeout') {
+    return {
+      type: 'CUSTOM',
+      name: 'agenthub.manager.status',
+      runId: asString(event.metadata?.runId) ?? room.runId ?? undefined,
+      threadId: room.sessionId ?? sessionId,
+      message: event.body,
+      value: {
+        status:
+          kind === 'manager.status.timeout'
+            ? 'timeout'
+            : kind === 'manager.status.slow'
+              ? 'slow'
+              : 'processing',
+        phase: kind === 'manager.status.timeout' ? 'warning' : 'thinking',
+        agentName: asString(event.metadata?.agentName) ?? 'Manager',
+        source: 'room-timeline',
+        sourceEventId: asString(event.metadata?.sourceEventId),
+        diagnostics: event.metadata?.diagnostics,
+      },
+    }
+  }
+
   return null
+}
+
+function dedupeProjectedTimelineMessages(messages: Message[]) {
+  const seen = new Set<string>()
+  const output: Message[] = []
+  for (const message of messages) {
+    const metadata = asRecord(message.metadata) ?? {}
+    const roomTimeline = asRecord(metadata.roomTimeline)
+    const kind = asString(metadata.kind)
+    const senderKey = [
+      asString(metadata.senderParticipantId) ?? message.senderId,
+      message.senderType,
+      kind?.startsWith('manager.status.') ? kind : '',
+    ].join('|')
+    const providerEventId = asString(roomTimeline?.providerEventId)
+    const eventId = asString(roomTimeline?.eventId)
+    const key = providerEventId
+      ? `provider:${providerEventId}`
+      : eventId
+        ? `event:${eventId}`
+        : `body:${senderKey}:${message.content.replace(/\s+/g, ' ').trim()}:${Math.floor(Date.parse(message.createdAt) / 10_000)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    output.push(message)
+  }
+  return output
 }
 
 function baseTaskValue(event: TimelineEvent, room: Room, sessionId: string): Record<string, unknown> {

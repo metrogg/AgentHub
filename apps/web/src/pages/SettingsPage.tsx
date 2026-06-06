@@ -2527,13 +2527,15 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     : 'Worker、Room、Run、RuntimeLease、Artifact 的内部资源调和状态'
   const managerRuntimeStatus = managerRuntime
     ? managerRuntime.activeRuntimeType === 'openclaw'
-      ? managerRuntime.activeStatus.syncReady
-        ? managerRuntime.activeHealth?.healthy === false
-          ? 'OpenClaw endpoint 异常'
-          : 'OpenClaw Manager 可调用'
-        : managerRuntime.activeStatus.available
-          ? 'OpenClaw 未配置同步 endpoint'
-          : 'OpenClaw 未就绪'
+      ? managerRuntime.activeStatus.running
+        ? 'OpenClaw resident 运行中'
+        : managerRuntime.activeStatus.syncReady
+          ? managerRuntime.activeHealth?.healthy === false
+            ? 'OpenClaw endpoint 异常'
+            : 'OpenClaw step endpoint 可调用'
+          : managerRuntime.activeStatus.available
+            ? 'OpenClaw 已安装，未运行'
+            : 'OpenClaw 未就绪'
       : managerRuntime.activeRuntimeType === 'qwenpaw'
         ? 'QwenPaw 尚未接入'
         : '开发占位 Manager Runtime'
@@ -2542,6 +2544,14 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     ? [
         `active=${managerRuntime.activeRuntimeType}`,
         `configured=${managerRuntime.configuredRuntimeType}`,
+        managerRuntime.activeStatus.running ? 'mode=resident-matrix' : null,
+        settingsManagerRuntimeDiagnostics(managerRuntime).agenthubSkillLoaded === true ? 'skill=agenthub-controller' : null,
+        typeof settingsManagerRuntimeDiagnostics(managerRuntime).matrixJoinedRooms === 'number'
+          ? `joinedRooms=${settingsManagerRuntimeDiagnostics(managerRuntime).matrixJoinedRooms}`
+          : null,
+        Array.isArray(settingsManagerRuntimeDiagnostics(managerRuntime).roomBindings)
+          ? `bindings=${(settingsManagerRuntimeDiagnostics(managerRuntime).roomBindings as Array<unknown>).length}`
+          : null,
         managerRuntime.activeStatus.endpoint ? `endpoint=${managerRuntime.activeStatus.endpoint}` : null,
         managerRuntime.activeStatus.stepEndpoint ? `step=${managerRuntime.activeStatus.stepEndpoint}` : null,
         managerRuntime.activeHealth?.healthy === false ? `health=${managerRuntime.activeHealth.error ?? 'failed'}` : null,
@@ -3353,13 +3363,67 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {(() => {
+                const diagnostics = settingsManagerRuntimeDiagnostics(managerRuntime)
+                const controller = settingsAsRecord(diagnostics.controllerReachable)
+                return (
+                  <>
+                    <InfoRow label="AgentHub skill" value={diagnostics.agenthubSkillLoaded === true ? 'agenthub-controller 已加载' : '未检测到 agenthub-controller'} />
+                    <InfoRow label="Manager persona" value={diagnostics.managerPersonaReady === true ? 'SOUL / AGENTS / TOOLS 就绪' : '人格/工具文件未完整复制'} />
+                    <InfoRow
+                      label="Controller API"
+                      value={
+                        controller?.ok === true
+                          ? `可达 ${settingsAsString(controller.url) ?? ''}`
+                          : `不可达 ${settingsAsString(controller?.error) ?? settingsAsString(controller?.url) ?? ''}`
+                      }
+                    />
+                    <InfoRow label="Matrix joined rooms" value={String(settingsAsNumber(diagnostics.matrixJoinedRooms) ?? 0)} />
+                  </>
+                )
+              })()}
               <InfoRow label="当前主脑" value={managerRuntime.activeRuntimeType} />
               <InfoRow label="配置来源" value={managerRuntime.configuredRuntimeType} />
-              <InfoRow label="同步 step endpoint" value={managerRuntime.activeStatus.stepEndpoint ?? '未配置'} />
+              <InfoRow
+                label="step endpoint"
+                value={
+                  managerRuntime.activeStatus.stepEndpoint ??
+                  (managerRuntime.activeStatus.running ? 'resident Matrix 模式不需要' : '未配置')
+                }
+              />
               <InfoRow label="health endpoint" value={managerRuntime.activeStatus.healthEndpoint ?? '未配置'} />
               <InfoRow label="workspace" value={managerRuntime.activeStatus.workspace || '未创建'} />
               <InfoRow label="config" value={managerRuntime.activeStatus.configPath ?? '未生成'} />
+              <InfoRow label="last Manager reply" value={settingsAsString(settingsManagerRuntimeDiagnostics(managerRuntime).lastManagerReplyAt) ?? '暂无'} />
+              <InfoRow label="session key prefix" value={settingsAsString(settingsManagerRuntimeDiagnostics(managerRuntime).expectedResidentSessionKeyPrefix) ?? '未配置'} />
             </div>
+
+            {Array.isArray(settingsManagerRuntimeDiagnostics(managerRuntime).roomBindings) && (
+              <div className="mt-4 max-h-44 space-y-2 overflow-auto pr-1">
+                {(settingsManagerRuntimeDiagnostics(managerRuntime).roomBindings as Array<Record<string, unknown>>).slice(0, 8).map((binding, index) => (
+                  <div
+                    key={`${settingsAsString(binding.providerRoomId) ?? index}`}
+                    className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1.2fr)_auto_auto]"
+                    style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-mono font-semibold" style={{ color: 'var(--settings-text)' }} title={settingsAsString(binding.providerRoomId) ?? ''}>
+                        {settingsAsString(binding.title) ?? settingsAsString(binding.providerRoomId) ?? 'Matrix room'}
+                      </div>
+                      <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }}>
+                        {settingsAsString(binding.sessionKey) ?? 'no session key'}
+                      </div>
+                    </div>
+                    <span className={cn('inline-flex h-6 items-center rounded-full px-2 font-medium', binding.configured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+                      {binding.configured ? 'configured' : 'missing'}
+                    </span>
+                    <span className={cn('inline-flex h-6 items-center rounded-full px-2 font-medium', binding.boundToResidentManager ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-600')}>
+                      {binding.boundToResidentManager ? 'bound' : settingsAsString(binding.managerParticipantStatus) ?? 'unbound'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="mt-4 grid gap-2">
               {managerRuntime.providers.map((provider) => (
@@ -3379,7 +3443,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             </div>
 
             <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-              OpenClaw 是 Manager Runtime provider，不是普通 Agent 类型。检测到 OpenClaw CLI 只代表可管理生命周期；产品主路径应由 OpenClaw / QwenPaw 作为常驻 Manager 监听 Matrix Room。
+              OpenClaw 优先作为 Manager / Team Leader runtime，也可以作为 resident Worker 基座。检测到 OpenClaw CLI 只代表可管理生命周期；Worker 侧需要 Docker resident runtime 或等价的常驻后端来监听 Matrix Room。
             </div>
           </div>
         )}
@@ -3769,6 +3833,24 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <span className="text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{value}</span>
     </div>
   )
+}
+
+function settingsManagerRuntimeDiagnostics(managerRuntime: ManagerRuntimeStatusResponse | null | undefined) {
+  return managerRuntime?.activeStatus.diagnostics ?? {}
+}
+
+function settingsAsRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function settingsAsString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function settingsAsNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function parentDirectory(path: string | undefined) {

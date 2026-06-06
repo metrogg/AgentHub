@@ -16,7 +16,8 @@ import {
   workspaceAgents,
   workspaceTasks,
 } from '@agenthub/db'
-import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
+import { getActiveManagerProvider, getManagerProvider, type ManagerRuntimeType } from '../manager-runtime'
+import { resolveRoomManagerAgent } from './manager-participant'
 import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
@@ -27,6 +28,9 @@ import { workerRuntimeService } from '../worker-runtime/worker-runtime-service'
 import { blackboard, Blackboard } from '../blackboard'
 import { createMatrixClientFromEnv } from './matrix-client'
 import { roomService } from './room-service'
+
+const MANAGER_SLOW_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_SLOW_STATUS_MS || '15000')
+const MANAGER_TIMEOUT_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_TIMEOUT_STATUS_MS || '60000')
 
 export interface MatrixRoomEventDispatcherInput {
   eventIds: string[]
@@ -92,12 +96,46 @@ export class MatrixRoomEventDispatcher {
       stepManagerRoom: async (input) => {
         // HiClaw model: Manager is always an external OpenClaw/QwenPaw process.
         // When resident Manager is active, it observes rooms via Matrix /sync autonomously.
-        // When it is NOT active, we do NOT fall back to local LLM or rule-based dispatch.
-        const provider = getActiveManagerProvider()
+        // When it is NOT active, we try to start it. We do NOT fall back to local LLM.
+        const configuredManagerRuntime = await resolveManagerRuntimeTypeForRoom(input.roomId)
+        const provider = configuredManagerRuntime
+          ? getManagerProvider(configuredManagerRuntime)
+          : getActiveManagerProvider()
         if (provider && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
           const status = await provider.status()
           if (status.running && !status.error) {
-            return { consumed: true, skipped: true, reason: 'resident-manager-active' }
+            const roomBinding = await describeResidentManagerRoomBinding(input.roomId)
+            if (!roomBinding.ready) {
+              return {
+                consumed: false,
+                skipped: true,
+                reason: roomBinding.reason,
+                error: roomBinding.error,
+                roomBinding,
+              }
+            }
+            return { consumed: true, skipped: true, reason: 'resident-manager-active', roomBinding }
+          }
+          if (!status.endpoint && provider.ensureStarted) {
+            try {
+              const started = await provider.ensureStarted()
+              if (started.running && !started.error) {
+                return { consumed: false, skipped: true, reason: 'resident-manager-started' }
+              }
+              return {
+                consumed: false,
+                skipped: true,
+                reason: 'resident-manager-start-failed',
+                error: started.error || 'Manager runtime failed to start.',
+              }
+            } catch (error) {
+              return {
+                consumed: false,
+                skipped: true,
+                reason: 'resident-manager-start-failed',
+                error: error instanceof Error ? error.message : String(error),
+              }
+            }
           }
           return {
             consumed: false,
@@ -406,12 +444,14 @@ export class MatrixRoomEventDispatcher {
       }
 
       if (participant.participantType === 'manager' && (room.kind === 'group' || room.kind === 'manager_dm')) {
+        const pendingEventId = await this.appendManagerPendingStatus(room, event, 'matrix-manager-mention')
         const managerResult = await this.handlers.stepManagerRoom({
           roomId: room.id,
           ownerId: room.ownerId,
           afterSequence: Math.max(0, event.sequence - 1),
           source: 'matrix-manager-mention',
         })
+        this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
         await this.appendManagerDispatchDiagnostic(room, event, managerResult)
         return true
       }
@@ -429,12 +469,18 @@ export class MatrixRoomEventDispatcher {
           eventId: event.id,
         }).catch(() => {})
       }
+      const pendingEventId = await this.appendManagerPendingStatus(
+        room,
+        event,
+        event.metadata?.kind === 'matrix.sync.imported' ? 'matrix-sync' : 'platform-timeline',
+      )
       const managerResult = await this.handlers.stepManagerRoom({
         roomId: room.id,
         ownerId: room.ownerId,
         afterSequence: Math.max(0, event.sequence - 1),
         source: event.metadata?.kind === 'matrix.sync.imported' ? 'matrix-sync' : 'platform-timeline',
       })
+      this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
       await this.appendManagerDispatchDiagnostic(room, event, managerResult)
       return true
     }
@@ -444,6 +490,66 @@ export class MatrixRoomEventDispatcher {
     // and responds autonomously.
 
     return false
+  }
+
+  private async appendManagerPendingStatus(
+    room: typeof rooms.$inferSelect,
+    sourceEvent: typeof timelineEvents.$inferSelect,
+    source: string,
+  ) {
+    if (sourceEvent.metadata?.kind === 'matrix.sync.imported' && sourceEvent.senderType !== 'human') return null
+    const existing = await findManagerStatusEvent(room.id, sourceEvent.id, 'manager.status.pending')
+    if (existing) return existing.id
+    const managerParticipant = await findRoomManagerParticipant(room.id)
+    const event = await roomService.appendTimelineEvent({
+      roomId: room.id,
+      senderParticipantId: managerParticipant?.id ?? null,
+      senderType: 'manager',
+      type: 'manager.message',
+      body: 'Manager 已收到，正在处理...',
+      metadata: {
+        kind: 'manager.status.pending',
+        source,
+        sourceEventId: sourceEvent.id,
+        sourceEventSequence: sourceEvent.sequence,
+        uiPresentation: 'room-status',
+        skipAutoDispatch: true,
+      },
+    })
+    return event.id
+  }
+
+  private scheduleManagerSlowStatus(
+    roomId: string,
+    sourceEventId: string,
+    pendingEventId: string | null,
+    managerResult: unknown,
+  ) {
+    if (!pendingEventId || MANAGER_SLOW_STATUS_MS <= 0) return
+    const consumed = Boolean(managerResult && typeof managerResult === 'object' && (managerResult as any).consumed === true)
+    const reason = managerResult && typeof managerResult === 'object' ? String((managerResult as any).reason ?? '') : ''
+    if (!consumed || reason !== 'resident-manager-active') return
+    const slowTimer = setTimeout(() => {
+      void appendManagerSlowOrTimeoutStatus({
+        roomId,
+        sourceEventId,
+        statusKind: 'manager.status.slow',
+        body: 'Manager 仍在处理，OpenClaw 队列或模型响应较慢。',
+      })
+    }, MANAGER_SLOW_STATUS_MS)
+    ;(slowTimer as any).unref?.()
+    if (MANAGER_TIMEOUT_STATUS_MS > MANAGER_SLOW_STATUS_MS) {
+      const timeoutTimer = setTimeout(() => {
+        void appendManagerSlowOrTimeoutStatus({
+          roomId,
+          sourceEventId,
+          statusKind: 'manager.status.timeout',
+          body: 'Manager 处理超时。请检查设置页的 OpenClaw Manager / Matrix / 模型状态。',
+          includeDiagnostics: true,
+        })
+      }, MANAGER_TIMEOUT_STATUS_MS)
+      ;(timeoutTimer as any).unref?.()
+    }
   }
 
   private async appendManagerDispatchDiagnostic(
@@ -469,7 +575,7 @@ export class MatrixRoomEventDispatcher {
         sourceEventId: sourceEvent.id,
         sourceEventSequence: sourceEvent.sequence,
         result: payload,
-        hiddenFromChat: true,
+        hiddenFromChat: false,
         uiPresentation: 'room-status',
       },
     })
@@ -608,17 +714,182 @@ function parseMatrixControlCommand(body: string | null | undefined) {
   return null
 }
 
+async function resolveManagerRuntimeTypeForRoom(roomId: string): Promise<ManagerRuntimeType | null> {
+  const managerAgent = await resolveRoomManagerAgent(roomId)
+  const roleProfile = managerAgent?.roleProfile
+  if (!roleProfile || typeof roleProfile !== 'object') return null
+  const value = (roleProfile as Record<string, unknown>).managerRuntimeType
+  return value === 'openclaw' || value === 'qwenpaw' ? value : null
+}
+
 function managerDispatchDiagnosticBody(reason: string, error: string) {
+  if (reason === 'resident-manager-started') {
+    return 'Manager 正在启动，已接管到房间后会自动回复。'
+  }
+  if (reason === 'resident-manager-start-failed') {
+    return error || 'Manager 启动失败，请在设置页检查 OpenClaw / QwenPaw 状态。'
+  }
   if (reason === 'resident-manager-not-running') {
     return 'Manager 当前未在线。请在设置页启动 OpenClaw / QwenPaw Manager 后再由 Manager 接管群聊。'
   }
   if (reason === 'resident-manager-not-ready') {
     return 'Manager Runtime 尚未就绪。请检查设置页的 Manager Runtime / Matrix 状态。'
   }
+  if (reason === 'resident-manager-room-not-bound') {
+    return error || 'Manager Runtime 正在运行，但当前房间没有绑定到同一个 Matrix Manager 身份。请重启 OpenClaw Manager 或重新打开群聊。'
+  }
+  if (reason === 'resident-manager-room-not-joined') {
+    return error || 'Manager Runtime 正在运行，但还没有加入当前 Matrix 房间。请重启 OpenClaw Manager 或在设置页重新准备 Matrix。'
+  }
   if (reason === 'no-resident-manager-provider') {
     return '尚未配置可接管群聊的 Manager Runtime。'
   }
   return error || 'Manager runtime 没有接住这条消息，请检查设置页的 Manager Runtime / Matrix 状态。'
+}
+
+async function describeResidentManagerRoomBinding(roomId: string) {
+  const [managerIdentity] = await db
+    .select()
+    .from(matrixIdentities)
+    .where(and(eq(matrixIdentities.ownerType, 'manager'), eq(matrixIdentities.ownerId, 'manager')))
+    .limit(1)
+  if (!managerIdentity?.userId) {
+    return {
+      ready: false,
+      reason: 'resident-manager-room-not-bound',
+      error: 'OpenClaw Manager identity is missing. Start Manager from Settings to create its Matrix account.',
+    }
+  }
+  const [participant] = await db
+    .select()
+    .from(roomParticipants)
+    .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.participantType, 'manager')))
+    .limit(1)
+  if (!participant) {
+    return {
+      ready: false,
+      reason: 'resident-manager-room-not-bound',
+      error: `Current room has no Manager participant bound to ${managerIdentity.userId}.`,
+      managerUserId: managerIdentity.userId,
+    }
+  }
+  if (participant.providerUserId !== managerIdentity.userId) {
+    return {
+      ready: false,
+      reason: 'resident-manager-room-not-bound',
+      error: `Current room Manager is ${participant.providerUserId || 'unbound'}, but resident OpenClaw Manager is ${managerIdentity.userId}. Reconcile the room or restart Manager.`,
+      managerUserId: managerIdentity.userId,
+      participantUserId: participant.providerUserId,
+      participantId: participant.id,
+    }
+  }
+  if (participant.status !== 'joined') {
+    return {
+      ready: false,
+      reason: 'resident-manager-room-not-joined',
+      error: `Resident OpenClaw Manager (${managerIdentity.userId}) is not joined to this room yet.`,
+      managerUserId: managerIdentity.userId,
+      participantStatus: participant.status,
+      participantId: participant.id,
+    }
+  }
+  return {
+    ready: true,
+    reason: 'resident-manager-room-bound',
+    managerUserId: managerIdentity.userId,
+    participantId: participant.id,
+  }
+}
+
+async function appendManagerSlowOrTimeoutStatus(input: {
+  roomId: string
+  sourceEventId: string
+  statusKind: 'manager.status.slow' | 'manager.status.timeout'
+  body: string
+  includeDiagnostics?: boolean
+}) {
+  const [room] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
+  if (!room) return null
+  const sourceEvent = await findTimelineEvent(input.sourceEventId)
+  if (!sourceEvent || sourceEvent.roomId !== input.roomId) return null
+  if (await hasManagerReplyAfterSource(input.roomId, sourceEvent.sequence)) return null
+  const existing = await findManagerStatusEvent(input.roomId, input.sourceEventId, input.statusKind)
+  if (existing) return existing
+  const managerParticipant = await findRoomManagerParticipant(input.roomId)
+  const diagnostics = input.includeDiagnostics ? await managerStatusDiagnostics(input.roomId) : null
+  return roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderParticipantId: managerParticipant?.id ?? null,
+    senderType: 'manager',
+    type: 'manager.message',
+    body: input.body,
+    metadata: {
+      kind: input.statusKind,
+      sourceEventId: input.sourceEventId,
+      sourceEventSequence: sourceEvent.sequence,
+      uiPresentation: 'room-status',
+      diagnostics,
+      skipAutoDispatch: true,
+    },
+  })
+}
+
+async function findManagerStatusEvent(roomId: string, sourceEventId: string, kind: string) {
+  const recent = await db
+    .select()
+    .from(timelineEvents)
+    .where(and(eq(timelineEvents.roomId, roomId), eq(timelineEvents.senderType, 'manager'), eq(timelineEvents.type, 'manager.message')))
+    .orderBy(desc(timelineEvents.sequence))
+    .limit(30)
+  return recent.find((event) => event.metadata?.kind === kind && event.metadata?.sourceEventId === sourceEventId) ?? null
+}
+
+async function findTimelineEvent(eventId: string) {
+  const [event] = await db.select().from(timelineEvents).where(eq(timelineEvents.id, eventId)).limit(1)
+  return event ?? null
+}
+
+async function findRoomManagerParticipant(roomId: string) {
+  const [participant] = await db
+    .select()
+    .from(roomParticipants)
+    .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.participantType, 'manager')))
+    .limit(1)
+  return participant ?? null
+}
+
+async function hasManagerReplyAfterSource(roomId: string, sourceSequence: number) {
+  const recent = await db
+    .select()
+    .from(timelineEvents)
+    .where(and(eq(timelineEvents.roomId, roomId), eq(timelineEvents.senderType, 'manager'), eq(timelineEvents.type, 'manager.message')))
+    .orderBy(desc(timelineEvents.sequence))
+    .limit(30)
+  return recent.some((event) => {
+    if (event.sequence <= sourceSequence) return false
+    const kind = typeof event.metadata?.kind === 'string' ? event.metadata.kind : ''
+    if (kind.startsWith('manager.status.')) return false
+    if (kind === 'manager.dispatch.diagnostic') return false
+    return Boolean(event.body?.trim())
+  })
+}
+
+async function managerStatusDiagnostics(roomId: string) {
+  const provider = getActiveManagerProvider()
+  const status = provider ? await provider.status().catch((error) => ({ error: error instanceof Error ? error.message : String(error) })) : null
+  const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
+  const binding = await describeResidentManagerRoomBinding(roomId).catch((error) => ({
+    ready: false,
+    reason: 'resident-manager-binding-check-failed',
+    error: error instanceof Error ? error.message : String(error),
+  }))
+  return {
+    roomId,
+    providerRoomId: room?.providerRoomId ?? null,
+    managerRuntime: status,
+    roomBinding: binding,
+    sessionKey: room?.providerRoomId ? `agenthub:manager:room:${room.providerRoomId}` : null,
+  }
 }
 
 function isConsumedResult(result: unknown): result is { consumed: boolean } {
@@ -940,7 +1211,7 @@ async function isResidentWorker(workerInstanceId: string): Promise<boolean> {
     .from(workerInstances)
     .where(eq(workerInstances.id, workerInstanceId))
     .limit(1)
-  return worker?.runtimeBase === 'openclaw' || worker?.runtimeBase === 'copaw'
+  return worker?.runtimeBase === 'openclaw' || worker?.runtimeBase === 'copaw' || worker?.runtimeBase === 'qwenpaw'
 }
 
 function matrixMentionedParticipantIds(metadata: Record<string, unknown> | null | undefined) {
