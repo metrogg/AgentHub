@@ -125,8 +125,8 @@ export function identityOwnerFromParticipant(input: {
     ownerType: input.participantType,
     ownerId:
       input.userId ??
-      input.workspaceAgentId ??
       input.workerInstanceId ??
+      input.workspaceAgentId ??
       fallbackOwnerId,
     displayName: input.displayName,
   } satisfies MatrixIdentityOwner

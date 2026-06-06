@@ -1,5 +1,8 @@
 import './setup'
 import { describe, expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
@@ -64,6 +67,100 @@ describe('WorkerRuntime modes', () => {
     expect(runtime.runtimeType).toBe('qwenpaw')
   })
 
+  test('OpenClaw worker config declares an explicit worker agent identity', async () => {
+    const { generateWorkerOpenClawJson, openClawWorkerAgentId } = await import(
+      '../apps/server/src/services/worker-runtime/worker-openclaw-config'
+    )
+
+    const config = generateWorkerOpenClawJson({
+      workerInstanceId: 'worker-instance-1234567890',
+      workerName: '技术写作专家',
+      matrixUrl: 'http://localhost:6167',
+      matrixDomain: 'agenthub.local',
+      matrixUserId: '@worker-writer:agenthub.local',
+      matrixAccessToken: 'token',
+      managerMatrixUserId: '@manager:agenthub.local',
+      llmBaseUrl: 'http://localhost:8000/v1',
+      llmApiKey: 'test-key',
+      llmModel: 'test-model',
+      gatewayPort: 18880,
+      dmAllowFrom: ['@manager:agenthub.local'],
+      groupAllowFrom: ['@manager:agenthub.local'],
+      timeoutSeconds: 600,
+      maxConcurrent: 4,
+    }) as any
+
+    expect(config.agents.defaults.skipBootstrap).toBe(true)
+    expect(config.agents.list).toHaveLength(1)
+    expect(config.agents.list[0]).toMatchObject({
+      id: openClawWorkerAgentId('worker-instance-1234567890'),
+      name: '技术写作专家',
+      default: true,
+      model: { primary: 'agenthub-llm/test-model' },
+    })
+    expect(config.agents.list[0].id).not.toBe('main')
+    expect(config.agents.list[0].identity).toMatchObject({
+      name: '技术写作专家',
+    })
+    expect(config.bindings).toEqual([
+      {
+        agentId: openClawWorkerAgentId('worker-instance-1234567890'),
+        match: {
+          channel: 'matrix',
+          accountId: '*',
+        },
+      },
+    ])
+    expect(config.agents.list[0].groupChat.mentionPatterns).toContain('技术写作专家')
+    expect(config.agents.list[0].groupChat.mentionPatterns).toContain('@worker-writer')
+    expect(config.channels.matrix.groups['*']).toMatchObject({
+      enabled: true,
+      requireMention: true,
+      autoReply: true,
+    })
+  })
+
+  test('OpenClaw launcher generates a resident Manager config with identity and Matrix binding', async () => {
+    const previousAppDataDir = process.env.AGENTHUB_APP_DATA_DIR
+    const tempRoot = mkdtempSync(join(tmpdir(), 'agenthub-openclaw-manager-'))
+    process.env.AGENTHUB_APP_DATA_DIR = tempRoot
+
+    try {
+      const { OpenClawLauncher } = await import('../apps/server/src/services/manager-runtime/openclaw-launcher')
+      const launcher = new OpenClawLauncher({
+        matrixUrl: 'http://localhost:6167',
+        matrixDomain: 'agenthub.local',
+        matrixUserId: '@manager:agenthub.local',
+        matrixAccessToken: 'token',
+        llmBaseUrl: 'http://localhost:8000/v1',
+        llmApiKey: 'test-key',
+        llmModel: 'test-model',
+      })
+      const configPath = launcher.generateConfig()
+      const config = JSON.parse(readFileSync(configPath, 'utf8')) as any
+
+      expect(config.agents.list[0].identity).toMatchObject({
+        name: 'AgentHub Manager',
+        emoji: '🧭',
+      })
+      expect(config.bindings).toEqual([
+        {
+          agentId: 'manager',
+          match: {
+            channel: 'matrix',
+            accountId: '*',
+          },
+        },
+      ])
+    } finally {
+      if (previousAppDataDir === undefined) {
+        delete process.env.AGENTHUB_APP_DATA_DIR
+      } else {
+        process.env.AGENTHUB_APP_DATA_DIR = previousAppDataDir
+      }
+    }
+  })
+
   test('runTaskRoom picks ResidentRoomWorkerRuntime when worker instance runtimeBase is openclaw', async () => {
     const { room, workerInstanceId } = await createTaskRoomFixtureWithRuntimeBase('openclaw')
     const service = new WorkerRuntimeService()
@@ -86,6 +183,25 @@ describe('WorkerRuntime modes', () => {
     )
     expect(assignmentEvent).toBeTruthy()
     expect(assignmentEvent?.type).toBe('task.assigned')
+  })
+
+  test('runGroupMentionRoom uses ResidentRoomWorkerRuntime when worker instance runtimeBase is openclaw', async () => {
+    const { room, agent, workerInstanceId } = await createGroupRoomFixtureWithRuntimeBase('openclaw')
+    const service = new WorkerRuntimeService()
+    const result = await service.runGroupMentionRoom({
+      roomId: room.id,
+      ownerId: 'default-user',
+      workspaceAgentId: agent.id,
+      sourceEventId: 'source-event-1',
+      prompt: '@Builder 介绍一下自己',
+    })
+
+    expect(result.roomId).toBe(room.id)
+    expect(result.appendedEventIds.length).toBeGreaterThan(0)
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    expect(events.some((e) => e.metadata?.kind === 'worker-runtime.group-mention-dispatched')).toBe(true)
+    expect(events.some((e) => e.metadata?.kind === 'worker-runtime.resident-assignment')).toBe(true)
+    expect(events.some((e) => e.metadata?.kind === 'worker-runtime.group-mention-failed')).toBe(false)
   })
 
   test('runTaskRoom picks EphemeralCodeAgentWorkerRuntime when worker instance runtimeBase is codex', async () => {
@@ -269,6 +385,64 @@ async function createTaskRoomFixtureWithRuntimeBase(runtimeBase: string) {
     metadata: { taskDescription: '构建报告并说明结果。' },
   })
 
+  return { room, workspace: workspace!, agent: agent!, workerInstanceId: workerInstance!.id }
+}
+
+async function createGroupRoomFixtureWithRuntimeBase(runtimeBase: string) {
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({
+      ownerId: 'default-user',
+      name: 'Worker Group Runtime Workspace',
+      goal: 'Test group mention runtime modes',
+    })
+    .returning()
+  const [agent] = await db
+    .insert(workspaceAgents)
+    .values({
+      workspaceId: workspace!.id,
+      name: 'Builder',
+      role: 'Build worker',
+      roleType: 'coder',
+      runtimeType: runtimeBase === 'openclaw' || runtimeBase === 'copaw' ? 'code-agent' : 'code-agent',
+      codeAgentType: runtimeBase === 'openclaw' || runtimeBase === 'copaw' ? undefined : (runtimeBase as any),
+    })
+    .returning()
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      title: 'Modes Group Mention',
+      type: 'group',
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+    })
+    .returning()
+
+  const workerInstance = await ensureWorkerInstance({
+    workspaceId: workspace!.id,
+    agent: {
+      id: agent!.id,
+      runtimeType: agent!.runtimeType,
+      codeAgentType: agent!.codeAgentType,
+      modelId: agent!.modelId,
+      skillIds: agent!.skillIds,
+      sandboxPolicy: agent!.sandboxPolicy,
+    },
+  })
+  await db
+    .update(workerInstances)
+    .set({ runtimeBase: runtimeBase as any })
+    .where(eq(workerInstances.id, workerInstance!.id))
+
+  const room = await roomService.ensureRoomForSession(session!.id, 'default-user')
+  await roomService.addWorkerParticipant(room.id, agent!.id, workerInstance!.id)
+  await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: 'human',
+    type: 'human.message',
+    body: '大家好',
+    metadata: {},
+  })
   return { room, workspace: workspace!, agent: agent!, workerInstanceId: workerInstance!.id }
 }
 

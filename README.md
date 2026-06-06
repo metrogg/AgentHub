@@ -148,6 +148,8 @@ bun run dev
 
 打开 `http://localhost:5173` 后，进入“设置 -> 控制台”，检查 Matrix、Controller Plane、Manager Runtime、容器运行时和执行隔离状态。
 
+当前操作流程不应该比普通本地开发更复杂：先启动 `bun run infra:up`，再启动 `bun run dev`，随后在 AgentHub UI 里创建群聊、加入 Manager / Worker，并在房间里直接 @ 他们。后端会负责确保 Matrix 身份、Room membership、OpenClaw 配置、listener 或 resident 进程。所谓 resident runtime 指 Manager / Worker 各自有长期运行的 OpenClaw gateway 进程或容器，用自己的 Matrix account 监听房间；不是每次收到消息才临时启动一次 CLI。OpenClaw Manager / Worker 生成的 `openclaw.json` 会显式声明 `agents.list` 默认身份，避免 OpenClaw 落到默认 `main` agent 导致头像、名字和责任串台。
+
 **HiClaw-lite 容器 resident runtime 模式**
 
 适合验证 OpenClaw Manager / Worker 作为常驻容器运行。AgentHub Server 仍在本机跑，Docker 只承载 Tuwunel、MinIO、OpenClaw Manager 和 OpenClaw Worker：

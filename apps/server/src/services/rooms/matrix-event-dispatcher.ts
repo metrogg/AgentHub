@@ -29,8 +29,8 @@ import { blackboard, Blackboard } from '../blackboard'
 import { createMatrixClientFromEnv } from './matrix-client'
 import { roomService } from './room-service'
 
-const MANAGER_SLOW_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_SLOW_STATUS_MS || '15000')
-const MANAGER_TIMEOUT_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_TIMEOUT_STATUS_MS || '60000')
+const MANAGER_SLOW_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_SLOW_STATUS_MS || '60000')
+const MANAGER_TIMEOUT_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_TIMEOUT_STATUS_MS || '300000')
 
 export interface MatrixRoomEventDispatcherInput {
   eventIds: string[]
@@ -430,7 +430,7 @@ export class MatrixRoomEventDispatcher {
           sourceEventId: event.id,
           prompt: event.body,
         })
-        if (runResult.appendedEventIds.length > 0 && participant.workerInstanceId) {
+        if (runResult.appendedEventIds.length > 0 && participant.workerInstanceId && runResult.status === 'completed') {
           await markWorkerInstanceState(participant.workerInstanceId, 'idle', {
             message: 'Worker answered group room mention.',
             health: {
@@ -828,6 +828,7 @@ async function appendManagerSlowOrTimeoutStatus(input: {
       sourceEventId: input.sourceEventId,
       sourceEventSequence: sourceEvent.sequence,
       uiPresentation: 'room-status',
+      hiddenFromChat: true,
       diagnostics,
       skipAutoDispatch: true,
     },

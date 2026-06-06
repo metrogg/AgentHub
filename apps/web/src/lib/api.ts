@@ -754,6 +754,7 @@ export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
 export interface ManagerRuntimeStatus {
   runtimeType: ManagerRuntimeType
   available: boolean
+  connectionMode: 'external-endpoint' | 'managed-process' | 'managed-docker' | 'unavailable'
   syncReady?: boolean
   running: boolean
   pid: number | null
@@ -1168,6 +1169,13 @@ export interface WorkspaceFull {
   agents: WorkspaceAgent[]
   tasks: WorkspaceTask[]
   agentRelations?: WorkspaceAgentRelation[]
+}
+
+export interface WorkspaceWorkerCreateResult {
+  success: boolean
+  agentId: string
+  session: Session | null
+  worker: unknown
 }
 
 export interface WorkspaceActiveRun {
@@ -1990,6 +1998,15 @@ export const api = {
     request<WorkspaceAgent>(`/workspaces/${id}/agents`, {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  createWorkspaceWorker: (id: string, data: AgentConfigInput) =>
+    request<WorkspaceWorkerCreateResult>(`/workspaces/${id}/workers`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  applyWorkspaceWorker: (id: string, agentId: string) =>
+    request<WorkspaceWorkerCreateResult>(`/workspaces/${id}/workers/${encodeURIComponent(agentId)}/apply`, {
+      method: 'POST',
     }),
   updateWorkspaceAgent: (id: string, agentId: string, data: Partial<AgentConfigInput>) =>
     request<WorkspaceAgent>(`/workspaces/${id}/agents/${agentId}`, {

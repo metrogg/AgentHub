@@ -1,4 +1,5 @@
 import './setup'
+import { waitForCondition } from './setup'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
@@ -227,6 +228,7 @@ describe('RoomService Matrix room adapter contract', () => {
       senderType: 'human',
       type: 'human.message',
       body: '大家好',
+      metadata: { skipAutoDispatch: true },
     })
     await roomService.appendTimelineEvent({
       roomId: room!.id,
@@ -995,7 +997,18 @@ describe('RoomService Matrix room adapter contract', () => {
         dispatch: false,
       })
       expect(listener.start({ identityId: identity!.id })).toBe(handle)
-      while (syncCount < 2) await new Promise((resolve) => setTimeout(resolve, 25))
+      await waitForCondition(
+        async () => {
+          const [latestIdentity] = await db
+            .select()
+            .from(matrixIdentities)
+            .where(eq(matrixIdentities.id, identity!.id))
+            .limit(1)
+          return latestIdentity?.metadata?.matrixSync?.nextBatch ?? null
+        },
+        (nextBatch) => nextBatch === 'loop-batch-2',
+        { description: 'matrix runtime loop persisted second sync batch' },
+      )
       expect(listener.isRunning(identity!.id)).toBe(true)
       handle.stop()
       await handle.stopped
@@ -1005,7 +1018,7 @@ describe('RoomService Matrix room adapter contract', () => {
         .from(matrixIdentities)
         .where(eq(matrixIdentities.id, identity!.id))
         .limit(1)
-      expect(updatedIdentity?.metadata?.matrixSync?.nextBatch).toBe(`loop-batch-${syncCount}`)
+      expect(updatedIdentity?.metadata?.matrixSync?.nextBatch).toBe('loop-batch-2')
     } finally {
       globalThis.fetch = originalFetch
     }

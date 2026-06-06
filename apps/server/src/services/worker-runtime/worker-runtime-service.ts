@@ -121,6 +121,12 @@ export interface RunGroupMentionRoomInput {
   signal?: AbortSignal
 }
 
+export interface RunGroupMentionRoomResult {
+  roomId: string
+  appendedEventIds: string[]
+  status: 'completed' | 'failed' | 'waiting_for_human' | 'cancelled'
+}
+
 export class WorkerRuntimeService {
   private readonly runningControllers = new Map<string, AbortController>()
   private readonly roomRuntimeKind = new Map<string, import('./types').WorkerRuntimeKind>()
@@ -308,7 +314,7 @@ export class WorkerRuntimeService {
    * Resident OpenClaw/QwenPaw Workers can later replace this bridge by listening
    * to the room directly.
    */
-  async runGroupMentionRoom(input: RunGroupMentionRoomInput): Promise<{ roomId: string; appendedEventIds: string[] }> {
+  async runGroupMentionRoom(input: RunGroupMentionRoomInput): Promise<RunGroupMentionRoomResult> {
     const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
     if (room.kind !== 'group' && room.kind !== 'manager_dm') {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'WorkerRuntime 只能从 group room 处理 @mention')
@@ -322,7 +328,7 @@ export class WorkerRuntimeService {
     const controllerKey = `${room.id}:${workerParticipant.workspaceAgentId}`
     if (this.runningControllers.has(controllerKey)) {
       logger.info({ roomId: room.id, agentId: workerParticipant.workspaceAgentId }, 'Group mention worker is already running')
-      return { roomId: room.id, appendedEventIds: [] }
+      return { roomId: room.id, appendedEventIds: [], status: 'waiting_for_human' }
     }
 
     const [agent] = await db
@@ -331,12 +337,21 @@ export class WorkerRuntimeService {
       .where(eq(workspaceAgents.id, workerParticipant.workspaceAgentId))
       .limit(1)
     if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Worker Agent 不存在')
+    const [workerInstance] = workerParticipant.workerInstanceId
+      ? await db.select().from(workerInstances).where(eq(workerInstances.id, workerParticipant.workerInstanceId)).limit(1)
+      : []
 
     const [workspace] = room.workspaceId
       ? await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId)).limit(1)
       : []
     const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 100 })
-    const runtime = new EphemeralCodeAgentWorkerRuntime(agent)
+    const runtime =
+      workerInstance?.runtimeBase === 'openclaw' || workerInstance?.runtimeBase === 'qwenpaw' || workerInstance?.runtimeBase === 'copaw'
+        ? new ResidentRoomWorkerRuntime({
+            runtimeType: workerInstance.runtimeBase === 'openclaw' ? 'openclaw' : 'qwenpaw',
+            workerParticipantId: workerParticipant.id,
+          })
+        : new EphemeralCodeAgentWorkerRuntime(agent)
     this.roomRuntimeKind.set(controllerKey, runtime.kind)
 
     const abortController = new AbortController()
@@ -350,6 +365,10 @@ export class WorkerRuntimeService {
     this.runningControllers.set(controllerKey, abortController)
 
     const appendedEventIds: string[] = []
+    let finalStatus: RunGroupMentionRoomResult['status'] =
+      runtime.kind === 'resident-openclaw' || runtime.kind === 'resident-qwenpaw'
+        ? 'waiting_for_human'
+        : 'completed'
     await markWorkerInstanceState(workerParticipant.workerInstanceId, 'busy', {
       message: `${agent.name} is answering a group mention.`,
       health: {
@@ -432,6 +451,7 @@ export class WorkerRuntimeService {
       }
 
       const result = next.value
+      finalStatus = result.status
       const completedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
         senderParticipantId: workerParticipant.id,
@@ -440,9 +460,16 @@ export class WorkerRuntimeService {
         body:
           result.status === 'completed'
             ? result.message || '处理完成。'
-            : '我这边还没启动成功，请检查这个 Worker 的 CLI 基底、模型绑定和认证状态。',
+            : result.status === 'waiting_for_human'
+              ? '已通过 Matrix @mention 发送给 Resident Worker，等待其在房间里回复。'
+              : '我这边还没启动成功，请检查这个 Worker 的 CLI 基底、模型绑定和认证状态。',
         metadata: {
-          kind: result.status === 'completed' ? 'worker-runtime.group-mention-completed' : 'worker-runtime.group-mention-failed',
+          kind:
+            result.status === 'completed'
+              ? 'worker-runtime.group-mention-completed'
+              : result.status === 'waiting_for_human'
+                ? 'worker-runtime.group-mention-dispatched'
+                : 'worker-runtime.group-mention-failed',
           status: result.status,
           sourceEventId: input.sourceEventId,
           workspaceAgentId: agent.id,
@@ -450,18 +477,22 @@ export class WorkerRuntimeService {
           runtimeType: runtime.runtimeType,
           artifacts: result.artifacts ?? [],
           sessionId: result.sessionId ?? null,
-          rawError: result.status === 'completed' ? null : result.message ?? null,
+          rawError: result.status === 'completed' || result.status === 'waiting_for_human' ? null : result.message ?? null,
         },
       })
       appendedEventIds.push(completedEvent.id)
-      await markWorkerInstanceState(workerParticipant.workerInstanceId, result.status === 'completed' ? 'idle' : 'failed', {
-        message: result.message ?? null,
-        health: {
-          roomId: room.id,
-          sourceEventId: input.sourceEventId,
-          status: result.status,
+      await markWorkerInstanceState(
+        workerParticipant.workerInstanceId,
+        result.status === 'completed' ? 'idle' : result.status === 'waiting_for_human' ? 'assigned' : 'failed',
+        {
+          message: result.message ?? null,
+          health: {
+            roomId: room.id,
+            sourceEventId: input.sourceEventId,
+            status: result.status,
+          },
         },
-      })
+      )
     } catch (error: any) {
       logger.error({ err: error?.message, roomId: room.id, agentId: agent.id }, 'Group mention worker execution failed')
       const failEvent = await roomService.appendTimelineEvent({
@@ -480,6 +511,7 @@ export class WorkerRuntimeService {
         },
       })
       appendedEventIds.push(failEvent.id)
+      finalStatus = 'failed'
       await markWorkerInstanceState(workerParticipant.workerInstanceId, 'failed', {
         message: error?.message || 'Group mention worker execution failed.',
       })
@@ -488,7 +520,11 @@ export class WorkerRuntimeService {
       this.roomRuntimeKind.delete(controllerKey)
     }
 
-    return { roomId: room.id, appendedEventIds }
+    return {
+      roomId: room.id,
+      appendedEventIds,
+      status: finalStatus,
+    }
   }
 
   async runTaskRoom(input: RunTaskRoomInput): Promise<RunTaskRoomResult> {

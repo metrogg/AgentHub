@@ -10,6 +10,7 @@ export interface WorkerOpenClawConfigInput {
   matrixDomain: string
   matrixUserId: string
   matrixAccessToken: string
+  managerMatrixUserId: string
   llmBaseUrl: string
   llmApiKey: string
   llmModel: string
@@ -25,6 +26,17 @@ export function getWorkerWorkspaceDir(workerInstanceId: string): string {
 }
 
 export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): object {
+  const workerAgentId = openClawWorkerAgentId(input.workerInstanceId)
+  const workerAgentDir = join(getWorkerWorkspaceDir(input.workerInstanceId), '.openclaw', 'agents', workerAgentId, 'agent')
+  const mentionPatterns = Array.from(
+    new Set([
+      `@${input.workerName}`,
+      input.workerName,
+      input.matrixUserId.split(':')[0],
+      input.matrixUserId,
+    ].filter(Boolean)),
+  )
+
   return {
     gateway: {
       mode: 'local',
@@ -50,8 +62,15 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
         dm: { policy: 'allowlist', allowFrom: input.dmAllowFrom },
         groupPolicy: 'allowlist',
         groupAllowFrom: input.groupAllowFrom,
-        streaming: 'off',
-        blockStreaming: false,
+        groups: {
+          '*': {
+            enabled: true,
+            requireMention: true,
+            autoReply: true,
+          },
+        },
+        streaming: 'partial',
+        blockStreaming: true,
       },
     },
     models: {
@@ -73,6 +92,38 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
         maxConcurrent: input.maxConcurrent,
         subagents: { maxConcurrent: input.maxConcurrent * 2 },
         elevatedDefault: 'full',
+        skipBootstrap: true,
+      },
+      list: [
+        {
+          id: workerAgentId,
+          name: input.workerName,
+          default: true,
+          workspace: '~',
+          agentDir: workerAgentDir,
+          identity: {
+            name: input.workerName,
+          },
+          model: { primary: `agenthub-llm/${input.llmModel}` },
+          groupChat: {
+            mentionPatterns,
+          },
+        },
+      ],
+    },
+    bindings: [
+      {
+        agentId: workerAgentId,
+        match: {
+          channel: 'matrix',
+          accountId: '*',
+        },
+      },
+    ],
+    messages: {
+      groupChat: {
+        visibleReplies: 'automatic',
+        historyLimit: 50,
       },
     },
     tools: {
@@ -83,9 +134,17 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
       dmScope: 'per-channel-peer',
       resetByType: { dm: { mode: 'daily', atHour: 4 }, group: { mode: 'daily', atHour: 4 } },
     },
-    plugins: { load: { paths: [] }, entries: { matrix: { enabled: true } } },
+    plugins: { load: { paths: ['~/skills'] }, entries: { matrix: { enabled: true } } },
     commands: { restart: true },
   }
+}
+
+export function openClawWorkerAgentId(workerInstanceId: string): string {
+  const normalized = workerInstanceId
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return `worker-${(normalized || 'agent').slice(0, 32)}`
 }
 
 export function deployWorkerConfig(input: WorkerOpenClawConfigInput): string {
@@ -154,7 +213,7 @@ function renderTemplate(content: string, input: WorkerOpenClawConfigInput): stri
   return content
     .replace(/\{WORKER_NAME\}/g, input.workerName)
     .replace(/\{MATRIX_DOMAIN\}/g, input.matrixDomain)
-    .replace(/\{COORDINATOR_ID\}/g, `@manager:${input.matrixDomain}`)
+    .replace(/\{COORDINATOR_ID\}/g, input.managerMatrixUserId)
     .replace(/\{ADMIN_ID\}/g, `@admin:${input.matrixDomain}`)
 }
 

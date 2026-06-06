@@ -116,14 +116,16 @@ try {
 // Resident Managers observe rooms via Matrix /sync autonomously.
 // AgentHub does not invoke their step() directly.
 //
-// Controlled by AGENTHUB_AUTO_START_MANAGER env var. When false (default),
-// use infra/start-hiclaw-lite.sh to start Manager/Worker externally.
+// Controlled by AGENTHUB_AUTO_START_MANAGER env var. Defaults to true so the
+// resident Manager is the normal product path. Set it to 'false' only when
+// you intentionally want to connect to an already-running external runtime.
 // When true, Server will launch Manager as a child process on startup.
 //
 // Start after Bun.serve binds so OpenClaw receives the actual controller
 // URL even when the dev server had to move from 8000 to 8001+.
+const residentManagerAutoStartEnabled = Bun.env.AGENTHUB_AUTO_START_MANAGER?.trim().toLowerCase() !== 'false'
 const provider = getActiveManagerProvider()
-if (Bun.env.AGENTHUB_AUTO_START_MANAGER === 'true' && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
+if (residentManagerAutoStartEnabled && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
   const status = await provider.status()
   if ((!status.running || status.error) && !status.endpoint) {
     logger.info({ runtimeType: provider.runtimeType, controllerPort: runtimePort }, 'Starting resident Manager process...')
@@ -145,7 +147,7 @@ if (Bun.env.AGENTHUB_AUTO_START_MANAGER === 'true' && (provider.runtimeType === 
     logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
   }
 } else if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
-  logger.info({ runtimeType: provider.runtimeType, autoStart: Bun.env.AGENTHUB_AUTO_START_MANAGER === 'true' }, 'Resident Manager auto-start is disabled. Use `bash infra/start-hiclaw-lite.sh` to start Manager/Worker externally.')
+  logger.info({ runtimeType: provider.runtimeType, autoStart: residentManagerAutoStartEnabled }, 'Resident Manager auto-start is disabled. Use `bash infra/start-hiclaw-lite.sh` to start Manager/Worker externally.')
 }
 
 let shuttingDown = false

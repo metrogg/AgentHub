@@ -2526,22 +2526,31 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
       ].join(' · ')
     : 'Worker、Room、Run、RuntimeLease、Artifact 的内部资源调和状态'
   const managerRuntimeStatus = managerRuntime
-    ? managerRuntime.activeRuntimeType === 'openclaw'
+    ? managerRuntime.activeStatus.connectionMode === 'external-endpoint'
       ? managerRuntime.activeStatus.running
-        ? 'OpenClaw resident 运行中'
-        : managerRuntime.activeStatus.syncReady
-          ? managerRuntime.activeHealth?.healthy === false
-            ? 'OpenClaw endpoint 异常'
-            : 'OpenClaw step endpoint 可调用'
-          : managerRuntime.activeStatus.available
-            ? 'OpenClaw 已安装，未运行'
-            : 'OpenClaw 未就绪'
+        ? 'OpenClaw 外部 endpoint 已接通'
+        : 'OpenClaw 外部 endpoint 未就绪'
+      : managerRuntime.activeStatus.connectionMode === 'managed-docker'
+        ? managerRuntime.activeStatus.running
+          ? 'OpenClaw Docker resident 运行中'
+          : 'OpenClaw Docker 管理中，未运行'
+        : managerRuntime.activeRuntimeType === 'openclaw'
+          ? managerRuntime.activeStatus.running
+            ? 'OpenClaw resident 运行中'
+            : managerRuntime.activeStatus.syncReady
+              ? managerRuntime.activeHealth?.healthy === false
+                ? 'OpenClaw endpoint 异常'
+                : 'OpenClaw step endpoint 可调用'
+              : managerRuntime.activeStatus.available
+                ? 'OpenClaw 已安装，未运行'
+                : 'OpenClaw 未就绪'
       : managerRuntime.activeRuntimeType === 'qwenpaw'
         ? 'QwenPaw 尚未接入'
         : '开发占位 Manager Runtime'
     : '等待刷新'
   const managerRuntimeDetail = managerRuntime
     ? [
+        `mode=${managerRuntime.activeStatus.connectionMode}`,
         `active=${managerRuntime.activeRuntimeType}`,
         `configured=${managerRuntime.configuredRuntimeType}`,
         managerRuntime.activeStatus.running ? 'mode=resident-matrix' : null,
@@ -3331,35 +3340,49 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                   {managerRuntime.message}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void runManagerRuntimeAction('openclaw', 'start')}
-                  disabled={busy === 'manager-openclaw-start'}
-                  className="settings-soft-button h-8 px-3 text-xs"
-                >
-                  {busy === 'manager-openclaw-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
-                  启动 OpenClaw
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void runManagerRuntimeAction('openclaw', 'health')}
-                  disabled={busy === 'manager-openclaw-health'}
-                  className="settings-soft-button h-8 px-3 text-xs"
-                >
-                  {busy === 'manager-openclaw-health' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                  检查 OpenClaw
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void runManagerRuntimeAction('openclaw', 'stop')}
-                  disabled={busy === 'manager-openclaw-stop'}
-                  className="settings-soft-button h-8 px-3 text-xs"
-                >
-                  {busy === 'manager-openclaw-stop' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                  停止 OpenClaw
-                </button>
-              </div>
+              {managerRuntime.activeStatus.connectionMode === 'external-endpoint' ? (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void runManagerRuntimeAction('openclaw', 'health')}
+                    disabled={busy === 'manager-openclaw-health'}
+                    className="settings-soft-button h-8 px-3 text-xs"
+                  >
+                    {busy === 'manager-openclaw-health' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    检查连接
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void runManagerRuntimeAction('openclaw', 'start')}
+                    disabled={busy === 'manager-openclaw-start'}
+                    className="settings-soft-button h-8 px-3 text-xs"
+                  >
+                    {busy === 'manager-openclaw-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
+                    启动本地 OpenClaw
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runManagerRuntimeAction('openclaw', 'health')}
+                    disabled={busy === 'manager-openclaw-health'}
+                    className="settings-soft-button h-8 px-3 text-xs"
+                  >
+                    {busy === 'manager-openclaw-health' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    检查本地 OpenClaw
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runManagerRuntimeAction('openclaw', 'stop')}
+                    disabled={busy === 'manager-openclaw-stop'}
+                    className="settings-soft-button h-8 px-3 text-xs"
+                  >
+                    {busy === 'manager-openclaw-stop' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                    停止本地 OpenClaw
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -3388,7 +3411,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                 label="step endpoint"
                 value={
                   managerRuntime.activeStatus.stepEndpoint ??
-                  (managerRuntime.activeStatus.running ? 'resident Matrix 模式不需要' : '未配置')
+                  (managerRuntime.activeStatus.running ? 'resident Matrix 模式无需 step endpoint' : '未配置')
                 }
               />
               <InfoRow label="health endpoint" value={managerRuntime.activeStatus.healthEndpoint ?? '未配置'} />
@@ -3403,17 +3426,17 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                 {(settingsManagerRuntimeDiagnostics(managerRuntime).roomBindings as Array<Record<string, unknown>>).slice(0, 8).map((binding, index) => (
                   <div
                     key={`${settingsAsString(binding.providerRoomId) ?? index}`}
-                    className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1.2fr)_auto_auto]"
+                    className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1.4fr)_auto_auto]"
                     style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}
                   >
-                    <div className="min-w-0">
-                      <div className="truncate font-mono font-semibold" style={{ color: 'var(--settings-text)' }} title={settingsAsString(binding.providerRoomId) ?? ''}>
-                        {settingsAsString(binding.title) ?? settingsAsString(binding.providerRoomId) ?? 'Matrix room'}
-                      </div>
-                      <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }}>
-                        {settingsAsString(binding.sessionKey) ?? 'no session key'}
-                      </div>
+                  <div className="min-w-0">
+                    <div className="truncate font-mono font-semibold" style={{ color: 'var(--settings-text)' }} title={settingsAsString(binding.providerRoomId) ?? ''}>
+                      {settingsAsString(binding.title) ?? settingsAsString(binding.providerRoomId) ?? 'Matrix room'}
                     </div>
+                    <div className="mt-1 break-all" style={{ color: 'var(--settings-muted-text)' }}>
+                      {settingsAsString(binding.sessionKey) ?? 'no session key'}
+                    </div>
+                  </div>
                     <span className={cn('inline-flex h-6 items-center rounded-full px-2 font-medium', binding.configured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
                       {binding.configured ? 'configured' : 'missing'}
                     </span>
@@ -3429,13 +3452,13 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               {managerRuntime.providers.map((provider) => (
                 <div
                   key={provider.type}
-                  className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[10rem_6rem_6rem_minmax(0,1fr)]"
+                  className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[8rem_6rem_6rem_minmax(0,1fr)]"
                   style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}
                 >
                   <div className="font-mono font-semibold" style={{ color: 'var(--settings-text)' }}>{provider.type}</div>
                   <div style={{ color: provider.available ? '#047857' : 'var(--settings-muted-text)' }}>{provider.available ? 'available' : 'missing'}</div>
                   <div style={{ color: provider.running ? '#047857' : 'var(--settings-muted-text)' }}>{provider.running ? 'running' : 'stopped'}</div>
-                  <div className="min-w-0 truncate" style={{ color: provider.error ? '#b91c1c' : 'var(--settings-muted-text)' }} title={provider.error ?? ''}>
+                  <div className="min-w-0 break-all" style={{ color: provider.error ? '#b91c1c' : 'var(--settings-muted-text)' }} title={provider.error ?? ''}>
                     {provider.error ?? 'ok'}
                   </div>
                 </div>
@@ -3828,9 +3851,19 @@ function SmallToggle({ checked, onChange }: { checked: boolean; onChange: (value
 function InfoRow({ label, value }: { label: string; value: string }) {
   const { t } = useI18n()
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl px-3 py-2" style={{ background: 'var(--settings-panel-muted)' }}>
-      <span className="text-sm" style={{ color: 'var(--settings-muted-text)' }}>{t(label)}</span>
-      <span className="text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{value}</span>
+    <div
+      className="grid gap-1 rounded-xl px-3 py-2 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4 sm:items-start"
+      style={{ background: 'var(--settings-panel-muted)' }}
+    >
+      <span className="text-sm leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+        {t(label)}
+      </span>
+      <span
+        className="min-w-0 text-sm font-medium leading-5"
+        style={{ color: 'var(--settings-text)', overflowWrap: 'anywhere' }}
+      >
+        {value}
+      </span>
     </div>
   )
 }

@@ -25,6 +25,7 @@ import { registerArtifactBatch } from '../orchestrator/artifact-controller'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { dockerWorkerBackend } from './docker-worker-backend'
 import { localCliWorkerBackend, type WorkerBackend } from './worker-backend'
+import { openclawLauncher } from '../manager-runtime/openclaw-launcher'
 import {
   condition,
   resourceRef,
@@ -461,9 +462,14 @@ export class ControllerApi {
     sandboxPolicy?: string
   }) {
     const requestedWorkerRuntimeBase = normalizeWorkerRuntimeBase(input.runtimeBase ?? input.runtimeType ?? input.codeAgentType)
-    if (requestedWorkerRuntimeBase === 'openclaw' && !workerContainersEnabled()) {
+    const explicitModelId =
+      input.modelId?.trim() ||
+      process.env.AGENTHUB_WORKER_LLM_MODEL?.trim() ||
+      process.env.LLM_MODEL?.trim() ||
+      null
+    if (requestedWorkerRuntimeBase === 'openclaw' && !workerContainersEnabled() && !openclawLauncher.isAvailable()) {
       throw new Error(
-        'OpenClaw Worker requires Docker resident runtime. Enable AGENTHUB_WORKER_BACKEND=docker or AGENTHUB_CONTAINER_RUNTIME=docker before creating this Worker.',
+        'OpenClaw Worker requires a resident backend. Install OpenClaw locally or enable AGENTHUB_WORKER_BACKEND=docker / AGENTHUB_CONTAINER_RUNTIME=docker before creating this Worker.',
       )
     }
 
@@ -476,6 +482,12 @@ export class ControllerApi {
     let agentId: string
     if (existing.length > 0 && existing[0]) {
       agentId = existing[0].id
+      const modelId = explicitModelId || existing[0].modelId?.trim() || null
+      if (!modelId) {
+        throw new Error(
+          'Creating a Worker requires an explicit model binding. Set modelId on the Worker or configure AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL before creation.',
+        )
+      }
       await db
         .update(workspaceAgents)
         .set({
@@ -484,12 +496,17 @@ export class ControllerApi {
           runtimeType: 'code-agent' as any,
           codeAgentType: normalizeCodeAgentType(input.codeAgentType) as any,
           roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
-          modelId: input.modelId ?? existing[0].modelId ?? null,
+          modelId,
           skillIds: input.skillIds ?? existing[0].skillIds ?? [],
           sandboxPolicy: (input.sandboxPolicy as any) || existing[0].sandboxPolicy || 'workspace-write',
         })
         .where(eq(workspaceAgents.id, agentId))
     } else {
+      if (!explicitModelId) {
+        throw new Error(
+          'Creating a Worker requires an explicit model binding. Set modelId on the Worker or configure AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL before creation.',
+        )
+      }
       const codeAgentType = normalizeCodeAgentType(input.codeAgentType)
       const [inserted] = await db
         .insert(workspaceAgents)
@@ -501,7 +518,7 @@ export class ControllerApi {
           runtimeType: 'code-agent' as any,
           codeAgentType: codeAgentType as any,
           roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
-          modelId: input.modelId ?? null,
+          modelId: explicitModelId,
           skillIds: input.skillIds ?? [],
           toolPermissions: [],
           sandboxPolicy: (input.sandboxPolicy as any) || 'workspace-write',
