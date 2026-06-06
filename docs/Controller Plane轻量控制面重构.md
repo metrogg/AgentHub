@@ -52,8 +52,10 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
   - Worker runtime enum 已统一导出给 schema 和 apply 使用，包含 `openclaw / qwenpaw / copaw / opencode / claude-code / codex / gemini`；`copaw` 是 QwenPaw 的兼容 alias。
 - `apps/server/src/services/controller-plane/controller-apply.ts`
   - 提供 `POST /api/controller/apply` 第一版 manifest apply。
-  - 支持 JSON object/list，也支持轻量 YAML manifest；当前可 apply `Worker`、`Room`、`Task`、`Team`、`Human` 五类资源，分别进入 `ControllerApi.createWorker()`、`ControllerApi.createRoom()`、`ControllerApi.assignTask()`、`ControllerApi.createTeam()` 和 `ControllerApi.createHuman()`。
+  - 支持 JSON object/list，也支持轻量 YAML manifest；当前可 apply `Manager`、`Worker`、`Room`、`Task`、`Team`、`Human` 六类资源，分别进入 `ControllerApi.reconcileManager()`、`ControllerApi.createWorker()`、`ControllerApi.createRoom()`、`ControllerApi.assignTask()`、`ControllerApi.createTeam()` 和 `ControllerApi.createHuman()`。
+  - Manager manifest 只负责幂等刷新 Manager 标准合约：`runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / rooms.json / state.json`，不负责启动或停止 resident OpenClaw/QwenPaw 进程。
   - 第一轮严格校验已接入：Worker manifest 必须显式提供 `spec.runtimeBase` 和 `spec.modelId`，runtime base 和 Room kind 必须匹配 Controller schema enum，`skillIds/dependsOn` 必须是字符串数组，`sandboxPolicy` 支持字符串或 `{ mode: ... }` 对象。
+  - Manager manifest 必须使用 `spec.runtimeType=openclaw|qwenpaw`。
   - Team manifest 只引用已有 WorkspaceAgent ids/names，不再隐式创建缺 runtime/model 的 Worker；需要新增成员时必须先 apply Worker manifest。
   - 这一步对齐 HiClaw 的 `hiclaw apply` 心智：Manager skill 或人工可以提交资源声明，由 Controller 负责真实 reconcile，而不是在 skill 里直接调用底层 service。
 - `apps/server/src/services/controller-plane/member-reconciler.ts`
@@ -141,10 +143,10 @@ Manager Runtime 已调整：
 
 - durable resource store：目前 resource shape 是 TypeScript 层投影，真实状态仍主要在现有 SQLite 表中。
 - durable reconcile queue：当前队列是内存队列，服务重启不会保留未处理 request。
-- Controller API HTTP/CLI：HiClaw 有 `hiclaw` CLI 调 controller API；AgentHub 已有 `/api/controller/*` 第一版、`agenthub` CLI、`agenthub.controller-api.v1alpha1` schema 和 Worker/Room/Task/Team/Human manifest apply，但完整 OpenAPI、危险操作 approval 和持久审计还不完整。
+- Controller API HTTP/CLI：HiClaw 有 `hiclaw` CLI 调 controller API；AgentHub 已有 `/api/controller/*` 第一版、`agenthub` CLI、`agenthub.controller-api.v1alpha1` schema 和 Manager/Worker/Room/Task/Team/Human manifest apply，但完整 OpenAPI、危险操作 approval 和持久审计还不完整。
 - ConfigVersionManager / hot reload：Worker 配置更新后还没有统一的 generation bump 和自动 rolling reconcile。
 - Backend 抽象完整实现：当前已有 Local CLI bridge、本地 OpenClaw resident process 和 Docker OpenClaw resident Worker 的第一版；QwenPaw、Docker sandbox、runtime reconfigure、restart/backoff 和 durable health reconcile 还没完整接。
-- Team/Human/Manager 资源 controller：kind 已预留，但第一版只真正接了 Worker/Run/Room/RuntimeLease。
+- Team/Human/Manager 资源 controller：Manager 已接 contract reconcile，Team/Human 已有 create/apply 第一版；Team Leader、权限策略、声明式 lifecycle reconcile 仍未完整实现。
 - 权限和审计策略：Manager tool 调 Controller API 还缺更细的权限校验、dangerous action approval、审计字段。
 
 ## 和 HiClaw 的映射
@@ -154,19 +156,19 @@ Manager Runtime 已调整：
 | CRD / resource | SQLite 表 + `ControllerResource` 投影 |
 | Go Reconciler | TypeScript Controller + `ReconcileQueue` |
 | WorkerBackend | `WorkerBackend` seam + `LocalCliWorkerBackend` |
-| `hiclaw` CLI 调 Controller API | `/api/controller/*` 第一版 + `agenthub` CLI + `agenthub.controller-api.v1alpha1` schema + Worker/Room/Task/Team/Human apply；完整 OpenAPI / audit 仍待补 |
+| `hiclaw` CLI 调 Controller API | `/api/controller/*` 第一版 + `agenthub` CLI + `agenthub.controller-api.v1alpha1` schema + Manager/Worker/Room/Task/Team/Human apply；完整 OpenAPI / audit 仍待补 |
 | Manager skill 调 controller | `manager-runtime/tool-registry.ts -> controllerApi` |
 | Worker/Manager/Team/Human controller | 第一版重点 Worker/Run/Room/RuntimeLease，其他预留 |
 | ConfigVersionManager | 暂缺 |
 
 ## 下一步
 
-1. 继续把 `agenthub.controller-api.v1alpha1` 从轻量 operation schema 收敛到完整 OpenAPI/JSON schema：补错误码、危险操作 approval、审计字段、Manager manifest schema 和更完整的 apply 校验。
+1. 继续把 `agenthub.controller-api.v1alpha1` 从轻量 operation schema 收敛到完整 OpenAPI/JSON schema：补错误码、危险操作 approval、审计字段、Manager runtime lifecycle schema 和更完整的 apply 校验。
 2. 增加 durable reconcile request 表，替代纯内存队列，服务重启后可恢复未完成 request。
 3. 给 `workspace_agents` / `worker_instances` 引入 generation 语义：Agent 配置变化后自动 enqueue Worker reconcile。
 4. 把 `ManagerRuntime` tools 从“字符串工具名 + executor map”进一步收敛到 Controller API schema，方便 OpenClaw/QwenPaw 直接调用；Manager skill 示例已经第一轮迁到 `agenthub schema/apply`，下一步是让 runtime 自动消费 schema，而不是只靠 Markdown 说明。
 5. 实现 `OpenClawWorkerBackend`：resident Worker 通过 Matrix listener 自主接单，而不是 service dispatch 启动。
-6. 补 Team/Human/Manager controller：Human 作为一等 participant，Team Leader 作为可 reconcile 的 Manager/Worker 复合资源。
+6. 补 Team/Human/Manager controller 后续阶段：Human 权限、Team Leader 作为可 reconcile 的 Manager/Worker 复合资源、Manager runtime 进程 lifecycle 和 hot reload。
 7. 把启动恢复、patrol、stale lease recovery 都改成 enqueue reconcile request，而不是各处直接调用 controller 方法。
 
 ## 约束

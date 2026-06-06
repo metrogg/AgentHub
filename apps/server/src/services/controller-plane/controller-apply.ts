@@ -82,6 +82,8 @@ async function applyOne(api: ControllerApi, manifest: NormalizedManifest) {
   switch (manifest.kind) {
     case 'Worker':
       return applyWorkerManifest(api, manifest)
+    case 'Manager':
+      return applyManagerManifest(api, manifest)
     case 'Room':
       return applyRoomManifest(api, manifest)
     case 'Task':
@@ -93,6 +95,25 @@ async function applyOne(api: ControllerApi, manifest: NormalizedManifest) {
     default:
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply does not support kind ${manifest.kind} yet.`)
   }
+}
+
+function applyManagerManifest(api: ControllerApi, manifest: NormalizedManifest) {
+  const runtimeType = stringValue(manifest.spec.runtimeType) ?? 'openclaw'
+  if (runtimeType !== 'openclaw' && runtimeType !== 'qwenpaw') {
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      'Controller apply Manager requires spec.runtimeType to be openclaw or qwenpaw.',
+    )
+  }
+  return api.reconcileManager({
+    managerId: stringValue(manifest.metadata.name ?? manifest.spec.managerId) ?? 'global',
+    runtimeType,
+    controllerUrl: stringValue(manifest.spec.controllerUrl),
+    sharedStorageRoot: stringValue(manifest.spec.sharedStorageRoot),
+    matrixHomeserverUrl: stringValue(manifest.spec.matrixHomeserverUrl),
+    matrixServerName: stringValue(manifest.spec.matrixServerName),
+    reason: 'controller-apply-manager',
+  })
 }
 
 function applyWorkerManifest(api: ControllerApi, manifest: NormalizedManifest) {

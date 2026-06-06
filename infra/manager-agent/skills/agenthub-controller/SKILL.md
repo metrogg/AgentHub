@@ -119,6 +119,14 @@ agenthub team create --workspace <workspace-id> --name delivery-team --leader-na
 agenthub human create --name admin-user --display-name "Admin User" --permission-level 1
 ```
 
+### Manager Contract Reconcile
+
+```bash
+# Refresh Manager SOUL/AGENTS/skills/registries/state/rooms from Controller.
+# This does not start or stop the resident OpenClaw/QwenPaw process.
+agenthub apply -f manager.yaml
+```
+
 ### Workspace State
 
 ```bash
@@ -167,6 +175,10 @@ agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 - Worker runtime bases: `openclaw`, `qwenpaw`, `copaw`, `claude-code`, `opencode`, `codex`, `gemini`.
 - `openclaw` as Manager and `openclaw` as Worker are different role contracts.
 - Bridge-managed CLI Workers still use Matrix room timeline, WorkerInstance, RuntimeLease, SOUL/AGENTS, skills, shared task contract, and ArtifactStore.
+
+## Manager Manifest Rule
+
+`kind: Manager` only reconciles the Manager contract workspace and Controller-backed registries. It does not start, stop, or replace the resident OpenClaw/QwenPaw process; use the Manager Runtime controls for process lifecycle.
 
 ## Member Reconcile Result
 

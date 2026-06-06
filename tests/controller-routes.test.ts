@@ -138,7 +138,7 @@ describe('Controller HTTP API', () => {
     const apply = schema.operations.find((item) => item.id === 'apply.manifest')
     expect(apply?.path).toBe('/api/controller/apply')
     expect(apply?.body?.yaml.required).toBe(false)
-    expect(apply?.body?.yaml.description).toContain('Worker, Room, Task, Team, Human')
+    expect(apply?.body?.yaml.description).toContain('Manager, Worker, Room, Task, Team, Human')
 
     const teamCreate = schema.operations.find((item) => item.id === 'teams.create')
     expect(teamCreate?.path).toBe('/api/controller/teams')
@@ -147,6 +147,10 @@ describe('Controller HTTP API', () => {
     const humanCreate = schema.operations.find((item) => item.id === 'humans.create')
     expect(humanCreate?.path).toBe('/api/controller/humans')
     expect(humanCreate?.body?.permissionLevel?.description).toContain('permission level')
+
+    const managerReconcile = schema.operations.find((item) => item.id === 'managers.reconcile')
+    expect(managerReconcile?.path).toBe('/api/controller/reconcile')
+    expect(managerReconcile?.body?.kind?.enum).toContain('Manager')
   })
 
   test('applies YAML Controller manifests through HTTP API', async () => {

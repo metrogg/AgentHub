@@ -15,6 +15,32 @@ Heartbeat is quiet patrol. It should not spam rooms.
 - Controller Worker runtime diagnostics
 - active runs, tasks, RuntimeLeases, and task rooms
 
+## Commands
+
+```bash
+# Read the current Controller operation schema.
+agenthub schema
+
+# Quiet heartbeat ping.
+agenthub heartbeat --workspace <workspace-id>
+
+# Refresh the Manager contract workspace and registries.
+# This does not start or stop the resident Manager runtime process.
+agenthub apply -f manager.yaml
+```
+
+## Manager Manifest
+
+```yaml
+kind: Manager
+metadata:
+  name: global
+spec:
+  runtimeType: openclaw
+  controllerUrl: <controller-url>
+  matrixServerName: agenthub.local
+```
+
 ## Health Fields
 
 - `lastHeartbeatAt`
@@ -27,7 +53,9 @@ Heartbeat is quiet patrol. It should not spam rooms.
 
 ## Decision Pattern
 
-1. Compare expected rooms and Workers with Controller status.
-2. Detect stale bindings, stale leases, failed runtimes, and waiting approvals.
-3. Use `error-recovery` when action is needed.
-4. Stay quiet when healthy.
+1. `agenthub schema` to inspect `managers.reconcile`, `heartbeat.manager`, and `apply.manifest`.
+2. Compare expected rooms and Workers with Controller status.
+3. Refresh Manager mirrors with `agenthub apply -f manager.yaml` if local registries are stale.
+4. Detect stale bindings, stale leases, failed runtimes, and waiting approvals.
+5. Use `error-recovery` when action is needed.
+6. Stay quiet when healthy.

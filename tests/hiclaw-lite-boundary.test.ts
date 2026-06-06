@@ -184,6 +184,7 @@ describe('HiClaw-lite kernel boundary', () => {
       'project-management',
       'team-management',
       'human-management',
+      'heartbeat',
     ]
 
     for (const skillName of requiredSchemaSkills) {
@@ -202,6 +203,11 @@ describe('HiClaw-lite kernel boundary', () => {
     const channel = readFileSync(join(skillRoot, 'channel-management', 'SKILL.md'), 'utf8')
     expect(channel).toContain('kind: Room')
     expect(channel).toContain('Do not call product UI `/api/rooms` routes directly')
+
+    const heartbeat = readFileSync(join(skillRoot, 'heartbeat', 'SKILL.md'), 'utf8')
+    expect(heartbeat).toContain('kind: Manager')
+    expect(heartbeat).toContain('managers.reconcile')
+    expect(heartbeat).toContain('does not start or stop the resident Manager runtime process')
   })
 
   test('Manager contract generator owns SOUL AGENTS registries and runtime context', () => {

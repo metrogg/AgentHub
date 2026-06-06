@@ -33,7 +33,7 @@ export const CONTROLLER_WORKER_RUNTIME_BASES = ['openclaw', 'qwenpaw', 'copaw', 
 
 export const CONTROLLER_ROOM_KINDS = ['group', 'manager_dm', 'task', 'direct', 'human_intervention']
 
-export const CONTROLLER_APPLY_MANIFEST_KINDS = ['Worker', 'Room', 'Task', 'Team', 'Human']
+export const CONTROLLER_APPLY_MANIFEST_KINDS = ['Manager', 'Worker', 'Room', 'Task', 'Team', 'Human']
 
 export function getControllerApiSchema(): ControllerApiSchemaDocument {
   return CONTROLLER_API_SCHEMA
@@ -75,6 +75,22 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
         joinGroupRoom: field('boolean', false, 'Whether to join the group room.'),
         createDirectSession: field('boolean', false, 'Whether to create a direct room.'),
         announce: field('boolean', false, 'Whether Manager announces the member in room timeline.'),
+      },
+    },
+    {
+      id: 'managers.reconcile',
+      skill: 'heartbeat',
+      method: 'POST',
+      path: '/api/controller/reconcile',
+      summary: 'Reconcile Manager identity and normalized SOUL/AGENTS/Skills/registry/state contract.',
+      danger: 'write',
+      approval: 'not_required',
+      audit: ['kind', 'id', 'runtimeType'],
+      body: {
+        kind: field('string', true, 'Must be Manager.', ['Manager']),
+        id: field('string', true, 'Manager id, usually global.'),
+        workspaceId: field('string', false, 'Optional workspace id.'),
+        payload: field('object', false, 'Optional runtimeType/controllerUrl/sharedStorageRoot/matrix settings.'),
       },
     },
     {
@@ -220,7 +236,7 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       skill: 'project-management',
       method: 'POST',
       path: '/api/controller/apply',
-      summary: 'Apply JSON/YAML Controller manifests. First supported kinds: Worker, Room, Task, Team, Human.',
+      summary: 'Apply JSON/YAML Controller manifests. Supported kinds: Manager, Worker, Room, Task, Team, Human.',
       danger: 'write',
       approval: 'recommended',
       audit: ['kind', 'metadata.name', 'spec.workspaceId'],

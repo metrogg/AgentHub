@@ -18,6 +18,7 @@ import type { RoomKind, TimelineEventType } from '../rooms/types'
 import { roomService } from '../rooms/room-service'
 import { roomController } from '../rooms/room-controller'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
+import { ensureManagerAgentContractFromController } from '../agent-contract'
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import { workerController } from '../orchestrator/worker-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -469,6 +470,16 @@ export class ControllerApi {
 
   async handleReconcileRequest(request: ReconcileRequest): Promise<ReconcileResult> {
     switch (request.ref.kind) {
+      case 'Manager':
+        return this.reconcileManager({
+          managerId: request.ref.id,
+          runtimeType: stringPayload(request.payload, 'runtimeType'),
+          controllerUrl: stringPayload(request.payload, 'controllerUrl'),
+          sharedStorageRoot: stringPayload(request.payload, 'sharedStorageRoot'),
+          matrixHomeserverUrl: stringPayload(request.payload, 'matrixHomeserverUrl'),
+          matrixServerName: stringPayload(request.payload, 'matrixServerName'),
+          reason: request.reason,
+        })
       case 'Worker':
         return this.reconcileWorker({
           workerInstanceId: request.ref.id,
@@ -559,6 +570,82 @@ export class ControllerApi {
     announce?: boolean
   }) {
     return this.memberReconciler.reconcile(input)
+  }
+
+  async reconcileManager(input: {
+    managerId?: string | null
+    runtimeType?: string | null
+    controllerUrl?: string | null
+    sharedStorageRoot?: string | null
+    matrixHomeserverUrl?: string | null
+    matrixServerName?: string | null
+    reason?: string | null
+  }): Promise<ReconcileResult> {
+    const managerId = input.managerId?.trim() || 'global'
+    const runtimeType = input.runtimeType?.trim() || 'openclaw'
+    if (runtimeType !== 'openclaw' && runtimeType !== 'qwenpaw') {
+      throw new Error(`Manager runtimeType must be openclaw or qwenpaw, received ${runtimeType}.`)
+    }
+
+    const identity = await this.ensureManagerMatrixIdentity(managerId)
+    const workspace = await ensureManagerAgentContractFromController({
+      managerId,
+      runtimeType,
+      matrixUserId: identity.userId,
+      controllerUrl: input.controllerUrl ?? process.env.AGENTHUB_CONTROLLER_URL ?? null,
+      sharedStorageRoot: input.sharedStorageRoot ?? process.env.AGENTHUB_SHARED_STORAGE_ROOT ?? null,
+      matrixHomeserverUrl: input.matrixHomeserverUrl ?? process.env.AGENTHUB_MATRIX_HOMESERVER_URL ?? null,
+      matrixServerName: input.matrixServerName ?? process.env.AGENTHUB_MATRIX_SERVER_NAME ?? null,
+      managerState: {
+        reconcileReason: input.reason ?? 'controller-manager-reconcile',
+        desiredRuntimeType: runtimeType,
+        lastControllerReconcileAt: new Date().toISOString(),
+      },
+    })
+
+    return {
+      ref: resourceRef('Manager', managerId),
+      phase: 'manager-contract-synced',
+      changed: true,
+      snapshot: {
+        managerId,
+        runtimeType,
+        matrixIdentity: identity,
+        workspaceRoot: workspace.root,
+        runtimePath: workspace.runtimePath,
+        soulPath: workspace.soulPath,
+        agentsPath: workspace.agentsPath,
+        skillsDir: workspace.skillsDir,
+        workerRegistryPath: workspace.workerRegistryPath,
+        humanRegistryPath: workspace.humanRegistryPath,
+        teamRegistryPath: workspace.teamRegistryPath,
+        statePath: workspace.statePath,
+        roomsPath: workspace.roomsPath,
+      },
+    }
+  }
+
+  private async ensureManagerMatrixIdentity(managerId: string): Promise<{ userId: string | null; identityId: string | null }> {
+    const ownerId = managerId === 'global' ? 'manager' : managerId
+    try {
+      const { createMatrixClientFromEnv } = await import('../rooms/matrix-client')
+      const { MatrixIdentityService } = await import('../rooms/matrix-identity-service')
+      const client = createMatrixClientFromEnv()
+      const identityService = new MatrixIdentityService(client)
+      const identity = await identityService.ensureIdentity({
+        ownerType: 'manager',
+        ownerId,
+        displayName: 'Manager',
+      })
+      return { userId: identity.userId ?? null, identityId: identity.id ?? null }
+    } catch {
+      const [existing] = await db
+        .select()
+        .from(matrixIdentities)
+        .where(and(eq(matrixIdentities.ownerType, 'manager'), eq(matrixIdentities.ownerId, ownerId)))
+        .limit(1)
+      return { userId: existing?.userId ?? null, identityId: existing?.id ?? null }
+    }
   }
 
   async updateWorker(workerInstanceId: string, input: {

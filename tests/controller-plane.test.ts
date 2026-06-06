@@ -1,5 +1,6 @@
 import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
+import { existsSync, readFileSync } from 'node:fs'
 
 const dbApi = await import('../packages/db/src/index')
 const {
@@ -366,6 +367,56 @@ describe('Controller Plane', () => {
     })
   })
 
+  test('controller apply reconciles Manager manifests into normalized contract workspace', async () => {
+    const api = new ControllerApi()
+    const managerId = `apply-manager-${Date.now()}`
+
+    const result = await applyControllerManifest(api, {
+      resource: {
+        kind: 'Manager',
+        metadata: { name: managerId },
+        spec: {
+          runtimeType: 'openclaw',
+          controllerUrl: 'http://127.0.0.1:8000',
+          matrixServerName: 'agenthub.local',
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.applied[0]?.kind).toBe('Manager')
+    expect(result.applied[0]?.result).toMatchObject({
+      phase: 'manager-contract-synced',
+      ref: { kind: 'Manager', id: managerId },
+    })
+    const managerResult = result.applied[0]!.result as { snapshot: Record<string, string> }
+    const snapshot = managerResult.snapshot
+    expect(existsSync(snapshot.runtimePath)).toBe(true)
+    expect(existsSync(snapshot.soulPath)).toBe(true)
+    expect(existsSync(snapshot.agentsPath)).toBe(true)
+    expect(existsSync(snapshot.skillsDir)).toBe(true)
+    const runtime = JSON.parse(readFileSync(snapshot.runtimePath, 'utf8'))
+    expect(runtime.runtimeFamily).toBe('manager')
+    expect(runtime.runtimeType).toBe('openclaw')
+    expect(runtime.controllerUrl).toBe('http://127.0.0.1:8000')
+  })
+
+  test('controller reconcile handles Manager resources through Manager contract sync', async () => {
+    const api = new ControllerApi()
+    const managerId = `reconcile-manager-${Date.now()}`
+
+    const result = await api.handleReconcileRequest({
+      ref: resourceRef('Manager', managerId),
+      reason: 'test-manager-reconcile',
+      requestedAt: new Date().toISOString(),
+      payload: { runtimeType: 'qwenpaw' },
+    })
+
+    expect(result.phase).toBe('manager-contract-synced')
+    expect(result.ref).toMatchObject({ kind: 'Manager', id: managerId })
+    expect(result.snapshot).toMatchObject({ managerId, runtimeType: 'qwenpaw' })
+  })
+
   test('controller API createWorker runs Member Reconcile stages and joins Matrix rooms', async () => {
     const [workspace] = await db
       .insert(workspaces)
@@ -551,6 +602,7 @@ describe('Controller Plane', () => {
 
     expect(diagnostics.apiVersion).toBe('agenthub.dev/v1alpha1')
     expect(diagnostics.mode).toBe('in-process')
+    expect(diagnostics.queue.registeredKinds).toContain('Manager')
     expect(diagnostics.queue.registeredKinds).toContain('Worker')
     expect(diagnostics.queue.registeredKinds).toContain('Room')
     expect(diagnostics.resources.workspaceAgents).toBeGreaterThanOrEqual(0)
