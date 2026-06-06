@@ -100,6 +100,7 @@ export async function confirmControllerApplyApproval(
   api: ControllerApi,
   input: {
     approvalEventId: string
+    expectedRoomId?: string | null
     approvedBy?: string | null
     reason?: string | null
   },
@@ -111,6 +112,9 @@ export async function confirmControllerApplyApproval(
     .limit(1)
   if (!event) {
     throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Controller approval request event not found.')
+  }
+  if (input.expectedRoomId && event.roomId !== input.expectedRoomId) {
+    throw AppError.fromCode(AppErrorCodes.FORBIDDEN, 'Controller approval request does not belong to this Room.')
   }
   const metadata = objectValue(event.metadata)
   if (metadata.kind !== 'controller.apply.approval.requested') {
@@ -157,6 +161,7 @@ export async function confirmControllerApplyApproval(
 
 export async function denyControllerApplyApproval(input: {
   approvalEventId: string
+  expectedRoomId?: string | null
   deniedBy?: string | null
   reason?: string | null
 }): Promise<{ success: true; approvalEventId: string; status: 'denied' }> {
@@ -167,6 +172,9 @@ export async function denyControllerApplyApproval(input: {
     .limit(1)
   if (!event) {
     throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Controller approval request event not found.')
+  }
+  if (input.expectedRoomId && event.roomId !== input.expectedRoomId) {
+    throw AppError.fromCode(AppErrorCodes.FORBIDDEN, 'Controller approval request does not belong to this Room.')
   }
   const metadata = objectValue(event.metadata)
   if (metadata.kind !== 'controller.apply.approval.requested') {

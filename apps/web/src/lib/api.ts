@@ -1909,6 +1909,23 @@ export const api = {
         method: 'POST',
       },
     ),
+  confirmControllerApproval: (roomId: string, eventId: string, reason?: string) =>
+    request<{
+      success: boolean
+      approvalEventId: string
+      applied: Array<{ kind: string; name?: string | null; auditEventId?: string | null; result: unknown }>
+    }>(`/rooms/${roomId}/controller-approvals/${eventId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  denyControllerApproval: (roomId: string, eventId: string, reason?: string) =>
+    request<{ success: boolean; approvalEventId: string; status: 'denied' }>(
+      `/rooms/${roomId}/controller-approvals/${eventId}/deny`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    ),
   getWelcomeQuickPrompts: (seed: string, count = 10) =>
     request<WelcomeQuickPromptsResponse>('/welcome/quick-prompts', {
       method: 'POST',

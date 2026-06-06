@@ -313,6 +313,56 @@ describe('room timeline projection', () => {
     })
   })
 
+  test('projects Controller approval requests as Room-native confirmation messages', () => {
+    const projection = projectRoomTimeline({
+      room: {
+        ...room,
+        kind: 'group',
+        sessionId: 'group-session-1',
+        taskId: null,
+        taskThreadId: null,
+      },
+      participants: [worker],
+      sessionId: 'group-session-1',
+      timeline: [
+        event({
+          id: 'event-controller-approval',
+          type: 'approval.requested',
+          sequence: 1,
+          senderType: 'manager',
+          body: '',
+          metadata: {
+            kind: 'controller.apply.approval.requested',
+            actionType: 'controller_apply',
+            status: 'pending',
+            summary: [
+              {
+                kind: 'Worker',
+                name: 'Builder',
+                operationId: 'workers.create',
+                danger: 'write',
+                approval: 'recommended',
+              },
+            ],
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(1)
+    expect(projection.messages[0]?.id).toBe('room:event-controller-approval')
+    expect(projection.messages[0]?.content).toBe('需要确认 Controller 变更。')
+    expect(projection.messages[0]?.metadata).toMatchObject({
+      kind: 'controller.apply.approval.requested',
+      actionType: 'controller_apply',
+      status: 'pending',
+      roomTimeline: {
+        eventId: 'event-controller-approval',
+        eventType: 'approval.requested',
+      },
+    })
+  })
+
   test('projects dependency waiting and skipped states without pretending the task is running', () => {
     const projection = projectRoomTimeline({
       room,

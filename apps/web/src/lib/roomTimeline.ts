@@ -394,6 +394,9 @@ function visibleBodyForEvent(event: TimelineEvent) {
   if (event.type === 'approval.requested' && event.metadata?.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
   }
+  if (event.type === 'approval.requested' && event.metadata?.kind === 'controller.apply.approval.requested') {
+    return '需要确认 Controller 变更。'
+  }
   if (event.type === 'artifact.created') {
     const artifact = asRecord(event.metadata?.artifact)
     return asString(artifact?.title) ?? asString(event.metadata?.title) ?? '产物已创建'

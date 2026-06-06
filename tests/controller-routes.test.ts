@@ -414,6 +414,46 @@ describe('Controller HTTP API', () => {
       .where(eq(rooms.title, 'Denied HTTP Room'))
       .limit(1)
     expect(deniedRooms).toHaveLength(0)
+
+    const userRouteRequest = await controllerJson<{
+      success: boolean
+      approvalRequested: boolean
+      approvalEventId: string
+      applied: unknown[]
+    }>('/api/controller/apply', token, {
+      method: 'POST',
+      body: {
+        approvalMode: 'request',
+        requestApprovalRoomId: created.room.id,
+        resource: {
+          apiVersion: 'agenthub.dev/v1alpha1',
+          kind: 'Room',
+          metadata: { name: 'User Confirmed Room' },
+          spec: {
+            ownerId: 'default-user',
+            workspaceId: workspace!.id,
+            kind: 'group',
+            title: 'User Confirmed Room',
+          },
+        },
+      },
+    })
+    const userConfirmResponse = await app.request(
+      `/api/rooms/${created.room.id}/controller-approvals/${userRouteRequest.approvalEventId}/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Confirmed from AgentHub UI.' }),
+      },
+    )
+    expect(userConfirmResponse.status).toBe(200)
+    const userConfirmed = await userConfirmResponse.json() as {
+      success: boolean
+      applied: Array<{ result: { title: string }; approval: { approvedBy: string } }>
+    }
+    expect(userConfirmed.success).toBe(true)
+    expect(userConfirmed.applied[0]?.result.title).toBe('User Confirmed Room')
+    expect(userConfirmed.applied[0]?.approval.approvedBy).toBe('default-user')
   })
 
   test('assigns tasks through ControllerApi and writes Matrix mention-first task rooms', async () => {

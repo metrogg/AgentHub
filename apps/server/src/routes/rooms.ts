@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { confirmControllerApplyApproval, controllerApi, denyControllerApplyApproval } from '../services/controller-plane'
 import { roomService } from '../services/rooms'
 import { describeMatrixDiagnostics } from '../services/rooms/matrix-diagnostics'
 import { loadRoomSessionSnapshot } from '../services/rooms/room-session-snapshot'
@@ -53,6 +54,10 @@ const appendEventSchema = z.object({
   body: z.string().max(100_000).optional(),
   metadata: z.record(z.unknown()).optional(),
   providerEventId: z.string().optional(),
+})
+
+const resolveControllerApprovalSchema = z.object({
+  reason: z.string().max(1000).nullable().optional(),
 })
 
 export const roomRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -142,4 +147,28 @@ export const roomRoutes = new Hono<{ Variables: AuthVariables }>()
     const roomId = c.req.param('roomId')
     await roomService.getRoomForOwner(roomId, user.sub)
     return c.json(await roomService.appendTimelineEvent({ roomId, ...c.req.valid('json') }))
+  })
+  .post('/:roomId/controller-approvals/:eventId/confirm', zValidator('json', resolveControllerApprovalSchema), async (c) => {
+    const user = c.get('user')
+    const roomId = c.req.param('roomId')
+    await roomService.getRoomForOwner(roomId, user.sub)
+    const input = c.req.valid('json')
+    return c.json(await confirmControllerApplyApproval(controllerApi, {
+      approvalEventId: c.req.param('eventId'),
+      expectedRoomId: roomId,
+      approvedBy: user.sub,
+      reason: input.reason ?? null,
+    }))
+  })
+  .post('/:roomId/controller-approvals/:eventId/deny', zValidator('json', resolveControllerApprovalSchema), async (c) => {
+    const user = c.get('user')
+    const roomId = c.req.param('roomId')
+    await roomService.getRoomForOwner(roomId, user.sub)
+    const input = c.req.valid('json')
+    return c.json(await denyControllerApplyApproval({
+      approvalEventId: c.req.param('eventId'),
+      expectedRoomId: roomId,
+      deniedBy: user.sub,
+      reason: input.reason ?? null,
+    }))
   })
