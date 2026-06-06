@@ -3756,6 +3756,15 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
     ? worker.matrixParticipants.map((participant) => `${participant.roomKind}:${participant.status}`).join(' / ')
     : 'no rooms'
   const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : 'no heartbeat'
+  const inspection = worker.runtimeInspection
+  const runtimeReady = inspection ? inspection.canExecute : worker.observedState === 'listening'
+  const runtimeStatus = inspection
+    ? inspection.canExecute
+      ? 'runtime ready'
+      : inspection.blockers[0] ?? 'runtime blocked'
+    : worker.mode === 'bridge'
+      ? 'no bridge probe'
+      : participantSummary
   const modeLabel = worker.mode === 'bridge'
     ? 'AgentHub bridge'
     : worker.mode === 'resident-openclaw'
@@ -3775,9 +3784,9 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
         </div>
       </div>
       <div className="min-w-0">
-        <div className="font-mono" style={{ color: 'var(--settings-text)' }}>{worker.runtimeBase}</div>
-        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={modeLabel}>
-          {modeLabel}
+        <div className="font-mono" style={{ color: 'var(--settings-text)' }}>{inspection?.adapterName ?? worker.runtimeBase}</div>
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={`${modeLabel}${inspection?.command ? ` / ${inspection.command}` : ''}`}>
+          {modeLabel}{inspection?.command ? ` / ${inspection.command}` : ''}
         </div>
       </div>
       <div className="min-w-0">
@@ -3793,12 +3802,17 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
           <span className={cn('rounded-full px-2 py-0.5', worker.contractReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
             {worker.contractReady ? 'contract ready' : `missing ${contractMissing.join('/') || 'contract'}`}
           </span>
-          <span className={cn('rounded-full px-2 py-0.5', worker.matrixIdentity.userId ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
-            {worker.matrixIdentity.userId ? worker.listenerManagedBy : 'no matrix id'}
+          <span className={cn('rounded-full px-2 py-0.5', runtimeReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+            {runtimeReady ? 'runtime ready' : 'runtime blocked'}
           </span>
+          {worker.matrixIdentity.userId && (
+            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700">
+              {worker.listenerManagedBy}
+            </span>
+          )}
         </div>
-        <div className="mt-1 truncate" style={{ color: worker.lastError ? '#dc2626' : 'var(--settings-muted-text)' }} title={worker.lastError ?? participantSummary}>
-          {worker.lastError ?? participantSummary}
+        <div className="mt-1 truncate" style={{ color: worker.lastError || !runtimeReady ? '#dc2626' : 'var(--settings-muted-text)' }} title={worker.lastError ?? runtimeStatus}>
+          {worker.lastError ?? runtimeStatus}
         </div>
       </div>
     </div>

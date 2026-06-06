@@ -13,10 +13,13 @@ import {
   workerInstances,
 } from '@agenthub/db'
 import { resolveWorkerAgentContractWorkspace } from '../agent-contract'
+import { buildAgentProfile } from '../agents/profile-builder'
+import { inspectCodeAgentRuntime, type CodeAgentRuntimeInspection } from '../code-agent-adapter'
 import { controllerReconcileQueue } from './controller-reconciler'
 
 export type WorkerRuntimeDiagnosticMode = 'resident-openclaw' | 'resident-qwenpaw' | 'bridge'
 export type WorkerRuntimeListenerOwner = 'runtime' | 'agenthub-supervisor' | 'none'
+type BridgeCodeAgentType = 'codex' | 'claude-code' | 'opencode' | 'gemini'
 
 export interface WorkerRuntimeDiagnostics {
   workerInstanceId: string
@@ -60,6 +63,7 @@ export interface WorkerRuntimeDiagnostics {
     providerUserId: string | null
     status: string
   }>
+  runtimeInspection: CodeAgentRuntimeInspection | null
 }
 
 export interface ControllerPlaneDiagnostics {
@@ -122,7 +126,7 @@ export async function describeControllerPlane(): Promise<ControllerPlaneDiagnost
     db.select().from(rooms),
     db.select().from(matrixIdentities),
   ])
-  const workerRuntimes = describeWorkerRuntimes({
+  const workerRuntimes = await describeWorkerRuntimes({
     workers: workerRuntimeRows,
     agents: agentRows,
     participants: participantRows,
@@ -166,17 +170,17 @@ export async function describeControllerPlane(): Promise<ControllerPlaneDiagnost
   }
 }
 
-function describeWorkerRuntimes(input: {
+async function describeWorkerRuntimes(input: {
   workers: Array<typeof workerInstances.$inferSelect>
   agents: Array<typeof workspaceAgents.$inferSelect>
   participants: Array<typeof roomParticipants.$inferSelect>
   rooms: Array<typeof rooms.$inferSelect>
   matrixIdentities: Array<typeof matrixIdentities.$inferSelect>
-}): WorkerRuntimeDiagnostics[] {
+}): Promise<WorkerRuntimeDiagnostics[]> {
   const agentsById = new Map(input.agents.map((agent) => [agent.id, agent]))
   const roomsById = new Map(input.rooms.map((room) => [room.id, room]))
-  return input.workers
-    .map((worker) => {
+  const rows = await Promise.all(
+    input.workers.map(async (worker) => {
       const agent = agentsById.get(worker.workspaceAgentId)
       const participantRows = input.participants.filter((participant) => participant.workerInstanceId === worker.id)
       const identity = input.matrixIdentities.find((item) => item.ownerType === 'worker' && item.ownerId === worker.id)
@@ -203,6 +207,29 @@ function describeWorkerRuntimes(input: {
         ? (participantRows.length ? 'agenthub-supervisor' : 'none')
         : 'runtime'
       const matrixSync = asRecord(identity?.metadata?.matrixSync)
+      const runtimeInspection = mode === 'bridge' && agent
+        ? await inspectCodeAgentRuntime(
+            buildAgentProfile(
+              {
+                ...agent,
+                codeAgentType: agent.codeAgentType ?? bridgeCodeAgentType(worker.runtimeBase),
+              },
+              contract.root,
+            ),
+            contract.root,
+          ).catch((error) => ({
+            runtimeType: 'code-agent' as const,
+            codeAgentType: bridgeCodeAgentType(worker.runtimeBase) ?? undefined,
+            modelId: worker.modelId,
+            modelLabel: worker.modelId ?? 'unconfigured',
+            installed: false,
+            configured: false,
+            executionEnabled: false,
+            cwdValid: existsSync(contract.root),
+            canExecute: false,
+            blockers: [error instanceof Error ? error.message : String(error)],
+          }))
+        : null
       return {
         workerInstanceId: worker.id,
         workspaceId: worker.workspaceId,
@@ -239,9 +266,11 @@ function describeWorkerRuntimes(input: {
             status: participant.status,
           }
         }),
+        runtimeInspection,
       }
-    })
-    .sort((left, right) => left.agentName.localeCompare(right.agentName))
+    }),
+  )
+  return rows.sort((left, right) => left.agentName.localeCompare(right.agentName))
 }
 
 function readWorkerLastError(health: Record<string, unknown>) {
@@ -258,4 +287,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stringOrNull(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null
+}
+
+function bridgeCodeAgentType(runtimeBase: string): BridgeCodeAgentType | null {
+  if (
+    runtimeBase === 'codex' ||
+    runtimeBase === 'claude-code' ||
+    runtimeBase === 'opencode' ||
+    runtimeBase === 'gemini'
+  ) {
+    return runtimeBase
+  }
+  return null
 }

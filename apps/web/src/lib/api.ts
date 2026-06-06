@@ -709,6 +709,25 @@ export interface WorkerRuntimeDiagnostic {
     providerUserId: string | null
     status: string
   }>
+  runtimeInspection: {
+    runtimeType: 'code-agent'
+    codeAgentType?: string
+    adapterName?: string
+    command?: string
+    modelId?: string | null
+    modelProvider?: string | null
+    modelLabel: string
+    modelSource?: string | null
+    baseUrl?: string | null
+    baseUrlHost?: string | null
+    installed: boolean
+    configured: boolean
+    executionEnabled: boolean
+    cwdValid: boolean
+    canExecute: boolean
+    commandPreview?: string
+    blockers: string[]
+  } | null
 }
 
 export interface ContainerRuntimeDiagnostics {
