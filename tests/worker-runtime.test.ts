@@ -1,5 +1,6 @@
 import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
@@ -8,6 +9,7 @@ const workerRuntimeApi = await import('../apps/server/src/services/worker-runtim
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const workerRuntimeResourcesApi = await import('../apps/server/src/services/orchestrator/worker-runtime-resources')
 const workerProtocolApi = await import('../apps/server/src/services/worker-runtime/worker-result-listener')
+const agentContractApi = await import('../apps/server/src/services/agent-contract')
 
 const {
   artifacts,
@@ -33,6 +35,7 @@ const { WorkerRuntimeService } = workerRuntimeApi
 const { ensureTaskThread } = taskThreadApi
 const { ensureWorkerInstance } = workerRuntimeResourcesApi
 const { handleWorkerProtocolMessage } = workerProtocolApi
+const { resolveWorkerAgentContractWorkspace } = agentContractApi
 type WorkerRuntime = workerRuntimeApi.WorkerRuntime
 type WorkerRuntimeContext = workerRuntimeApi.WorkerRuntimeContext
 type WorkerRuntimeEvent = workerRuntimeApi.WorkerRuntimeEvent
@@ -516,6 +519,17 @@ describe('WorkerRuntime task room integration', () => {
     expect(lease?.status).toBe('released')
     const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, thread.workerInstanceId!)).limit(1)
     expect(worker?.observedState).toBe('idle')
+    const workerContract = resolveWorkerAgentContractWorkspace(thread.workerInstanceId!)
+    const tasksMirror = JSON.parse(readFileSync(workerContract.tasksPath, 'utf8')) as {
+      tasks: Array<{ taskId: string; status?: string | null; runtimeLeaseId?: string | null }>
+    }
+    expect(tasksMirror.tasks).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        status: 'completed',
+        runtimeLeaseId: lease?.id,
+      }),
+    ])
   })
 
   test('resident Worker QUESTION protocol creates clarification and waiting resources', async () => {
@@ -549,6 +563,17 @@ describe('WorkerRuntime task room integration', () => {
     expect(events.some((event) => event.metadata?.kind === 'worker-runtime.clarification-requested')).toBe(true)
     const clarificationRows = await db.select().from(taskClarifications).where(eq(taskClarifications.taskId, task.id))
     expect(clarificationRows.some((row) => row.question === '需要中文还是英文？')).toBe(true)
+    const workerContract = resolveWorkerAgentContractWorkspace(thread.workerInstanceId!)
+    const tasksMirror = JSON.parse(readFileSync(workerContract.tasksPath, 'utf8')) as {
+      tasks: Array<{ taskId: string; status?: string | null; runtimeLeaseId?: string | null }>
+    }
+    expect(tasksMirror.tasks).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        status: 'waiting_for_human',
+        runtimeLeaseId: lease?.id,
+      }),
+    ])
   })
 })
 

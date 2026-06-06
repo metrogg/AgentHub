@@ -12,6 +12,7 @@ import {
   workerInstances,
 } from '@agenthub/db'
 import { logger } from '../../lib/logger'
+import { ensureWorkerAgentContractFromController } from '../agent-contract'
 import { roomService } from '../rooms'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -123,6 +124,7 @@ async function handleTaskCompleted(input: WorkerProtocolInput, summary: string) 
     },
   })
   await markWorkerAfterProtocolResult(context.worker, 'released after worker protocol completion')
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.task-completed')
 
   logger.info({ taskId: context.task.id, summary: summary.slice(0, 100) }, 'Worker reported TASK_COMPLETED')
 }
@@ -151,6 +153,7 @@ async function handleTaskBlocked(input: WorkerProtocolInput, reason: string) {
     },
   })
   await markWorkerAfterProtocolResult(context.worker, 'blocked task reported through Matrix protocol')
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.blocked')
 
   logger.info({ taskId: context.task.id, reason: reason.slice(0, 100) }, 'Worker reported BLOCKED')
 }
@@ -222,6 +225,8 @@ async function handleWorkerQuestion(input: WorkerProtocolInput, question: string
     },
   })
 
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.question')
+
   logger.info({ taskId: context.task.id, question: question.slice(0, 100) }, 'Worker asked QUESTION via protocol')
 }
 
@@ -256,6 +261,7 @@ async function handlePhaseCompleted(input: WorkerProtocolInput, phaseNum: string
   if (context.thread?.id) {
     await updateTaskThreadStatus(context.thread.id, 'active', input.eventId)
   }
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.phase-done')
 
   logger.info({ taskId: context.task.id, phaseNum, summary: summary.slice(0, 100) }, 'Worker reported PHASE_DONE')
 }
@@ -340,6 +346,26 @@ async function markWorkerAfterProtocolResult(
       protocolResultAt: new Date().toISOString(),
       runtimeBase: worker.runtimeBase,
     },
+  })
+}
+
+async function refreshWorkerContractAfterProtocolResult(
+  context: NonNullable<Awaited<ReturnType<typeof resolveTaskRoomContext>>>,
+  source: string,
+) {
+  if (!context.workerInstanceId) return
+  await ensureWorkerAgentContractFromController({
+    workerInstanceId: context.workerInstanceId,
+    controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+    sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+  }).catch((err) => {
+    logger.warn({
+      err,
+      source,
+      workerInstanceId: context.workerInstanceId,
+      taskId: context.task.id,
+      roomId: context.room.id,
+    }, 'Failed to refresh Worker contract after Matrix protocol result')
   })
 }
 
