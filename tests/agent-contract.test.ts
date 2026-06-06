@@ -1,5 +1,5 @@
 import './setup'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
@@ -398,6 +398,7 @@ describe('Agent contract generator', () => {
 
     const state = JSON.parse(readFileSync(ws.statePath, 'utf8')) as {
       reconcile: { contract: string; stages: Array<{ name: string; status: string }> }
+      heartbeat: { lastHeartbeatAt: string | null }
     }
     expect(state.reconcile.contract).toBe('Worker Reconcile 5 stages')
     expect(state.reconcile.stages.map((stage) => stage.name)).toEqual([
@@ -407,6 +408,78 @@ describe('Agent contract generator', () => {
       'ObserveHealthAndHeartbeat',
       'RecoverOrRetire',
     ])
+
+    const roomsAfterIdentityRefresh = JSON.parse(readFileSync(ws.roomsPath, 'utf8')) as {
+      rooms: Array<{ roomId: string; title?: string | null }>
+    }
+    expect(roomsAfterIdentityRefresh.rooms.map((room) => room.roomId)).toEqual(['room-1'])
+
+    const stateWithHeartbeat = {
+      ...state,
+      heartbeat: {
+        ...state.heartbeat,
+        lastHeartbeatAt: '2026-06-07T12:00:00.000Z',
+      },
+    }
+    writeFileSync(ws.statePath, `${JSON.stringify(stateWithHeartbeat, null, 2)}\n`, 'utf8')
+
+    await ensureWorkerAgentContract({
+      workerInstanceId: ws.root.split(/[\\/]/).pop()!,
+      agent: agent!,
+      runtimeBase: 'opencode',
+      matrixUserId: '@contract-worker-updated:agenthub.local',
+      participantId: 'participant-2',
+      currentRooms: [{
+        roomId: 'room-2',
+        roomKind: 'task',
+        providerRoomId: '!task:agenthub.local',
+        participantId: 'participant-2',
+        title: 'Task Room',
+      }],
+      currentTasks: [{
+        taskId: 'task-1',
+        taskThreadId: 'thread-1',
+        runId: 'run-1',
+        roomId: 'room-2',
+        status: 'running',
+        title: 'Implement contract refresh',
+        sharedTaskRelativeRoot: '.agenthub/shared/tasks/task-1',
+        sharedTaskSpecPath: '/tmp/project/.agenthub/shared/tasks/task-1/spec.md',
+        runtimeLeaseId: 'lease-1',
+      }],
+    })
+
+    const refreshedRooms = JSON.parse(readFileSync(ws.roomsPath, 'utf8')) as {
+      source: string
+      workerInstanceId: string
+      rooms: Array<{ roomId: string; roomKind?: string | null }>
+    }
+    expect(refreshedRooms.source).toBe('agenthub-controller')
+    expect(refreshedRooms.workerInstanceId).toBe(ws.root.split(/[\\/]/).pop()!)
+    expect(refreshedRooms.rooms).toEqual([
+      expect.objectContaining({ roomId: 'room-2', roomKind: 'task' }),
+    ])
+
+    const refreshedTasks = JSON.parse(readFileSync(ws.tasksPath, 'utf8')) as {
+      source: string
+      tasks: Array<{ taskId: string; sharedTaskRelativeRoot?: string | null }>
+    }
+    expect(refreshedTasks.source).toBe('agenthub-controller')
+    expect(refreshedTasks.tasks).toEqual([
+      expect.objectContaining({
+        taskId: 'task-1',
+        sharedTaskRelativeRoot: '.agenthub/shared/tasks/task-1',
+      }),
+    ])
+
+    const refreshedState = JSON.parse(readFileSync(ws.statePath, 'utf8')) as {
+      heartbeat: { lastHeartbeatAt: string | null }
+      activeTasks: Array<{ taskId: string }>
+      rooms: { count: number | null }
+    }
+    expect(refreshedState.heartbeat.lastHeartbeatAt).toBe('2026-06-07T12:00:00.000Z')
+    expect(refreshedState.activeTasks).toEqual([expect.objectContaining({ taskId: 'task-1' })])
+    expect(refreshedState.rooms.count).toBe(1)
   })
 
   test('Worker runtime adapter contract records base-specific parity profiles', async () => {
@@ -545,6 +618,17 @@ describe('Agent contract generator', () => {
         participantId: 'participant-bridge',
         title: 'Bridge Task Room',
       },
+      task: {
+        taskId: 'task-bridge',
+        taskThreadId: 'thread-bridge',
+        runId: 'run-bridge',
+        roomId: 'room-bridge',
+        status: 'running',
+        title: 'Bridge contract task',
+        sharedTaskRelativeRoot: '.agenthub/shared/tasks/task-bridge',
+        sharedTaskSpecPath: '/tmp/project/.agenthub/shared/tasks/task-bridge/spec.md',
+        runtimeLeaseId: 'lease-bridge',
+      },
       controllerUrl: 'http://127.0.0.1:8000',
       sharedStorageRoot: '.agenthub/shared',
     })
@@ -553,12 +637,23 @@ describe('Agent contract generator', () => {
     expect(existsSync(join(executionCwd, 'AGENTS.md'))).toBe(true)
     expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'SOUL.md'))).toBe(true)
     expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'profile.json'))).toBe(true)
+    expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'tasks.json'))).toBe(true)
 
     const agentsText = readFileSync(join(executionCwd, 'AGENTS.md'), 'utf8')
     expect(agentsText).toContain('AGENTHUB:BRIDGE-RUNTIME-CONTEXT:START')
     expect(agentsText).toContain('Canonical Worker AGENTS.md')
     expect(agentsText).toContain('Runtime base: opencode')
     expect(agentsText).toContain('Bridge Task Room')
+    const projectedTasks = JSON.parse(
+      readFileSync(join(executionCwd, '.agenthub', 'worker-contract', 'tasks.json'), 'utf8'),
+    ) as { tasks: Array<{ taskId: string; sharedTaskSpecPath?: string | null; runtimeLeaseId?: string | null }> }
+    expect(projectedTasks.tasks).toEqual([
+      expect.objectContaining({
+        taskId: 'task-bridge',
+        sharedTaskSpecPath: '/tmp/project/.agenthub/shared/tasks/task-bridge/spec.md',
+        runtimeLeaseId: 'lease-bridge',
+      }),
+    ])
 
     await projectWorkerContractIntoBridgeCwd({
       workerInstanceId: projection!.contract.root.split(/[\\/]/).pop()!,

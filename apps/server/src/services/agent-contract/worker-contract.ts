@@ -61,6 +61,17 @@ export interface EnsureWorkerAgentContractInput {
     participantId?: string | null
     title?: string | null
   }>
+  currentTasks?: Array<{
+    taskId: string
+    taskThreadId?: string | null
+    runId?: string | null
+    roomId?: string | null
+    status?: string | null
+    title?: string | null
+    sharedTaskRelativeRoot?: string | null
+    sharedTaskSpecPath?: string | null
+    runtimeLeaseId?: string | null
+  }>
 }
 
 export function resolveWorkerAgentContractRoot(): string {
@@ -94,33 +105,94 @@ export async function ensureWorkerAgentContract(
   writeJson(ws.runtimePath, buildRuntime(input, runtimeBase))
   writeIfMissing(ws.soulPath, buildWorkerSoul(input.agent, runtimeBase))
   upsertCollaborationContext(ws.agentsPath, buildWorkerAgents(input.agent), buildCollaborationContext(input, runtimeBase))
-  writeJsonIfMissing(ws.statePath, {
+  const existingState = readJsonIfExists(ws.statePath)
+  writeJson(ws.statePath, buildWorkerState(input, runtimeBase, existingState))
+  if (input.currentRooms !== undefined) {
+    writeJson(ws.roomsPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      workerInstanceId: input.workerInstanceId,
+      rooms: input.currentRooms,
+    })
+  } else {
+    writeJsonIfMissing(ws.roomsPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      workerInstanceId: input.workerInstanceId,
+      rooms: [],
+    })
+  }
+  if (input.currentTasks !== undefined) {
+    writeJson(ws.tasksPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      workerInstanceId: input.workerInstanceId,
+      tasks: input.currentTasks,
+    })
+  } else {
+    writeJsonIfMissing(ws.tasksPath, {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: 'agenthub-controller',
+      workerInstanceId: input.workerInstanceId,
+      tasks: [],
+    })
+  }
+  await syncWorkerSkills(ws.skillsPath, input.agent.skillIds ?? [])
+
+  return ws
+}
+
+function buildWorkerState(
+  input: EnsureWorkerAgentContractInput,
+  runtimeBase: string | null,
+  existing: Record<string, any> | null,
+) {
+  const existingHeartbeat = existing?.heartbeat && typeof existing.heartbeat === 'object'
+    ? existing.heartbeat
+    : {}
+  const existingActiveTasks = Array.isArray(existing?.activeTasks) ? existing.activeTasks : []
+  const activeTasks = input.currentTasks ?? existingActiveTasks
+  return {
     schemaVersion: 1,
-    status: 'created',
-    activeTasks: [],
+    generatedAt: new Date().toISOString(),
+    source: 'agenthub-controller',
+    workerInstanceId: input.workerInstanceId,
+    workspaceAgentId: input.agent.id,
+    status: existing?.status ?? 'created',
+    runtime: {
+      base: runtimeBase ?? 'unconfigured',
+      mode: runtimeModeForBase(runtimeBase),
+      modelId: input.agent.modelId ?? null,
+      configPath: input.runtimeConfigPath ?? null,
+    },
+    identity: {
+      matrixUserId: input.matrixUserId ?? null,
+      participantId: input.participantId ?? null,
+    },
+    rooms: {
+      source: input.currentRooms !== undefined ? 'controller-refresh' : 'preserved-or-empty',
+      count: input.currentRooms?.length ?? null,
+    },
+    activeTasks,
     reconcile: {
       stages: WORKER_RECONCILE_STAGES.map((name) => ({ name, status: 'pending' })),
       currentStage: 'EnsureIdentityAndWorkspace',
       contract: 'Worker Reconcile 5 stages',
     },
     heartbeat: {
-      lastHeartbeatAt: null,
-      lastMatrixSyncAt: null,
-      lastRuntimeReadyAt: null,
-      lastTaskStartedAt: null,
-      lastTaskCompletedAt: null,
-      lastError: null,
-      queueDepth: 0,
+      lastHeartbeatAt: existingHeartbeat.lastHeartbeatAt ?? null,
+      lastMatrixSyncAt: existingHeartbeat.lastMatrixSyncAt ?? null,
+      lastRuntimeReadyAt: existingHeartbeat.lastRuntimeReadyAt ?? null,
+      lastTaskStartedAt: existingHeartbeat.lastTaskStartedAt ?? null,
+      lastTaskCompletedAt: existingHeartbeat.lastTaskCompletedAt ?? null,
+      lastError: existingHeartbeat.lastError ?? null,
+      queueDepth: existingHeartbeat.queueDepth ?? 0,
     },
-  })
-  writeJsonIfMissing(ws.roomsPath, {
-    schemaVersion: 1,
-    rooms: input.currentRooms ?? [],
-  })
-  writeJsonIfMissing(ws.tasksPath, { schemaVersion: 1, tasks: [] })
-  await syncWorkerSkills(ws.skillsPath, input.agent.skillIds ?? [])
-
-  return ws
+  }
 }
 
 function buildProfile(input: EnsureWorkerAgentContractInput, runtimeBase: string | null) {
@@ -580,6 +652,18 @@ function writeIfMissing(path: string, content: string) {
 
 function writeJson(path: string, value: unknown) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
+function readJsonIfExists(path: string): Record<string, any> | null {
+  if (!existsSync(path)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, any>
+      : null
+  } catch {
+    return null
+  }
 }
 
 function writeJsonIfMissing(path: string, value: unknown) {

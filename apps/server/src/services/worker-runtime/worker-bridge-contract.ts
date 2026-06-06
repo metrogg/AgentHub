@@ -32,6 +32,17 @@ export async function projectWorkerContractIntoBridgeCwd(input: {
     participantId?: string | null
     title?: string | null
   } | null
+  task?: {
+    taskId: string
+    taskThreadId?: string | null
+    runId?: string | null
+    roomId?: string | null
+    status?: string | null
+    title?: string | null
+    sharedTaskRelativeRoot?: string | null
+    sharedTaskSpecPath?: string | null
+    runtimeLeaseId?: string | null
+  } | null
   controllerUrl?: string | null
   sharedStorageRoot?: string | null
 }): Promise<WorkerBridgeContractProjection | null> {
@@ -46,6 +57,7 @@ export async function projectWorkerContractIntoBridgeCwd(input: {
     controllerUrl: input.controllerUrl,
     sharedStorageRoot: input.sharedStorageRoot,
     currentRooms: input.room ? [input.room] : undefined,
+    currentTasks: input.task ? [input.task] : undefined,
   })
   const bridgeRoot = join(executionCwd, '.agenthub', 'worker-contract')
   const skillsPath = join(bridgeRoot, 'skills')

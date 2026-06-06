@@ -59,6 +59,19 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
         participantId: context.workerParticipantId ?? null,
         title: context.taskId ?? context.roomId,
       },
+      task: context.taskId
+        ? {
+            taskId: context.taskId,
+            taskThreadId: context.taskThreadId ?? null,
+            runId: context.runId ?? null,
+            roomId: context.roomId,
+            status: 'running',
+            title: context.taskId,
+            sharedTaskRelativeRoot: context.sharedTaskRelativeRoot ?? null,
+            sharedTaskSpecPath: context.sharedTaskSpecPath ?? null,
+            runtimeLeaseId: context.runtimeLeaseId ?? null,
+          }
+        : null,
       controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
       sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
     })

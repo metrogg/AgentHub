@@ -724,6 +724,9 @@ export class WorkerRuntimeService {
           taskId: room.taskId,
           taskThreadId: room.taskThreadId,
           runId: room.runId,
+          sharedTaskRelativeRoot,
+          sharedTaskSpecPath,
+          runtimeLeaseId: lease?.id ?? null,
           prompt,
           history: timeline.map((event) => ({
             senderType: event.senderType,
