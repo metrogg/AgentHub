@@ -49,6 +49,10 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `apps/server/src/services/controller-plane/controller-api-schema.ts`
   - 提供 `agenthub.controller-api.v1alpha1` 机器可读控制面 schema，列出 Manager skill 可调用的 operation、method、path、required fields、runtime enum、danger level、approval 和 audit 字段。
   - `GET /api/controller/schema` 和 `agenthub schema` 已可读取这份 schema；它不是完整 OpenAPI，但已经让 OpenClaw/QwenPaw skill 不必靠散落示例猜路径。
+- `apps/server/src/services/controller-plane/controller-apply.ts`
+  - 提供 `POST /api/controller/apply` 第一版 manifest apply。
+  - 支持 JSON object/list，也支持轻量 YAML manifest；当前可 apply `Worker`、`Room`、`Task` 三类资源，分别进入 `ControllerApi.createWorker()`、`ControllerApi.createRoom()` 和 `ControllerApi.assignTask()`。
+  - 这一步对齐 HiClaw 的 `hiclaw apply` 心智：Manager skill 或人工可以提交资源声明，由 Controller 负责真实 reconcile，而不是在 skill 里直接调用底层 service。
 - `apps/server/src/services/controller-plane/member-reconciler.ts`
   - 新增 HiClaw-lite `Member Reconcile` 第一版。
   - `ControllerApi.createWorker()` 已委托它执行 5 阶段：`ResolveMemberSpec`、`ApplyWorkspaceAgent`、`ApplyWorkerInstance`、`JoinRooms`、`AnnounceAndObserve`。
@@ -95,6 +99,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `/api/controller/*` 第一版已可用：Manager token 鉴权、Room 创建/事件读取/事件写入、通用 reconcile 已有路由级测试覆盖；`agenthub room create/events/mention` 也改为走 `/api/controller/rooms*`，不再绕过控制面。
 - `POST /api/controller/tasks` 已切到 `ControllerApi.assignTask()`：受 Manager token 保护的 HTTP 入口会创建真实 Run / Task / TaskThread / task room / RuntimeLease，并在 task room 生成 Matrix mention-first assignment。测试已覆盖该入口不会停留在路由层 fake message，而是能从 DB 观察到 `workspace_tasks`、`task_threads`、`rooms`、`room_participants` 和 `timeline_events(metadata.matrixExecutionBus=true)`。
 - `GET /api/controller/schema` 已接入：schema 覆盖 Worker 创建、Task 派发、Room 创建/事件/mention、Artifact 注册、资源 reconcile、平台状态、workspace-state 和 heartbeat，并带上 danger/approval/audit 元数据。`agenthub schema` 会读取同一份 schema，供 Manager skills 和人工调试使用。
+- `POST /api/controller/apply` 已不再是 stub：第一版支持 JSON / 轻量 YAML manifest，能创建 Worker、Room 或派发 Task。`agenthub apply -f <file>` 现在会进入这条真实控制面路径；Worker apply 仍遵守显式 runtime base、显式模型和 Member Reconcile 约束。
 
 Manager Runtime 已调整：
 
@@ -119,6 +124,7 @@ Manager Runtime 已调整：
   - 验证 Manager Matrix token 鉴权。
   - 验证 `/api/controller/rooms` 能创建 Room、写入/读取 timeline event，并通过通用 reconcile 观察 Room。
   - 验证 `/api/controller/schema` 暴露 Manager skill 可调用的 schema，并包含 `workers.create / tasks.assign / rooms.mention_worker`。
+  - 验证 `/api/controller/apply` 可以通过 YAML manifest 创建真实 Room。
   - 验证 `/api/controller/tasks` 能通过 `ControllerApi.assignTask()` 创建真实任务资源和 Matrix @mention-first task room。
 
 ## 当前不是完整 HiClaw Controller
@@ -127,7 +133,7 @@ Manager Runtime 已调整：
 
 - durable resource store：目前 resource shape 是 TypeScript 层投影，真实状态仍主要在现有 SQLite 表中。
 - durable reconcile queue：当前队列是内存队列，服务重启不会保留未处理 request。
-- Controller API HTTP/CLI：HiClaw 有 `hiclaw` CLI 调 controller API；AgentHub 已有 `/api/controller/*` 第一版、`agenthub` CLI 和 `agenthub.controller-api.v1alpha1` schema，但完整 OpenAPI、YAML apply、危险操作 approval 和持久审计还不完整。
+- Controller API HTTP/CLI：HiClaw 有 `hiclaw` CLI 调 controller API；AgentHub 已有 `/api/controller/*` 第一版、`agenthub` CLI、`agenthub.controller-api.v1alpha1` schema 和 Worker/Room/Task manifest apply，但完整 OpenAPI、危险操作 approval 和持久审计还不完整。
 - ConfigVersionManager / hot reload：Worker 配置更新后还没有统一的 generation bump 和自动 rolling reconcile。
 - Backend 抽象完整实现：当前已有 Local CLI bridge、本地 OpenClaw resident process 和 Docker OpenClaw resident Worker 的第一版；QwenPaw、Docker sandbox、runtime reconfigure、restart/backoff 和 durable health reconcile 还没完整接。
 - Team/Human/Manager 资源 controller：kind 已预留，但第一版只真正接了 Worker/Run/Room/RuntimeLease。
@@ -140,14 +146,14 @@ Manager Runtime 已调整：
 | CRD / resource | SQLite 表 + `ControllerResource` 投影 |
 | Go Reconciler | TypeScript Controller + `ReconcileQueue` |
 | WorkerBackend | `WorkerBackend` seam + `LocalCliWorkerBackend` |
-| `hiclaw` CLI 调 Controller API | `/api/controller/*` 第一版 + `agenthub` CLI + `agenthub.controller-api.v1alpha1` schema；完整 OpenAPI / YAML apply / audit 仍待补 |
+| `hiclaw` CLI 调 Controller API | `/api/controller/*` 第一版 + `agenthub` CLI + `agenthub.controller-api.v1alpha1` schema + Worker/Room/Task apply；完整 OpenAPI / audit 仍待补 |
 | Manager skill 调 controller | `manager-runtime/tool-registry.ts -> controllerApi` |
 | Worker/Manager/Team/Human controller | 第一版重点 Worker/Run/Room/RuntimeLease，其他预留 |
 | ConfigVersionManager | 暂缺 |
 
 ## 下一步
 
-1. 继续把 `agenthub.controller-api.v1alpha1` 从轻量 operation schema 收敛到完整 OpenAPI/JSON schema：补错误码、危险操作 approval、审计字段和 YAML apply。
+1. 继续把 `agenthub.controller-api.v1alpha1` 从轻量 operation schema 收敛到完整 OpenAPI/JSON schema：补错误码、危险操作 approval、审计字段和更完整的 apply schema 校验。
 2. 增加 durable reconcile request 表，替代纯内存队列，服务重启后可恢复未完成 request。
 3. 给 `workspace_agents` / `worker_instances` 引入 generation 语义：Agent 配置变化后自动 enqueue Worker reconcile。
 4. 把 `ManagerRuntime` tools 从“字符串工具名 + executor map”进一步收敛到 Controller API schema，方便 OpenClaw/QwenPaw 直接调用。

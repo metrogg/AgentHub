@@ -177,6 +177,22 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       },
     },
     {
+      id: 'apply.manifest',
+      skill: 'project-management',
+      method: 'POST',
+      path: '/api/controller/apply',
+      summary: 'Apply JSON/YAML Controller manifests. First supported kinds: Worker, Room, Task.',
+      danger: 'write',
+      approval: 'recommended',
+      audit: ['kind', 'metadata.name', 'spec.workspaceId'],
+      body: {
+        yaml: field('string', false, 'YAML manifest text.'),
+        json: field('string', false, 'JSON manifest text.'),
+        resource: field('object', false, 'Single manifest object.'),
+        resources: field('object[]', false, 'Manifest object list.'),
+      },
+    },
+    {
       id: 'status.platform',
       skill: 'heartbeat',
       method: 'GET',

@@ -133,6 +133,54 @@ describe('Controller HTTP API', () => {
     const mention = schema.operations.find((item) => item.id === 'rooms.mention_worker')
     expect(mention?.path).toBe('/api/controller/rooms/{roomId}/mentions')
     expect(mention?.danger).toBe('write')
+
+    const apply = schema.operations.find((item) => item.id === 'apply.manifest')
+    expect(apply?.path).toBe('/api/controller/apply')
+    expect(apply?.body?.yaml.required).toBe(false)
+  })
+
+  test('applies YAML Controller manifests through HTTP API', async () => {
+    const token = await createManagerToken()
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller Apply Workspace',
+        goal: 'Validate YAML apply',
+      })
+      .returning()
+
+    const applied = await controllerJson<{
+      success: boolean
+      applied: Array<{ kind: string; name: string | null; result: { id: string; title: string } }>
+    }>('/api/controller/apply', token, {
+      method: 'POST',
+      body: {
+        yaml: [
+          'apiVersion: agenthub.dev/v1alpha1',
+          'kind: Room',
+          'metadata:',
+          '  name: Applied Room',
+          'spec:',
+          '  ownerId: default-user',
+          '  workspaceId: ' + workspace!.id,
+          '  kind: group',
+          '  title: Applied Room',
+        ].join('\n'),
+      },
+    })
+
+    expect(applied.success).toBe(true)
+    expect(applied.applied[0]?.kind).toBe('Room')
+    expect(applied.applied[0]?.name).toBe('Applied Room')
+
+    const [room] = await db
+      .select()
+      .from(rooms)
+      .where(eq(rooms.id, applied.applied[0]!.result.id))
+      .limit(1)
+    expect(room?.title).toBe('Applied Room')
+    expect(room?.workspaceId).toBe(workspace!.id)
   })
 
   test('assigns tasks through ControllerApi and writes Matrix mention-first task rooms', async () => {

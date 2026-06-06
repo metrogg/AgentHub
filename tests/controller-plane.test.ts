@@ -18,6 +18,7 @@ const {
 const {
   ControllerApi,
   ReconcileQueue,
+  applyControllerManifest,
   condition,
   controllerReconcileQueue,
   describeControllerPlane,
@@ -167,6 +168,67 @@ describe('Controller Plane', () => {
       modelId: 'test-model',
       role: 'Worker',
     })).rejects.toThrow(/QwenPaw Worker runtime is recognized but its WorkerBackend is not implemented yet/)
+  })
+
+  test('controller apply creates Worker resources from manifest objects', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller Apply Worker Workspace',
+        goal: 'Validate apply worker manifest',
+      })
+      .returning()
+    const api = new ControllerApi({
+      workerBackend: {
+        id: 'apply-test-worker-backend',
+        async ensureRuntime(input) {
+          return { workerInstanceId: input.workerInstanceId, ready: true, state: 'ready' }
+        },
+        async start() {
+          return { started: true }
+        },
+        async stop() {
+          return { stopped: true }
+        },
+        async inspect(workerInstanceId) {
+          return { workerInstanceId, ready: true, state: 'ready' }
+        },
+        async syncConfig(workerInstanceId) {
+          return { synced: true, details: { workerInstanceId } }
+        },
+      },
+    })
+
+    const result = await applyControllerManifest(api, {
+      resource: {
+        apiVersion: 'agenthub.dev/v1alpha1',
+        kind: 'Worker',
+        metadata: { name: 'Applied Worker' },
+        spec: {
+          workspaceId: workspace!.id,
+          runtimeBase: 'opencode',
+          modelId: 'test-model',
+          role: 'Applied Engineer',
+          skillIds: ['task-management'],
+          createDirectSession: false,
+          announce: false,
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.applied).toHaveLength(1)
+    expect(result.applied[0]?.kind).toBe('Worker')
+
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.name, 'Applied Worker'))
+      .limit(1)
+    expect(agent?.workspaceId).toBe(workspace!.id)
+    expect(agent?.roleProfile?.workerRuntimeBase).toBe('opencode')
+    expect(agent?.skillIds).toEqual(['task-management'])
   })
 
   test('controller API createWorker runs Member Reconcile stages and joins Matrix rooms', async () => {

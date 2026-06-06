@@ -3,7 +3,7 @@ import { and, db, eq, matrixIdentities } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
 import { controllerApi } from '../services/controller-plane/controller-api'
-import { controllerReconcileQueue, getControllerApiSchema, resourceRef, type ControllerResourceKind } from '../services/controller-plane'
+import { applyControllerManifest, controllerReconcileQueue, getControllerApiSchema, resourceRef, type ControllerResourceKind } from '../services/controller-plane'
 
 // ─── Auth Middleware ───────────────────────────────────────────────────
 
@@ -406,7 +406,8 @@ controllerRoutes.delete('/humans/:name', async (c) => {
 // ─── Apply ────────────────────────────────────────────────────────────
 
 controllerRoutes.post('/apply', async (c) => {
-  return c.json({ success: false, message: 'YAML apply not yet implemented. Use inline JSON.' })
+  const body = await c.req.json()
+  return c.json(await applyControllerManifest(controllerApi, body))
 })
 
 // ─── Platform Status ──────────────────────────────────────────────────

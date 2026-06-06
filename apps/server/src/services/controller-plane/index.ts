@@ -21,6 +21,11 @@ export {
   type ControllerApiOperationSchema,
   type ControllerApiSchemaDocument,
 } from './controller-api-schema'
+export {
+  applyControllerManifest,
+  type ControllerApplyBody,
+  type ControllerApplyResult,
+} from './controller-apply'
 export { describeControllerPlane, type ControllerPlaneDiagnostics } from './diagnostics'
 export {
   runResidentWorkerSelfTest,
