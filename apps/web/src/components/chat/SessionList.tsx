@@ -690,7 +690,7 @@ export default function SessionList({
           />
           <NavItem
             icon={Code2}
-            label="Coding Tools"
+            label="Agent Runtime"
             active={location.pathname === '/coding-tools'}
             onClick={() => navigate('/coding-tools')}
           />

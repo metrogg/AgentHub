@@ -1,6 +1,6 @@
 import { gt } from 'drizzle-orm'
-import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, sql, timelineEvents } from '@agenthub/db'
-import { MatrixClient, defaultMatrixHomeserverUrl, matrixBool, matrixLocalpart } from './matrix-client'
+import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, sql, timelineEvents, workspaceAgents } from '@agenthub/db'
+import { MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
 import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
 import type {
   AddParticipantInput,
@@ -122,11 +122,14 @@ export class MatrixRoomAdapter implements RoomAdapter {
       role: 'owner',
     })
     if (input.sessionType === 'group') {
+      const managerAgent = input.workspaceId ? await resolveWorkspaceManagerAgent(input.workspaceId) : null
       await this.addParticipant({
         roomId: room.id,
         participantType: 'manager',
-        displayName: 'Manager',
+        workspaceAgentId: managerAgent?.id ?? null,
+        displayName: managerAgent?.name ?? 'Manager',
         role: 'manager',
+        metadata: managerAgent ? managerParticipantMetadata(managerAgent) : { identityKind: 'generic-manager' },
       })
     }
     return room
@@ -171,11 +174,14 @@ export class MatrixRoomAdapter implements RoomAdapter {
       displayName: 'You',
       role: 'owner',
     })
+    const managerAgent = await resolveWorkspaceManagerAgent(input.workspaceId)
     await this.addParticipant({
       roomId: room.id,
       participantType: 'manager',
-      displayName: 'Manager',
+      workspaceAgentId: managerAgent?.id ?? null,
+      displayName: managerAgent?.name ?? 'Manager',
       role: 'manager',
+      metadata: managerAgent ? managerParticipantMetadata(managerAgent) : { identityKind: 'generic-manager' },
     })
     if (input.workerInstanceId) {
       await this.addParticipant({
@@ -636,4 +642,25 @@ function readMatrixMetadata(metadata: Record<string, unknown> | null | undefined
   const matrix = metadata?.matrix
   if (!matrix || typeof matrix !== 'object' || Array.isArray(matrix)) return {}
   return matrix as Record<string, unknown>
+}
+
+async function resolveWorkspaceManagerAgent(workspaceId: string) {
+  const [agent] = await db
+    .select()
+    .from(workspaceAgents)
+    .where(and(eq(workspaceAgents.workspaceId, workspaceId), eq(workspaceAgents.roleType, 'orchestrator')))
+    .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+    .limit(1)
+  return agent ?? null
+}
+
+function managerParticipantMetadata(agent: typeof workspaceAgents.$inferSelect) {
+  return {
+    identityKind: 'workspace-orchestrator-manager',
+    managerAgentId: agent.id,
+    roleType: agent.roleType,
+    managerDisplayRole: agent.role,
+    color: agent.color,
+    avatar: agent.avatar,
+  }
 }

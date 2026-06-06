@@ -125,6 +125,17 @@ type AgentConfigPatch = z.input<typeof createAgentSchema> | z.infer<typeof updat
 
 /** 创建 Agent 时应用运行时默认值 */
 function normalizeAgentCreateDefaults(input: z.infer<typeof createAgentSchema>): z.infer<typeof createAgentSchema> {
+  if (isManagerAgentPatch(input)) {
+    return {
+      ...input,
+      modelId: null,
+      runtimeType: 'code-agent',
+      codeAgentType: null,
+      roleProfile: normalizeManagerRoleProfile(input.roleProfile),
+      sandboxPolicy: 'workspace-write',
+      approvalRequired: false,
+    }
+  }
   if (input.runtimeType === 'code-agent') {
     return {
       ...input,
@@ -140,8 +151,19 @@ function normalizeAgentCreateDefaults(input: z.infer<typeof createAgentSchema>):
 function normalizeAgentUpdateDefaults(
   input: z.infer<typeof updateAgentSchema>,
   currentRuntimeType?: string | null,
+  currentRoleType?: string | null,
 ): z.infer<typeof updateAgentSchema> {
   const result = { ...input }
+  const nextRoleType = input.roleType ?? currentRoleType ?? 'custom'
+  if (nextRoleType === 'orchestrator') {
+    result.modelId = null
+    result.runtimeType = 'code-agent'
+    result.codeAgentType = null
+    result.roleProfile = normalizeManagerRoleProfile(input.roleProfile)
+    result.sandboxPolicy = 'workspace-write'
+    result.approvalRequired = false
+    return result
+  }
   const normalizedCurrentRuntime = 'code-agent'
   const nextRuntimeType = input.runtimeType ?? normalizedCurrentRuntime
   if (!input.runtimeType && currentRuntimeType && currentRuntimeType !== normalizedCurrentRuntime) {
@@ -162,6 +184,18 @@ function normalizeAgentUpdateDefaults(
     }
   }
   return result
+}
+
+function isManagerAgentPatch(input: Pick<z.infer<typeof createAgentSchema>, 'roleType'> | Pick<z.infer<typeof updateAgentSchema>, 'roleType'>) {
+  return input.roleType === 'orchestrator'
+}
+
+function normalizeManagerRoleProfile(value: Record<string, unknown> | null | undefined) {
+  const { workerRuntimeBase: _workerRuntimeBase, ...rest } = value ?? {}
+  return {
+    ...rest,
+    managerRuntimeType: rest.managerRuntimeType === 'qwenpaw' ? 'qwenpaw' : 'openclaw',
+  }
 }
 
 
@@ -880,12 +914,12 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
     const [current] = await db
-      .select({ runtimeType: workspaceAgents.runtimeType })
+      .select({ runtimeType: workspaceAgents.runtimeType, roleType: workspaceAgents.roleType })
       .from(workspaceAgents)
       .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
       .limit(1)
     if (!current) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 涓嶅瓨鍦?')
-    const input = normalizeAgentUpdateDefaults(c.req.valid('json'), current.runtimeType)
+    const input = normalizeAgentUpdateDefaults(c.req.valid('json'), current.runtimeType, current.roleType)
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)

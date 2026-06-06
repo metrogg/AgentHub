@@ -109,10 +109,16 @@ export function identityOwnerFromParticipant(input: {
   workerInstanceId?: string | null
   displayName: string
 }) {
+  if (input.participantType === 'manager') {
+    return {
+      ownerType: 'manager',
+      ownerId: 'manager',
+      displayName: input.displayName,
+    } satisfies MatrixIdentityOwner
+  }
+
   const fallbackOwnerId =
-    input.participantType === 'manager'
-      ? 'manager'
-      : input.participantType === 'system'
+    input.participantType === 'system'
         ? 'system'
         : `${input.participantType}-${matrixLocalpart(input.displayName)}`
   return {

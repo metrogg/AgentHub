@@ -17,6 +17,7 @@ import {
 import type { RoomKind, TimelineEventType } from '../rooms/types'
 import { roomService } from '../rooms/room-service'
 import { roomController } from '../rooms/room-controller'
+import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import { workerController } from '../orchestrator/worker-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -56,11 +57,21 @@ export class ControllerApi {
       id: agent.id,
       runtimeType: agent.runtimeType,
       codeAgentType: agent.codeAgentType,
+      roleProfile: agent.roleProfile,
       modelId: agent.modelId,
       skillIds: agent.skillIds,
       sandboxPolicy: agent.sandboxPolicy,
     })
     if (!workerInstanceId) throw new Error('WorkerInstance was not created.')
+    const runtime = await this.workerBackend.ensureRuntime({
+      workerInstanceId,
+      context: {
+        workspaceId: input.workspaceId,
+      },
+    })
+    if (!runtime.ready) {
+      throw new Error(runtime.message ?? `Worker runtime ${runtime.state ?? 'unknown'} is not ready.`)
+    }
     return this.getWorker(workerInstanceId)
   }
 
@@ -441,6 +452,7 @@ export class ControllerApi {
     workspaceId: string
     name: string
     runtimeType?: string
+    runtimeBase?: string
     codeAgentType?: string
     modelId?: string | null
     skillIds?: string[]
@@ -448,6 +460,13 @@ export class ControllerApi {
     roleType?: string
     sandboxPolicy?: string
   }) {
+    const requestedWorkerRuntimeBase = normalizeWorkerRuntimeBase(input.runtimeBase ?? input.runtimeType ?? input.codeAgentType)
+    if (requestedWorkerRuntimeBase === 'openclaw' && !workerContainersEnabled()) {
+      throw new Error(
+        'OpenClaw Worker requires Docker resident runtime. Enable AGENTHUB_WORKER_BACKEND=docker or AGENTHUB_CONTAINER_RUNTIME=docker before creating this Worker.',
+      )
+    }
+
     const existing = await db
       .select()
       .from(workspaceAgents)
@@ -457,7 +476,21 @@ export class ControllerApi {
     let agentId: string
     if (existing.length > 0 && existing[0]) {
       agentId = existing[0].id
+      await db
+        .update(workspaceAgents)
+        .set({
+          role: (input.role as any) || existing[0].role || 'worker',
+          roleType: (input.roleType as any) || existing[0].roleType,
+          runtimeType: 'code-agent' as any,
+          codeAgentType: normalizeCodeAgentType(input.codeAgentType) as any,
+          roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
+          modelId: input.modelId ?? existing[0].modelId ?? null,
+          skillIds: input.skillIds ?? existing[0].skillIds ?? [],
+          sandboxPolicy: (input.sandboxPolicy as any) || existing[0].sandboxPolicy || 'workspace-write',
+        })
+        .where(eq(workspaceAgents.id, agentId))
     } else {
+      const codeAgentType = normalizeCodeAgentType(input.codeAgentType)
       const [inserted] = await db
         .insert(workspaceAgents)
         .values({
@@ -465,8 +498,9 @@ export class ControllerApi {
           name: input.name,
           role: (input.role as any) || 'worker',
           roleType: (input.roleType as any) || undefined,
-          runtimeType: (input.runtimeType as any) || 'code-agent',
-          codeAgentType: (input.codeAgentType as any) || 'codex',
+          runtimeType: 'code-agent' as any,
+          codeAgentType: codeAgentType as any,
+          roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
           modelId: input.modelId ?? null,
           skillIds: input.skillIds ?? [],
           toolPermissions: [],
@@ -567,8 +601,9 @@ export class ControllerApi {
           role: 'team-leader',
           roleType: 'orchestrator' as any,
           runtimeType: 'code-agent' as any,
-          codeAgentType: 'codex' as any,
-          modelId: input.leaderModel || null,
+          codeAgentType: null,
+          roleProfile: { managerRuntimeType: 'openclaw' },
+          modelId: null,
         }).returning()
         leaderAgentId = inserted?.id ?? null
       }
@@ -593,12 +628,7 @@ export class ControllerApi {
       const { ensureGroupSession } = await import('../workspace/session-manager')
       const session = await ensureGroupSession(input.workspaceId, workspace.ownerId)
       const room = await roomService.ensureRoomForSession(session.id, workspace.ownerId)
-      await roomService.addParticipant({
-        roomId: room.id,
-        participantType: 'manager',
-        displayName: 'Manager',
-        role: 'manager',
-      })
+      await ensureManagerParticipantForRoom(room.id)
       for (const agentId of memberIds) {
         await roomService.addWorkerParticipant(room.id, agentId)
       }
@@ -738,6 +768,30 @@ export class ControllerApi {
 }
 
 export const controllerApi = new ControllerApi()
+
+function normalizeWorkerRuntimeBase(value?: string | null) {
+  if (
+    value === 'openclaw' ||
+    value === 'claude-code' ||
+    value === 'opencode' ||
+    value === 'gemini' ||
+    value === 'codex'
+  ) {
+    return value
+  }
+  return 'codex'
+}
+
+function normalizeCodeAgentType(value?: string | null) {
+  if (value === 'claude-code' || value === 'opencode' || value === 'gemini' || value === 'codex') {
+    return value
+  }
+  return 'codex'
+}
+
+function workerRoleProfileFromRuntime(runtimeBase?: string | null): Record<string, unknown> {
+  return { workerRuntimeBase: normalizeWorkerRuntimeBase(runtimeBase) }
+}
 
 function isReadyWorkerState(state: string): boolean {
   return state === 'ready' || state === 'listening' || state === 'assigned' || state === 'busy' || state === 'idle'

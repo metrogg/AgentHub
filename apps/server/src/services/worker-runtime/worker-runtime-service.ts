@@ -21,6 +21,7 @@ import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
+import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
 import { EphemeralCodeAgentWorkerRuntime } from './local-worker-runtime'
 import { ResidentRoomWorkerRuntime } from './resident-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
@@ -575,7 +576,8 @@ export class WorkerRuntimeService {
       runtime = input.runtime
     } else if (
       workerInstance?.runtimeBase === 'openclaw' ||
-      workerInstance?.runtimeBase === 'copaw'
+      workerInstance?.runtimeBase === 'copaw' ||
+      workerInstance?.runtimeBase === 'qwenpaw'
     ) {
       runtime = new ResidentRoomWorkerRuntime({
         runtimeType: workerInstance.runtimeBase === 'openclaw' ? 'openclaw' : 'qwenpaw',
@@ -874,7 +876,7 @@ export class WorkerRuntimeService {
       }
     }
 
-    const manager = await ensureManagerParticipant(room.id)
+    const manager = await ensureManagerParticipantForRoom(room.id)
     const answer = input.answer.trim()
     const question =
       typeof clarification.metadata?.question === 'string'
@@ -1079,7 +1081,7 @@ export class WorkerRuntimeService {
       }
     }
 
-    const manager = await ensureManagerParticipant(room.id)
+    const manager = await ensureManagerParticipantForRoom(room.id)
     const denialReason = input.reason.trim() || '用户拒绝当前澄清请求。'
     const question =
       typeof clarification.metadata?.question === 'string'
@@ -1357,21 +1359,6 @@ function latestAssignedTaskPrompt(events: Array<{ type: string; body: string; me
 function latestHumanMessageBody(events: Array<{ senderType: string; body: string }>): string | null {
   const human = [...events].reverse().find((event) => event.senderType === 'human')
   return human?.body.trim() || null
-}
-
-async function ensureManagerParticipant(roomId: string) {
-  const participants = await db
-    .select()
-    .from(roomParticipants)
-    .where(eq(roomParticipants.roomId, roomId))
-  const existing = participants.find((participant) => participant.participantType === 'manager')
-  if (existing) return existing
-  return roomService.addParticipant({
-    roomId,
-    participantType: 'manager',
-    displayName: 'Manager',
-    role: 'manager',
-  })
 }
 
 function buildClarificationResumePrompt(input: {

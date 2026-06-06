@@ -569,7 +569,7 @@ export default function CodingToolsPage() {
             </button>
             <span className="text-sm font-semibold">AgentHub</span>
             <span className="text-sm text-neutral-300">/</span>
-            <span className="truncate text-sm text-neutral-500">Coding Tools</span>
+            <span className="truncate text-sm text-neutral-500">Agent Runtime</span>
           </div>
           <div className="flex items-center gap-2">
             <IconButton
@@ -605,7 +605,7 @@ export default function CodingToolsPage() {
                 {t('Agent Runtime 基底诊断')}
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">
-                Coding Tools
+                Agent Runtime
               </h1>
               {executionEnabled !== null && (
                 <div className="mt-3 flex items-center gap-3">
@@ -864,7 +864,7 @@ export default function CodingToolsPage() {
                     <div className="md:col-span-2 rounded-md border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
                       <div className="font-medium text-neutral-800">模型与凭证来源</div>
                       <div className="mt-2 leading-6">
-                        模型管理页只维护模型目录、双端点地址和密钥；Agent 配置页才决定某个专家具体使用哪个 CLI 基底和哪条模型。
+                        模型管理页只维护模型目录、双端点地址和密钥；Agent 配置页才决定某个专家具体使用哪个 Worker 基座和哪条模型。
                       </div>
                       {activeTool.id === 'claude-code' && (
                         <div className="mt-2 text-xs text-neutral-500">
@@ -897,7 +897,7 @@ export default function CodingToolsPage() {
 
                   <div className="mt-5 flex flex-wrap items-center gap-2">
                     <span className="text-sm text-neutral-500">
-                      这里保存的是 CLI 平台自身参数；模型、沙箱与 Skills 请去模型管理和 Agent 配置页设置。
+                      这里保存的是平台自身参数；模型、沙箱与 Skills 请去模型管理和 Agent 配置页设置。
                     </span>
                   </div>
                 </>

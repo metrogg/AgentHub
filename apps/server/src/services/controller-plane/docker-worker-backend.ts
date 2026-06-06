@@ -13,6 +13,8 @@ import { workerController } from '../orchestrator/worker-controller'
 import { deployWorkerConfig, getWorkerWorkspaceDir } from '../worker-runtime/worker-openclaw-config'
 import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-reporter'
 import { resolveLlmRuntimeConfig } from '../llm-client'
+import { createMatrixClientFromEnv } from '../rooms/matrix-client'
+import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import {
   localCliWorkerBackend,
   type WorkerBackend,
@@ -57,11 +59,36 @@ export class DockerWorkerBackend implements WorkerBackend {
       }
     }
 
-    const [identity] = await db
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.id, worker.workspaceAgentId))
+      .limit(1)
+    const workerName = agent?.name ?? worker.id
+
+    let [identity] = await db
       .select()
       .from(matrixIdentities)
       .where(and(eq(matrixIdentities.ownerType, 'worker'), eq(matrixIdentities.ownerId, worker.id)))
       .limit(1)
+    if (!identity?.accessToken || !identity.userId) {
+      try {
+        const client = createMatrixClientFromEnv()
+        const identityService = new MatrixIdentityService(client)
+        identity = await identityService.ensureIdentity({
+          ownerType: 'worker',
+          ownerId: worker.id,
+          displayName: workerName,
+        })
+      } catch (err) {
+        return {
+          workerInstanceId: worker.id,
+          ready: false,
+          state: 'matrix-identity-create-failed',
+          message: `OpenClaw Worker container failed to create Matrix identity: ${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+    }
     if (!identity?.accessToken || !identity.userId) {
       return {
         workerInstanceId: worker.id,
@@ -71,14 +98,8 @@ export class DockerWorkerBackend implements WorkerBackend {
       }
     }
 
-    const [agent] = await db
-      .select()
-      .from(workspaceAgents)
-      .where(eq(workspaceAgents.id, worker.workspaceAgentId))
-      .limit(1)
     const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const gatewayPort = workerGatewayPort(worker.id)
-    const workerName = agent?.name ?? worker.id
     const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
     deployWorkerConfig({
       workerInstanceId: worker.id,

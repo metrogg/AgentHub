@@ -1,6 +1,7 @@
 import { db, eq, roomParticipants, rooms, workspaceAgents } from '@agenthub/db'
 import { roomService } from '../rooms'
-import { getActiveManagerProvider } from './manager-runtime-registry'
+import { ensureManagerParticipantForRoom, resolveRoomManagerAgent } from '../rooms/manager-participant'
+import { getActiveManagerProvider, getManagerProvider } from './manager-runtime-registry'
 import type {
   ManagerAction,
   ManagerActionType,
@@ -62,13 +63,15 @@ export class ManagerRuntimeService {
       limit: input.limit ?? 100,
     })
     const runtime = input.runtime ?? this.defaultRuntime
+    const roomRuntime = input.runtime ? runtime : await resolveManagerRuntimeForRoom(room.id)
+    const activeRuntime = roomRuntime ?? runtime
     const workers = await listRoomWorkerCandidates(room.id)
     const appendedEventIds: string[] = []
 
     let step: ManagerStepResult
     try {
       step = await runManagerRuntimeToCompletion(
-        runtime.step(
+        activeRuntime.step(
           {
             context: {
               roomId: room.id,
@@ -94,17 +97,17 @@ export class ManagerRuntimeService {
           input.signal,
         ),
         async (event) => {
-          const appended = await appendManagerRuntimeEvent(room.id, event, runtime.runtimeType, input.source)
+          const appended = await appendManagerRuntimeEvent(room.id, event, activeRuntime.runtimeType, input.source)
           if (appended) appendedEventIds.push(appended.id)
         },
       )
     } catch (error) {
-      const appended = await appendManagerRuntimeError(room.id, runtime.runtimeType, input.source, error)
+      const appended = await appendManagerRuntimeError(room.id, activeRuntime.runtimeType, input.source, error)
       appendedEventIds.push(appended.id)
       throw error
     }
 
-    const actions = await convertManagerActions(room.id, step.actions, runtime.runtimeType, input.source)
+    const actions = await convertManagerActions(room.id, step.actions, activeRuntime.runtimeType, input.source)
     const allowedActionTypes = input.allowedActionTypes
       ? new Set(input.allowedActionTypes)
       : null
@@ -113,7 +116,7 @@ export class ManagerRuntimeService {
       (!allowedActionTypes || actions.every((action) => allowedActionTypes.has(action.type)))
     if (shouldAppendActions) {
       for (const action of actions) {
-        const event = await appendManagerAction(room.id, action, runtime.runtimeType)
+        const event = await appendManagerAction(room.id, action, activeRuntime.runtimeType)
         if (event) appendedEventIds.push(event.id)
       }
     }
@@ -131,6 +134,21 @@ export class ManagerRuntimeService {
 
 function createDefaultManagerRuntime(): ManagerRuntime {
   return getActiveManagerProvider().createRuntime()
+}
+
+async function resolveManagerRuntimeForRoom(roomId: string): Promise<ManagerRuntime | null> {
+  const managerAgent = await resolveRoomManagerAgent(roomId)
+  const runtimeType = readManagerRuntimeType(managerAgent?.roleProfile)
+  if (!runtimeType) return null
+  const provider = getManagerProvider(runtimeType)
+  return provider?.createRuntime() ?? null
+}
+
+function readManagerRuntimeType(roleProfile: unknown): ManagerRuntimeType | null {
+  if (!roleProfile || typeof roleProfile !== 'object') return null
+  const value = (roleProfile as Record<string, unknown>).managerRuntimeType
+  if (value === 'openclaw' || value === 'qwenpaw') return value
+  return null
 }
 
 async function runManagerRuntimeToCompletion(
@@ -151,7 +169,7 @@ async function appendManagerRuntimeEvent(
   runtimeType: ManagerRuntimeType,
   source: string,
 ) {
-  const managerParticipant = await findParticipant(roomId, { participantType: 'manager' })
+  const managerParticipant = await ensureManagerParticipantForRoom(roomId)
   const metadataBase = {
     kind: `manager-runtime.${event.type}`,
     runtimeType,
@@ -253,7 +271,7 @@ async function appendManagerRuntimeError(
   source: string,
   error: unknown,
 ) {
-  const managerParticipant = await findParticipant(roomId, { participantType: 'manager' })
+  const managerParticipant = await ensureManagerParticipantForRoom(roomId)
   return roomService.appendTimelineEvent({
     roomId,
     senderParticipantId: managerParticipant?.id ?? null,
@@ -306,7 +324,7 @@ async function appendUnsupportedAction(
   runtimeType: ManagerRuntimeType,
   source: string,
 ) {
-  const managerParticipant = await findParticipant(roomId, { participantType: 'manager' })
+  const managerParticipant = await ensureManagerParticipantForRoom(roomId)
   return roomService.appendTimelineEvent({
     roomId,
     senderParticipantId: managerParticipant?.id ?? null,
@@ -327,7 +345,7 @@ async function appendManagerAction(
   action: ManagerAction,
   runtimeType: string,
 ) {
-  const managerParticipant = await findParticipant(roomId, { participantType: 'manager' })
+  const managerParticipant = await ensureManagerParticipantForRoom(roomId)
   if (action.type === 'wait') {
     return roomService.appendTimelineEvent({
       roomId,

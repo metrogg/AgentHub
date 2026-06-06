@@ -343,8 +343,8 @@ async function ensureCodingToolsStartupLifecycle() {
     items,
     message:
       repairedAgents.length || settingsChanged
-        ? 'Coding Tools 启动生命周期已完成自愈。'
-        : 'Coding Tools 启动生命周期已检查，当前无需修复。',
+        ? 'Agent Runtime 启动生命周期已完成自愈。'
+        : 'Agent Runtime 启动生命周期已检查，当前无需修复。',
   }
 }
 

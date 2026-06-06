@@ -1556,13 +1556,13 @@ export interface OrchestratorRunResourceSnapshot {
     workspaceId: string
     workspaceAgentId: string
     runtimeFamily: 'coordinator' | 'worker' 
-    runtimeBase: 'openclaw' | 'copaw' | 'qwenpaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' 
+    runtimeBase: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
     modelId: string | null
     skillIds: string[]
     mcpServerIds: string[]
     sandboxPolicy: 'workspace-write' | 'danger-full-access'
     desiredState: 'running' | 'sleeping' | 'stopped'
-    observedState: 'provisioning' | 'ready' | 'busy' | 'idle' | 'sleeping' | 'stopped' | 'failed'
+    observedState: 'provisioning' | 'ready' | 'listening' | 'assigned' | 'busy' | 'waiting_for_human' | 'resuming' | 'idle' | 'sleeping' | 'stopped' | 'failed'
     health: Record<string, unknown>
     runtimeHome: string | null
     runtimeConfigPath: string | null

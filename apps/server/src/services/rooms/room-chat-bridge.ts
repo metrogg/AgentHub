@@ -2,6 +2,7 @@ import { and, asc, db, eq, roomParticipants, sessions, workspaceAgents } from '@
 import type { MessageRow } from '../agent-runner'
 import type { ManagerRuntime } from '../manager-runtime'
 import { workerController } from '../orchestrator/worker-controller'
+import { ensureManagerParticipantForRoom } from './manager-participant'
 import type { WorkerRuntime } from '../worker-runtime'
 import { roomService } from './room-service'
 
@@ -213,7 +214,7 @@ async function ensureSessionRoomParticipants(input: {
     return
   }
 
-  await ensureManagerParticipant(input.roomId)
+  await ensureManagerParticipantForRoom(input.roomId)
   if (!input.session.workspaceId) return
   const agents = await db
     .select()
@@ -237,6 +238,7 @@ async function ensureWorkerParticipantForAgent(
       id: agent.id,
       runtimeType: agent.runtimeType,
       codeAgentType: agent.codeAgentType ?? 'codex',
+      roleProfile: agent.roleProfile,
       modelId: agent.modelId,
       skillIds: agent.skillIds,
       sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
@@ -252,18 +254,6 @@ async function ensureHumanParticipant(roomId: string, userId: string, userName?:
     userId,
     displayName: userName || 'You',
     role: 'owner',
-  })
-}
-
-async function ensureManagerParticipant(roomId: string) {
-  const participants = await db.select().from(roomParticipants).where(eq(roomParticipants.roomId, roomId))
-  const existing = participants.find((participant) => participant.participantType === 'manager')
-  if (existing) return existing
-  return roomService.addParticipant({
-    roomId,
-    participantType: 'manager',
-    displayName: 'Manager',
-    role: 'manager',
   })
 }
 

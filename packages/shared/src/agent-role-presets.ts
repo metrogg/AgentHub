@@ -32,6 +32,8 @@ export interface AgentRoleProfile {
   qualityGates: string[]
   canUseTools: string[]
   cannotDo: string[]
+  managerRuntimeType?: 'openclaw' | 'qwenpaw' | null
+  workerRuntimeBase?: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
 }
 
 export interface AgentRolePreset {
@@ -41,8 +43,10 @@ export interface AgentRolePreset {
   description: string
   systemPrompt: string
   color: string
-  runtimeType: 'code-agent'
-  codeAgentType?: CodeAgentType | null
+  runtimeType: 'llm' | 'code-agent'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  managerRuntimeType?: 'openclaw' | 'qwenpaw' | null
+  workerRuntimeBase?: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'workspace-write' | 'danger-full-access'
@@ -75,7 +79,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     ].join('\n'),
     color: '#7c3aed',
     runtimeType: 'code-agent',
-    codeAgentType: 'opencode',
+    codeAgentType: null,
+    managerRuntimeType: 'openclaw',
     capabilityTags: ['orchestrate', 'plan', 'dispatch', 'coordinate', 'synthesize'],
     toolPermissions: ['chat', 'workspace:read'],
     sandboxPolicy: 'workspace-write',
@@ -96,6 +101,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
       ],
       canUseTools: ['chat', 'workspace:read'],
       cannotDo: ['绕过用户确认执行高风险操作', '把未验证结果当成已完成'],
+      managerRuntimeType: 'openclaw',
     },
   },
   clarifier: {
@@ -297,7 +303,13 @@ export function rolePresetValues(roleType: Exclude<AgentRoleType, 'custom'>) {
     roleType: preset.roleType,
     description: preset.description,
     systemPrompt: preset.systemPrompt,
-    roleProfile: preset.roleProfile as unknown as Record<string, unknown>,
+    roleProfile: {
+      ...(preset.roleProfile as unknown as Record<string, unknown>),
+      managerRuntimeType: preset.managerRuntimeType ?? preset.roleProfile.managerRuntimeType ?? null,
+      ...(preset.roleType === 'orchestrator'
+        ? {}
+        : { workerRuntimeBase: preset.workerRuntimeBase ?? preset.roleProfile.workerRuntimeBase ?? preset.codeAgentType ?? 'codex' }),
+    },
     color: preset.color,
     runtimeType: preset.runtimeType,
     codeAgentType: preset.codeAgentType ?? null,
