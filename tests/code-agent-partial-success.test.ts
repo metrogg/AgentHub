@@ -66,6 +66,12 @@ describe('code agent partial success handling', () => {
           '@echo off',
           'if "%1"=="--version" echo opencode 1.2.3 & exit /b 0',
           'if "%1"=="doctor" echo doctor ok & exit /b 0',
+          'if "%1"=="--help" (',
+          '  echo Usage: opencode [command] [options]',
+          '  echo Commands: auth login, models, mcp, serve, run, debug, agent, session',
+          '  echo Options: --model ^<provider/model^> --output-format json --print --session-id ^<id^>',
+          '  exit /b 0',
+          ')',
           'echo unknown command %1',
           'exit /b 1',
         ].join('\r\n')
@@ -73,6 +79,12 @@ describe('code agent partial success handling', () => {
           '#!/usr/bin/env sh',
           'if [ "$1" = "--version" ]; then echo "opencode 1.2.3"; exit 0; fi',
           'if [ "$1" = "doctor" ]; then echo "doctor ok"; exit 0; fi',
+          'if [ "$1" = "--help" ]; then',
+          '  echo "Usage: opencode [command] [options]"',
+          '  echo "Commands: auth login, models, mcp, serve, run, debug, agent, session"',
+          '  echo "Options: --model <provider/model> --output-format json --print --session-id <id>"',
+          '  exit 0',
+          'fi',
           'echo "unknown command $1"',
           'exit 1',
         ].join('\n')
@@ -81,6 +93,7 @@ describe('code agent partial success handling', () => {
 
     const nativeProbe = await __codeAgentAdapterTestHooks.probeCodeAgentNativeCli(commandPath)
     const doctorProbe = await __codeAgentAdapterTestHooks.probeCodeAgentDoctorCli('opencode', commandPath)
+    const capabilityProbe = await __codeAgentAdapterTestHooks.probeCodeAgentCapabilityCli('opencode', commandPath)
 
     expect(nativeProbe.ok).toBe(true)
     expect(nativeProbe.version).toBe('1.2.3')
@@ -90,6 +103,20 @@ describe('code agent partial success handling', () => {
       ok: true,
     })
     expect(doctorProbe.output).toContain('doctor ok')
+    expect(capabilityProbe.ok).toBe(true)
+    expect(capabilityProbe.detected).toEqual(
+      expect.arrayContaining([
+        'auth',
+        'models',
+        'mcp',
+        'server',
+        'nonInteractive',
+        'jsonOutput',
+        'sessionResume',
+        'agents',
+        'doctor',
+      ]),
+    )
   })
 
   test('explains OpenCode provider/model lookup failures precisely', async () => {

@@ -741,6 +741,10 @@ describe('Controller Plane', () => {
       expect(workerRuntime.runtimeInspection.doctorProbe).toBeTruthy()
       expect(typeof workerRuntime.runtimeInspection.doctorProbe?.supported).toBe('boolean')
       expect(typeof workerRuntime.runtimeInspection.doctorProbe?.ok).toBe('boolean')
+      expect(workerRuntime.runtimeInspection.capabilityProbe).toBeTruthy()
+      expect(Array.isArray(workerRuntime.runtimeInspection.capabilityProbe?.detected)).toBe(true)
+      expect(typeof workerRuntime.runtimeInspection.capabilityProbe?.capabilities.auth).toBe('boolean')
+      expect(workerRuntime.runtimeHealth.details?.capabilityProbe).toBeTruthy()
     }
   })
 

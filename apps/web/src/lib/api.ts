@@ -745,6 +745,27 @@ export interface WorkerRuntimeDiagnostic {
       timedOut: boolean
       output: string
     }
+    capabilityProbe?: {
+      command: string
+      args: string[]
+      ok: boolean
+      exitCode: number | null
+      timedOut: boolean
+      output: string
+      detected: string[]
+      capabilities: {
+        auth: boolean
+        models: boolean
+        mcp: boolean
+        server: boolean
+        nonInteractive: boolean
+        jsonOutput: boolean
+        sessionResume: boolean
+        agents: boolean
+        project: boolean
+        doctor: boolean
+      }
+    }
     blockers: string[]
   } | null
   runtimeHealth: {

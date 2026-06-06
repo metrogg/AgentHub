@@ -3801,6 +3801,10 @@ function WorkerRuntimeDiagnosticRow({
   const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : 'no heartbeat'
   const inspection = worker.runtimeInspection
   const doctorProbe = inspection?.doctorProbe
+  const capabilityProbe = inspection?.capabilityProbe
+  const capabilitySummary = capabilityProbe?.detected?.length
+    ? capabilityProbe.detected.slice(0, 5).join(' / ')
+    : null
   const runtimeHealth = worker.runtimeHealth
   const runtimeReady = runtimeHealth.ready
   const runtimeStatus = runtimeHealth.message
@@ -3815,6 +3819,7 @@ function WorkerRuntimeDiagnosticRow({
     runtimeHealth.state,
     inspection?.nativeProbe?.command ?? inspection?.command,
     doctorProbe ? `${doctorProbe.kind}:${doctorProbe.supported ? (doctorProbe.ok ? 'ok' : 'failed') : 'unsupported'}` : null,
+    capabilitySummary ? `cap:${capabilitySummary}` : null,
     worker.mode === 'bridge' ? null : participantSummary,
   ].filter(Boolean).join(' / ')
   return (
@@ -3863,6 +3868,14 @@ function WorkerRuntimeDiagnosticRow({
               title={`${doctorProbe.command}${doctorProbe.output ? `\n${doctorProbe.output}` : ''}`}
             >
               {doctorProbe.kind} {doctorProbe.supported ? (doctorProbe.ok ? 'ok' : 'failed') : 'unsupported'}
+            </span>
+          )}
+          {capabilityProbe && (
+            <span
+              className={cn('rounded-full px-2 py-0.5', capabilityProbe.detected.length ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-600')}
+              title={`${capabilityProbe.command}${capabilityProbe.detected.length ? `\n${capabilityProbe.detected.join(', ')}` : ''}${capabilityProbe.output ? `\n\n${capabilityProbe.output}` : ''}`}
+            >
+              caps {capabilityProbe.detected.length ? capabilityProbe.detected.slice(0, 3).join('/') : 'unknown'}
             </span>
           )}
         </div>

@@ -137,6 +137,27 @@ export interface CodeAgentRuntimeInspection {
     timedOut: boolean
     output: string
   }
+  capabilityProbe?: {
+    command: string
+    args: string[]
+    ok: boolean
+    exitCode: number | null
+    timedOut: boolean
+    output: string
+    detected: string[]
+    capabilities: {
+      auth: boolean
+      models: boolean
+      mcp: boolean
+      server: boolean
+      nonInteractive: boolean
+      jsonOutput: boolean
+      sessionResume: boolean
+      agents: boolean
+      project: boolean
+      doctor: boolean
+    }
+  }
   blockers: string[]
 }
 
@@ -315,6 +336,7 @@ export const __codeAgentAdapterTestHooks = {
   buildCodeAgentPrompt,
   probeCodeAgentNativeCli,
   probeCodeAgentDoctorCli,
+  probeCodeAgentCapabilityCli,
   friendlyCodeAgentError: (output: string, displayName = 'Worker 基座') =>
     friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
@@ -368,12 +390,13 @@ export async function inspectCodeAgentRuntime(
   }
 
   const installed = await isCommandInstalled(adapter.command)
-  const [nativeProbe, doctorProbe] = installed
+  const [nativeProbe, doctorProbe, capabilityProbe] = installed
     ? await Promise.all([
         probeCodeAgentNativeCli(adapter.command),
         probeCodeAgentDoctorCli(type, adapter.command),
+        probeCodeAgentCapabilityCli(type, adapter.command),
       ])
-    : [null, null]
+    : [null, null, null]
   const configured = await isRuntimeConfigured(type, adapter, modelTarget?.modelId ?? requestedModelId, modelTarget)
   const executionEnabled = await getBooleanSetting(
     'AGENTHUB_ENABLE_CODE_AGENT_EXECUTION',
@@ -415,6 +438,7 @@ export async function inspectCodeAgentRuntime(
     commandPreview: previewCommand(adapter, cwd ?? profile.projectPath ?? undefined, profile.sandboxPolicy, modelTarget),
     nativeProbe: nativeProbe ?? undefined,
     doctorProbe: doctorProbe ?? undefined,
+    capabilityProbe: capabilityProbe ?? undefined,
     blockers,
   }
 }
@@ -1119,6 +1143,65 @@ async function probeCodeAgentDoctorCli(
   }
 }
 
+async function probeCodeAgentCapabilityCli(
+  type: CodeAgentType,
+  command: string,
+): Promise<NonNullable<CodeAgentRuntimeInspection['capabilityProbe']>> {
+  const args = ['--help']
+  const displayCommand = formatCommand(command, args)
+  const timeoutMs = Number(process.env.AGENTHUB_CODE_AGENT_CAPABILITY_PROBE_TIMEOUT_MS || '1200')
+  let timedOut = false
+  let proc: ReturnType<typeof Bun.spawn> | null = null
+  try {
+    proc = Bun.spawn(buildRuntimeCommand(command, args), {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    })
+    const timer = setTimeout(() => {
+      timedOut = true
+      try {
+        proc?.kill()
+      } catch {
+        // Best-effort; the probe is intentionally non-critical.
+      }
+    }, timeoutMs)
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited.catch(() => 1),
+      readBunSpawnOutput(proc.stdout).catch(() => ''),
+      readBunSpawnOutput(proc.stderr).catch(() => ''),
+    ])
+    clearTimeout(timer)
+    const output = limitOutput([stdout, stderr].filter(Boolean).join('\n').trim(), 2400)
+    const capabilities = parseCodeAgentCliCapabilities(type, output)
+    return {
+      command: displayCommand,
+      args,
+      ok: exitCode === 0 && !timedOut,
+      exitCode,
+      timedOut,
+      output,
+      detected: Object.entries(capabilities)
+        .filter(([, enabled]) => enabled)
+        .map(([name]) => name),
+      capabilities,
+    }
+  } catch (error) {
+    const output = error instanceof Error ? error.message : String(error)
+    const capabilities = parseCodeAgentCliCapabilities(type, output)
+    return {
+      command: displayCommand,
+      args,
+      ok: false,
+      exitCode: null,
+      timedOut,
+      output,
+      detected: [],
+      capabilities,
+    }
+  }
+}
+
 async function readBunSpawnOutput(stream: unknown) {
   if (!stream || typeof stream === 'number') return ''
   return await new Response(stream as ReadableStream<Uint8Array>).text()
@@ -1143,6 +1226,22 @@ function doctorProbeSpec(type: CodeAgentType): { kind: 'doctor' | 'test' | 'help
 function looksLikeUnsupportedDoctorCommand(output: string, exitCode: number | null) {
   if (exitCode === 0) return false
   return /unknown command|unrecognized (?:command|subcommand|option)|invalid (?:choice|command)|no such command|not a recognized command|did you mean|unknown option/i.test(output)
+}
+
+function parseCodeAgentCliCapabilities(type: CodeAgentType, output: string) {
+  const text = output.toLowerCase()
+  return {
+    auth: /\bauth\b|\bproviders?\b|setup-token|login|credential/.test(text),
+    models: /\bmodels?\b|--model\b|\bprovider\/model\b/.test(text),
+    mcp: /\bmcp\b|--mcp/.test(text),
+    server: /\bserve\b|\bserver\b|\bacp\b|remote-control/.test(text),
+    nonInteractive: /--print\b|\brun\b|exec\b|--prompt\b|\b-p, --print\b/.test(text),
+    jsonOutput: /json|stream-json|--output-format/.test(text),
+    sessionResume: /--continue\b|--resume\b|--session\b|\bsession\b/.test(text),
+    agents: /\bagents?\b|--agent\b/.test(text),
+    project: /\bproject\b|--worktree\b|--add-dir\b|workspace/.test(text),
+    doctor: /\bdoctor\b|\bdebug\b|diagnos/.test(text) || (type === 'opencode' && /\bdebug\b/.test(text)),
+  }
 }
 
 function parseNativeProbeVersion(output: string) {

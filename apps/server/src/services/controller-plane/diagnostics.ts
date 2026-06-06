@@ -355,6 +355,7 @@ function buildRuntimeHealth(input: {
         command: input.runtimeInspection.command ?? null,
         nativeProbe: input.runtimeInspection.nativeProbe ?? null,
         doctorProbe: input.runtimeInspection.doctorProbe ?? null,
+        capabilityProbe: input.runtimeInspection.capabilityProbe ?? null,
         modelId: input.runtimeInspection.modelId ?? null,
       },
     }
