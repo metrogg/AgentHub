@@ -300,6 +300,32 @@ describe('Controller Plane', () => {
   })
 
   test('controller plane diagnostics expose resource counts and ownership boundaries', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller Diagnostics Workspace',
+        goal: 'Validate worker runtime diagnostics',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Diagnostics Worker',
+        role: 'Worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        roleProfile: { workerRuntimeBase: 'opencode' },
+      })
+      .returning()
+    const api = new ControllerApi()
+    const resource = await api.applyWorker({
+      workspaceId: workspace!.id,
+      workspaceAgentId: agent!.id,
+    })
+
     const diagnostics = await describeControllerPlane()
 
     expect(diagnostics.apiVersion).toBe('agenthub.dev/v1alpha1')
@@ -312,5 +338,13 @@ describe('Controller Plane', () => {
     expect(diagnostics.boundaries.controllerOwns.join(' ')).toContain('Room')
     expect(diagnostics.boundaries.managerOwns.join(' ')).toContain('assign work')
     expect(diagnostics.boundaries.uiReadsFrom.join(' ')).toContain('Matrix Room timeline')
+    const workerRuntime = diagnostics.workerRuntimes.find((item) => item.workerInstanceId === resource?.metadata.id)
+    expect(workerRuntime?.agentName).toBe('Diagnostics Worker')
+    expect(workerRuntime?.runtimeBase).toBe('opencode')
+    expect(workerRuntime?.mode).toBe('bridge')
+    expect(workerRuntime?.contractReady).toBe(true)
+    expect(workerRuntime?.contractFiles.soul).toBe(true)
+    expect(workerRuntime?.contractFiles.agents).toBe(true)
+    expect(workerRuntime?.listenerManagedBy).toBe('none')
   })
 })

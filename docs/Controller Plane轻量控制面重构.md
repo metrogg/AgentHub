@@ -48,14 +48,15 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
   - 注册默认 `controllerReconcileQueue`。
   - 已接 `Worker / Run / Room / RuntimeLease` 到 `ControllerApi.handleReconcileRequest()`。
 - `apps/server/src/services/controller-plane/diagnostics.ts`
-  - 提供 `describeControllerPlane()`，聚合 Controller Plane API version、队列状态、资源计数和职责边界。
+  - 提供 `describeControllerPlane()`，聚合 Controller Plane API version、队列状态、资源计数、职责边界和 Worker runtime 明细。
+  - `workerRuntimes[]` 会逐个暴露 WorkerInstance 的 runtime mode（resident OpenClaw / resident QwenPaw / bridge）、runtime base、observed/desired state、Matrix identity、Room participant、listener owner、heartbeat、last error 和标准 contract 文件完整性。
   - 该接口只描述 AgentHub 内部资源调和层，不做 Manager 智能决策，也不读取或暴露敏感 token。
 
 运行与诊断入口：
 
 - 服务启动时 `apps/server/src/index.ts` 会启动 `controllerReconcileQueue`，并记录队列状态。
 - 后端暴露 `GET /api/settings/controller-plane/status`，返回 `describeControllerPlane()`。
-- 设置页已经展示 `Controller Plane` 诊断卡，显示队列是否运行、注册的 resource kinds、Worker/Room/Run/RuntimeLease/Artifact 等资源计数。
+- 设置页已经展示 `Controller Plane` 诊断卡，显示队列是否运行、注册的 resource kinds、Worker/Room/Run/RuntimeLease/Artifact 等资源计数，并展示每个 Worker 的 resident/bridge 模式、Matrix listener owner、contract ready/missing、heartbeat 和错误状态。
 
 2026-06-07 现场补充：
 
@@ -72,6 +73,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - OpenCode / Claude Code / Codex / Gemini 当前仍是 AgentHub-managed Worker bridge；OpenClaw Worker 是 resident Worker 目标形态，需要独立 Matrix identity、room membership、openclaw config 和长期 gateway/listener。
 - 新增 `apps/server/src/services/agent-contract/`：Manager 和 Worker 的 SOUL/AGENTS/Skills/registry/state 生成逻辑归口到这里。Manager contract 会生成 `runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / state.json / rooms.json / logs`，并镜像到 OpenClaw `agentDir`；`manager-runtime/manager-config.ts` 只保留兼容外壳。
 - 新增 bridge contract projection：`EphemeralCodeAgentWorkerRuntime` 在调用 OpenCode / Claude Code / Codex / Gemini CLI 前，会把标准 Worker contract 投影到本次执行 cwd 的 `AGENTS.md` 和 `.agenthub/worker-contract/`，让 bridge Worker 和 resident Worker 共享 SOUL/AGENTS/Skills/registry/state 语义。
+- Controller Plane 诊断已补上 Worker runtime 明细：设置页现在可以直接看出某个 Worker 是 `resident-openclaw`、`resident-qwenpaw` 还是 `bridge`，是否拥有 Matrix identity/participant，SOUL/AGENTS/skills/state/rooms/tasks 是否齐全，以及最近 heartbeat/error。
 
 Manager Runtime 已调整：
 
@@ -88,7 +90,7 @@ Manager Runtime 已调整：
   - 验证 `createWorker()` 走 Member Reconcile 5 阶段，并能加入 group/direct room、写入 Manager announcement。
   - 验证 Manager Runtime `create_worker` action 会真正创建 Worker、加入当前 group room，并写入 applied 阶段结果。
   - 验证默认 reconcile queue 能 dispatch Worker request。
-  - 验证 `describeControllerPlane()` 返回控制面边界和资源计数。
+  - 验证 `describeControllerPlane()` 返回控制面边界、资源计数和 Worker runtime 明细，并检查标准 Worker contract 文件已生成。
 - `tests/manager-runtime.test.ts`
   - 验证 Manager tools 仍可执行。
 

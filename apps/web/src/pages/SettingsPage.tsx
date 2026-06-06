@@ -2520,6 +2520,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         controllerPlane.mode,
         `kinds=${controllerPlane.queue.registeredKinds.join('/') || 'none'}`,
         `workers=${controllerPlane.resources.workerInstances}`,
+        `runtimeDetails=${controllerPlane.workerRuntimes.length}`,
         `rooms=${controllerPlane.resources.rooms}`,
         `runs=${controllerPlane.resources.runs}`,
         `leases=${controllerPlane.resources.runtimeLeases}`,
@@ -3666,6 +3667,31 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               <InfoRow label="threads / leases" value={`${controllerPlane.resources.taskThreads} / ${controllerPlane.resources.runtimeLeases}`} />
             </div>
 
+            <div className="mt-4 rounded-xl border px-3 py-3" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--settings-text)' }}>Worker Runtime 状态</div>
+                  <div className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                    对齐 HiClaw-lite：每个 Worker 都要有 runtime base、Matrix 身份、Room participant、SOUL/AGENTS/Skills contract 和 heartbeat。
+                  </div>
+                </div>
+                <span className="rounded-full px-2 py-1 text-xs" style={{ background: 'var(--settings-panel-muted)', color: 'var(--settings-muted-text)' }}>
+                  {controllerPlane.workerRuntimes.length} workers
+                </span>
+              </div>
+              {controllerPlane.workerRuntimes.length === 0 ? (
+                <div className="rounded-xl border px-3 py-6 text-center text-xs" style={{ borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
+                  还没有 WorkerInstance。通过添加 Worker、Manager 补员或任务分配创建后，这里会显示 resident / bridge、Matrix listener 和 contract 状态。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {controllerPlane.workerRuntimes.slice(0, 12).map((worker) => (
+                    <WorkerRuntimeDiagnosticRow key={worker.workerInstanceId} worker={worker} />
+                  ))}
+                </div>
+              )}
+            </div>
+
             {controllerPlane.queue.pendingKeys.length > 0 && (
               <div className="mt-4 rounded-xl border px-3 py-2" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
                 <div className="mb-2 text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>待调和资源</div>
@@ -3721,6 +3747,64 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     </div>
   )
 }
+
+function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnostics['workerRuntimes'][number] }) {
+  const contractMissing = Object.entries(worker.contractFiles)
+    .filter(([, ok]) => !ok)
+    .map(([name]) => name)
+  const participantSummary = worker.matrixParticipants.length
+    ? worker.matrixParticipants.map((participant) => `${participant.roomKind}:${participant.status}`).join(' / ')
+    : 'no rooms'
+  const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : 'no heartbeat'
+  const modeLabel = worker.mode === 'bridge'
+    ? 'AgentHub bridge'
+    : worker.mode === 'resident-openclaw'
+      ? 'OpenClaw resident'
+      : 'QwenPaw resident'
+  return (
+    <div
+      className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1.1fr)_8rem_minmax(0,1fr)_minmax(0,1fr)]"
+      style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}
+    >
+      <div className="min-w-0">
+        <div className="truncate font-semibold" style={{ color: 'var(--settings-text)' }} title={worker.agentName}>
+          {worker.agentName}
+        </div>
+        <div className="mt-1 truncate font-mono" style={{ color: 'var(--settings-muted-text)' }} title={worker.workerInstanceId}>
+          {worker.workerInstanceId}
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="font-mono" style={{ color: 'var(--settings-text)' }}>{worker.runtimeBase}</div>
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={modeLabel}>
+          {modeLabel}
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div style={{ color: worker.observedState === 'failed' ? '#dc2626' : 'var(--settings-text)' }}>
+          {worker.observedState} / {worker.desiredState}
+        </div>
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={heartbeat}>
+          {heartbeat}
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap gap-1">
+          <span className={cn('rounded-full px-2 py-0.5', worker.contractReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+            {worker.contractReady ? 'contract ready' : `missing ${contractMissing.join('/') || 'contract'}`}
+          </span>
+          <span className={cn('rounded-full px-2 py-0.5', worker.matrixIdentity.userId ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+            {worker.matrixIdentity.userId ? worker.listenerManagedBy : 'no matrix id'}
+          </span>
+        </div>
+        <div className="mt-1 truncate" style={{ color: worker.lastError ? '#dc2626' : 'var(--settings-muted-text)' }} title={worker.lastError ?? participantSummary}>
+          {worker.lastError ?? participantSummary}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ConsoleMetric({ icon: Icon, label, value, detail, ok }: { icon: LucideIcon; label: string; value: number | string; detail: string; ok: boolean }) {
   const { t } = useI18n()
   return (

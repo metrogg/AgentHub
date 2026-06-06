@@ -664,6 +664,51 @@ export interface ControllerPlaneDiagnostics {
     managerOwns: string[]
     uiReadsFrom: string[]
   }
+  workerRuntimes: WorkerRuntimeDiagnostic[]
+}
+
+export interface WorkerRuntimeDiagnostic {
+  workerInstanceId: string
+  workspaceId: string
+  workspaceAgentId: string
+  agentName: string
+  runtimeBase: string
+  mode: 'resident-openclaw' | 'resident-qwenpaw' | 'bridge'
+  observedState: string
+  desiredState: string
+  modelId: string | null
+  runtimeHome: string | null
+  runtimeConfigPath: string | null
+  lastHeartbeatAt: string | null
+  lastError: string | null
+  listenerManagedBy: 'runtime' | 'agenthub-supervisor' | 'none'
+  contractRoot: string
+  contractReady: boolean
+  contractFiles: {
+    profile: boolean
+    runtime: boolean
+    soul: boolean
+    agents: boolean
+    state: boolean
+    rooms: boolean
+    tasks: boolean
+    skillsDir: boolean
+  }
+  matrixIdentity: {
+    userId: string | null
+    displayName: string | null
+    syncStatus: string | null
+    lastSyncAt: string | null
+    lastError: string | null
+  }
+  matrixParticipants: Array<{
+    roomId: string
+    roomKind: string
+    providerRoomId: string
+    participantId: string
+    providerUserId: string | null
+    status: string
+  }>
 }
 
 export interface ContainerRuntimeDiagnostics {
