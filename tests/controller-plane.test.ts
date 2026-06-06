@@ -352,6 +352,11 @@ describe('Controller Plane', () => {
     expect(typeof workerRuntime?.runtimeInspection?.configured).toBe('boolean')
     expect(typeof workerRuntime?.runtimeInspection?.canExecute).toBe('boolean')
     expect(workerRuntime?.runtimeInspection?.cwdValid).toBe(true)
+    expect(workerRuntime?.runtimeHealth.inspectedBy).toBe('bridge-cli')
+    expect(typeof workerRuntime?.runtimeHealth.ready).toBe('boolean')
+    expect(['ready', 'blocked', 'unknown']).toContain(workerRuntime?.runtimeHealth.status)
+    expect(Array.isArray(workerRuntime?.runtimeHealth.blockers)).toBe(true)
+    expect(typeof workerRuntime?.runtimeHealth.lastCheckedAt).toBe('string')
     if (workerRuntime?.runtimeInspection?.installed) {
       expect(workerRuntime.runtimeInspection.nativeProbe).toBeTruthy()
       expect(typeof workerRuntime.runtimeInspection.nativeProbe?.ok).toBe('boolean')

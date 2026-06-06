@@ -737,6 +737,16 @@ export interface WorkerRuntimeDiagnostic {
     }
     blockers: string[]
   } | null
+  runtimeHealth: {
+    ready: boolean
+    status: 'ready' | 'blocked' | 'unknown'
+    inspectedBy: 'bridge-cli' | 'worker-backend' | 'resource'
+    state: string | null
+    message: string | null
+    blockers: string[]
+    lastCheckedAt: string
+    details?: Record<string, unknown>
+  }
 }
 
 export interface ContainerRuntimeDiagnostics {

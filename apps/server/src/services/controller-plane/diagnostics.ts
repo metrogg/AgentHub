@@ -15,7 +15,10 @@ import {
 import { resolveWorkerAgentContractWorkspace } from '../agent-contract'
 import { buildAgentProfile } from '../agents/profile-builder'
 import { inspectCodeAgentRuntime, type CodeAgentRuntimeInspection } from '../code-agent-adapter'
+import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { controllerReconcileQueue } from './controller-reconciler'
+import { dockerWorkerBackend } from './docker-worker-backend'
+import { localCliWorkerBackend, type WorkerBackendInspectResult } from './worker-backend'
 
 export type WorkerRuntimeDiagnosticMode = 'resident-openclaw' | 'resident-qwenpaw' | 'bridge'
 export type WorkerRuntimeListenerOwner = 'runtime' | 'agenthub-supervisor' | 'none'
@@ -64,6 +67,18 @@ export interface WorkerRuntimeDiagnostics {
     status: string
   }>
   runtimeInspection: CodeAgentRuntimeInspection | null
+  runtimeHealth: WorkerRuntimeHealth
+}
+
+export interface WorkerRuntimeHealth {
+  ready: boolean
+  status: 'ready' | 'blocked' | 'unknown'
+  inspectedBy: 'bridge-cli' | 'worker-backend' | 'resource'
+  state: string | null
+  message: string | null
+  blockers: string[]
+  lastCheckedAt: string
+  details?: Record<string, unknown>
 }
 
 export interface ControllerPlaneDiagnostics {
@@ -230,6 +245,22 @@ async function describeWorkerRuntimes(input: {
             blockers: [error instanceof Error ? error.message : String(error)],
           }))
         : null
+      const backendInspection = mode !== 'bridge'
+        ? await inspectResidentWorkerRuntime(worker.id).catch((error) => ({
+            workerInstanceId: worker.id,
+            ready: false,
+            state: 'inspect-failed',
+            message: error instanceof Error ? error.message : String(error),
+          }))
+        : null
+      const runtimeHealth = buildRuntimeHealth({
+        mode,
+        worker,
+        contractReady: Object.values(contractFiles).every(Boolean),
+        hasMatrixIdentity: Boolean(identity?.userId),
+        runtimeInspection,
+        backendInspection,
+      })
       return {
         workerInstanceId: worker.id,
         workspaceId: worker.workspaceId,
@@ -267,10 +298,96 @@ async function describeWorkerRuntimes(input: {
           }
         }),
         runtimeInspection,
+        runtimeHealth,
       }
     }),
   )
   return rows.sort((left, right) => left.agentName.localeCompare(right.agentName))
+}
+
+async function inspectResidentWorkerRuntime(workerInstanceId: string): Promise<WorkerBackendInspectResult> {
+  const backend = workerContainersEnabled() ? dockerWorkerBackend : localCliWorkerBackend
+  return backend.inspect(workerInstanceId)
+}
+
+function buildRuntimeHealth(input: {
+  mode: WorkerRuntimeDiagnosticMode
+  worker: typeof workerInstances.$inferSelect
+  contractReady: boolean
+  hasMatrixIdentity: boolean
+  runtimeInspection: CodeAgentRuntimeInspection | null
+  backendInspection: WorkerBackendInspectResult | null
+}): WorkerRuntimeHealth {
+  const blockers: string[] = []
+  if (!input.contractReady) blockers.push('Agent contract is incomplete')
+  if (!input.hasMatrixIdentity) blockers.push('Matrix identity is missing')
+  if (input.worker.observedState === 'failed') {
+    blockers.push(readWorkerLastError(input.worker.health) ?? input.worker.message ?? 'WorkerInstance is failed')
+  }
+
+  if (input.mode === 'bridge') {
+    if (!input.runtimeInspection) {
+      blockers.push('Bridge runtime inspection is unavailable')
+      return {
+        ready: false,
+        status: 'blocked',
+        inspectedBy: 'bridge-cli',
+        state: input.worker.observedState,
+        message: blockers[0] ?? 'Bridge runtime inspection is unavailable',
+        blockers,
+        lastCheckedAt: new Date().toISOString(),
+      }
+    }
+    blockers.push(...input.runtimeInspection.blockers)
+    const ready = input.runtimeInspection.canExecute && blockers.length === 0
+    return {
+      ready,
+      status: ready ? 'ready' : 'blocked',
+      inspectedBy: 'bridge-cli',
+      state: input.runtimeInspection.canExecute ? 'can-execute' : 'blocked',
+      message: ready
+        ? `${input.runtimeInspection.adapterName ?? input.runtimeInspection.codeAgentType ?? 'Bridge runtime'} is ready.`
+        : blockers[0] ?? 'Bridge runtime is blocked.',
+      blockers,
+      lastCheckedAt: new Date().toISOString(),
+      details: {
+        codeAgentType: input.runtimeInspection.codeAgentType ?? null,
+        command: input.runtimeInspection.command ?? null,
+        nativeProbe: input.runtimeInspection.nativeProbe ?? null,
+        modelId: input.runtimeInspection.modelId ?? null,
+      },
+    }
+  }
+
+  if (!input.backendInspection) {
+    blockers.push('Resident backend inspection is unavailable')
+    return {
+      ready: false,
+      status: 'blocked',
+      inspectedBy: 'worker-backend',
+      state: input.worker.observedState,
+      message: blockers[0] ?? 'Resident backend inspection is unavailable',
+      blockers,
+      lastCheckedAt: new Date().toISOString(),
+    }
+  }
+
+  if (!input.backendInspection.ready) {
+    blockers.push(input.backendInspection.message ?? 'Resident runtime is not ready')
+  }
+  const ready = input.backendInspection.ready && blockers.length === 0
+  return {
+    ready,
+    status: ready ? 'ready' : 'blocked',
+    inspectedBy: 'worker-backend',
+    state: input.backendInspection.state ?? input.worker.observedState,
+    message: ready
+      ? input.backendInspection.message ?? 'Resident runtime is ready.'
+      : blockers[0] ?? input.backendInspection.message ?? 'Resident runtime is blocked.',
+    blockers,
+    lastCheckedAt: new Date().toISOString(),
+    details: input.backendInspection.details,
+  }
 }
 
 function readWorkerLastError(health: Record<string, unknown>) {

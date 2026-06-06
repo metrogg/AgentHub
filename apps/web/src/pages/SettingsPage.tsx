@@ -3757,19 +3757,21 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
     : 'no rooms'
   const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : 'no heartbeat'
   const inspection = worker.runtimeInspection
-  const runtimeReady = inspection ? inspection.canExecute : worker.observedState === 'listening'
-  const runtimeStatus = inspection
-    ? inspection.canExecute
-      ? `runtime ready${inspection.nativeProbe?.version ? ` · ${inspection.nativeProbe.version}` : ''}`
-      : inspection.blockers[0] ?? inspection.nativeProbe?.output ?? 'runtime blocked'
-    : worker.mode === 'bridge'
-      ? 'no bridge probe'
-      : participantSummary
+  const runtimeHealth = worker.runtimeHealth
+  const runtimeReady = runtimeHealth.ready
+  const runtimeStatus = runtimeHealth.message
+    ?? (runtimeReady ? 'runtime ready' : runtimeHealth.blockers[0] ?? 'runtime blocked')
   const modeLabel = worker.mode === 'bridge'
     ? 'AgentHub bridge'
     : worker.mode === 'resident-openclaw'
       ? 'OpenClaw resident'
       : 'QwenPaw resident'
+  const runtimeDetail = [
+    runtimeHealth.inspectedBy,
+    runtimeHealth.state,
+    inspection?.nativeProbe?.command ?? inspection?.command,
+    worker.mode === 'bridge' ? null : participantSummary,
+  ].filter(Boolean).join(' / ')
   return (
     <div
       className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1.1fr)_8rem_minmax(0,1fr)_minmax(0,1fr)]"
@@ -3785,8 +3787,8 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
       </div>
       <div className="min-w-0">
         <div className="font-mono" style={{ color: 'var(--settings-text)' }}>{inspection?.adapterName ?? worker.runtimeBase}</div>
-        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={`${modeLabel}${inspection?.nativeProbe?.command ? ` / ${inspection.nativeProbe.command}` : inspection?.command ? ` / ${inspection.command}` : ''}`}>
-          {modeLabel}{inspection?.nativeProbe?.version ? ` / ${inspection.nativeProbe.version}` : inspection?.command ? ` / ${inspection.command}` : ''}
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={`${modeLabel}${runtimeDetail ? ` / ${runtimeDetail}` : ''}`}>
+          {modeLabel}{inspection?.nativeProbe?.version ? ` / ${inspection.nativeProbe.version}` : runtimeHealth.state ? ` / ${runtimeHealth.state}` : ''}
         </div>
       </div>
       <div className="min-w-0">
@@ -3814,6 +3816,11 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
         <div className="mt-1 truncate" style={{ color: worker.lastError || !runtimeReady ? '#dc2626' : 'var(--settings-muted-text)' }} title={worker.lastError ?? runtimeStatus}>
           {worker.lastError ?? runtimeStatus}
         </div>
+        {runtimeHealth.blockers.length > 0 && (
+          <div className="mt-1 truncate" style={{ color: '#dc2626' }} title={runtimeHealth.blockers.join(' / ')}>
+            {runtimeHealth.blockers[0]}
+          </div>
+        )}
       </div>
     </div>
   )
