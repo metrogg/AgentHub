@@ -113,6 +113,7 @@ describe('Controller HTTP API', () => {
         path: string
         danger: string
         approval: string
+        query?: Record<string, { required?: boolean; enum?: string[]; description: string }>
         body?: Record<string, { required?: boolean; enum?: string[]; description: string }>
       }>
     }>('/api/controller/schema', token)
@@ -153,6 +154,11 @@ describe('Controller HTTP API', () => {
     expect(managerReconcile?.path).toBe('/api/controller/reconcile')
     expect(managerReconcile?.body?.kind?.enum).toContain('Manager')
     expect(managerReconcile?.body?.payload?.description).toContain('desiredState=running|stopped|observed')
+
+    const auditList = schema.operations.find((item) => item.id === 'audit.list')
+    expect(auditList?.method).toBe('GET')
+    expect(auditList?.path).toBe('/api/controller/audit-events')
+    expect(auditList?.query?.workspaceId?.description).toContain('workspace id')
   })
 
   test('applies YAML Controller manifests through HTTP API', async () => {
@@ -244,6 +250,15 @@ describe('Controller HTTP API', () => {
       workspaceId: workspace!.id,
       kind: 'group',
     })
+
+    const auditEvents = await controllerJson<{
+      items: Array<{ id: string; operationId: string; workspaceId: string | null; auditFields: Record<string, unknown> }>
+    }>(
+      `/api/controller/audit-events?workspaceId=${encodeURIComponent(workspace!.id)}&operationId=rooms.create&limit=5`,
+      token,
+    )
+    expect(auditEvents.items.some((item) => item.id === applied.applied[0]!.auditEventId)).toBe(true)
+    expect(auditEvents.items[0]?.operationId).toBe('rooms.create')
 
     const [room] = await db
       .select()

@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono'
-import { and, db, eq, matrixIdentities } from '@agenthub/db'
+import { and, controllerAuditEvents, db, desc, eq, matrixIdentities } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
 import { controllerApi } from '../services/controller-plane/controller-api'
@@ -30,6 +30,26 @@ controllerRoutes.use('*', managerAuth)
 
 controllerRoutes.get('/schema', async (c) => {
   return c.json(getControllerApiSchema())
+})
+
+controllerRoutes.get('/audit-events', async (c) => {
+  const workspaceId = c.req.query('workspaceId')?.trim()
+  const operationId = c.req.query('operationId')?.trim()
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 50) || 50, 1), 200)
+  const condition = workspaceId && operationId
+    ? and(eq(controllerAuditEvents.workspaceId, workspaceId), eq(controllerAuditEvents.operationId, operationId))
+    : workspaceId
+      ? eq(controllerAuditEvents.workspaceId, workspaceId)
+      : operationId
+        ? eq(controllerAuditEvents.operationId, operationId)
+        : undefined
+  const rows = await db
+    .select()
+    .from(controllerAuditEvents)
+    .where(condition)
+    .orderBy(desc(controllerAuditEvents.createdAt))
+    .limit(limit)
+  return c.json({ items: rows })
 })
 
 // ─── Worker ───────────────────────────────────────────────────────────

@@ -248,6 +248,21 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       },
     },
     {
+      id: 'audit.list',
+      skill: 'heartbeat',
+      method: 'GET',
+      path: '/api/controller/audit-events',
+      summary: 'List recent Controller audit events for Manager patrol, recovery, and room-visible explanations.',
+      danger: 'read',
+      approval: 'not_required',
+      audit: ['workspaceId', 'operationId', 'limit'],
+      query: {
+        workspaceId: field('string', false, 'Optional workspace id filter.'),
+        operationId: field('string', false, 'Optional Controller operation id filter, for example workers.create.'),
+        limit: field('number', false, 'Maximum rows to return, capped at 200.'),
+      },
+    },
+    {
       id: 'status.platform',
       skill: 'heartbeat',
       method: 'GET',
