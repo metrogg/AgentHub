@@ -2586,6 +2586,41 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         containerRuntime.docker.error ? `error=${containerRuntime.docker.error}` : null,
       ].filter(Boolean).join(' · ')
     : 'Manager / Worker 容器、OpenClaw 镜像和容器内 URL 会显示在这里'
+  const managerReady = Boolean(managerRuntime?.activeStatus.running && !managerRuntime.activeStatus.error)
+  const runtimeInfraReady = Boolean(containerRuntime?.docker.available && containerRuntime.imagePresent)
+  const localRuntimeReady = Boolean(matrixOk && managerReady)
+  const localRuntimeSteps = [
+    {
+      id: 'matrix',
+      label: 'Matrix / Tuwunel',
+      ok: matrixOk,
+      detail: matrixDiagnostics
+        ? matrixDiagnostics.homeserver.reachable
+          ? `${matrixDiagnostics.homeserver.url} 可达`
+          : matrixDiagnostics.homeserver.error || 'Homeserver 不可达'
+        : '等待诊断',
+    },
+    {
+      id: 'manager',
+      label: 'OpenClaw Manager',
+      ok: managerReady,
+      detail: managerRuntime
+        ? managerRuntime.activeStatus.error || (managerRuntime.activeStatus.running ? 'Manager 正在监听 Room' : 'Manager 未运行')
+        : '等待诊断',
+    },
+    {
+      id: 'runtime',
+      label: '容器 / 本机 Runtime',
+      ok: runtimeInfraReady,
+      detail: containerRuntime
+        ? containerRuntime.docker.available
+          ? containerRuntime.imagePresent
+            ? 'Docker 与 OpenClaw runtime 镜像可用'
+            : containerRuntime.imageError || 'OpenClaw runtime 镜像未准备'
+          : containerRuntime.docker.error || 'Docker 不可用'
+        : '等待诊断',
+    },
+  ]
 
   useEffect(() => {
     void refreshDiagnostics(false)
@@ -2834,6 +2869,38 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
+  async function prepareLocalRuntime() {
+    setBusy('local-runtime-prepare')
+    try {
+      const result = await api.prepareLocalRuntime()
+      setMatrixDiagnostics(result.diagnostics.matrix)
+      setControllerPlane(result.diagnostics.controllerPlane)
+      setManagerRuntime(result.diagnostics.managerRuntime)
+      setContainerRuntime(result.diagnostics.containerRuntime)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'settings/local-runtime/prepare',
+        content: [
+          result.message,
+          ...result.steps.map((step) => `${step.ok ? 'OK' : 'FAIL'} ${step.label}: ${step.message}`),
+        ].join('\n'),
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'settings/local-runtime/prepare',
+        content: error?.message || '准备本机运行环境失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function stopLocalMatrix() {
     setBusy('matrix-stop')
     try {
@@ -2988,6 +3055,68 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           {notice}
         </div>
       )}
+
+      <div
+        className="rounded-2xl border p-5 shadow-sm"
+        style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-base font-semibold" style={{ color: 'var(--settings-text)' }}>
+              <Server className="h-4 w-4" />
+              本机 HiClaw-lite 运行向导
+            </div>
+            <div className="mt-2 max-w-3xl text-sm leading-6" style={{ color: 'var(--settings-muted-text)' }}>
+              AgentHub Server 负责 Controller / UI backend；Tuwunel 提供真实 Matrix Room；OpenClaw Manager 常驻监听群聊。点一次准备，会按顺序应用本地 Matrix 配置、启动 Tuwunel / MinIO、准备 OpenClaw runtime，并尝试启动 Manager。
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void prepareLocalRuntime()}
+              disabled={busy === 'local-runtime-prepare'}
+              className="settings-soft-button h-9 px-4 text-sm"
+            >
+              {busy === 'local-runtime-prepare' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Server className="h-4 w-4" />}
+              一键准备本机运行
+            </button>
+            <button type="button" disabled={busy === 'refresh'} onClick={() => void refreshDiagnostics()} className="settings-soft-button h-9 px-4 text-sm">
+              <RefreshCw className={cn('h-4 w-4', busy === 'refresh' && 'animate-spin')} />
+              刷新状态
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {localRuntimeSteps.map((step) => (
+            <div
+              key={step.id}
+              className="rounded-xl border px-4 py-3"
+              style={{
+                background: step.ok ? 'rgba(16, 185, 129, 0.08)' : 'var(--settings-panel-muted)',
+                borderColor: step.ok ? 'rgba(16, 185, 129, 0.28)' : 'var(--settings-border)',
+              }}
+            >
+              <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>
+                {step.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <AlertTriangle className="h-4 w-4 text-amber-600" />}
+                {step.label}
+              </div>
+              <div className="mt-2 line-clamp-2 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }} title={step.detail}>
+                {step.detail}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div
+          className="mt-4 rounded-xl border px-3 py-2 text-xs leading-5"
+          style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}
+        >
+          {localRuntimeReady
+            ? '当前主路径已可用：新群聊会走真实 Matrix Room，Manager 由 OpenClaw 常驻进程接管。'
+            : '当前还没完全就绪：先点“一键准备本机运行”；如果 Docker 或 OpenClaw 缺失，下面日志会明确显示卡在哪一步。'}
+        </div>
+      </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <ConsoleMetric icon={Server} label="后端日志" value={backendCount} detail={generalInfo?.storage.logDir ?? '等待刷新'} ok />
