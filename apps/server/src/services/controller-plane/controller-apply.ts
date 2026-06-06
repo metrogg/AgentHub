@@ -86,6 +86,10 @@ async function applyOne(api: ControllerApi, manifest: NormalizedManifest) {
       return applyRoomManifest(api, manifest)
     case 'Task':
       return applyTaskManifest(api, manifest)
+    case 'Team':
+      return applyTeamManifest(api, manifest)
+    case 'Human':
+      return applyHumanManifest(api, manifest)
     default:
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply does not support kind ${manifest.kind} yet.`)
   }
@@ -155,6 +159,28 @@ function applyTaskManifest(api: ControllerApi, manifest: NormalizedManifest) {
     runId: stringValue(manifest.spec.runId) ?? null,
     groupSessionId: stringValue(manifest.spec.groupSessionId) ?? null,
     ownerId: stringValue(manifest.spec.ownerId) ?? null,
+  })
+}
+
+function applyTeamManifest(api: ControllerApi, manifest: NormalizedManifest) {
+  return api.createTeam({
+    workspaceId: requiredString(manifest.spec.workspaceId, 'spec.workspaceId'),
+    name: requiredString(manifest.metadata.name ?? manifest.spec.name, 'metadata.name'),
+    leaderName: stringValue(manifest.spec.leaderName) ?? undefined,
+    leaderModel: stringValue(manifest.spec.leaderModel) ?? undefined,
+    workers:
+      optionalStringArray(manifest.spec.workers, 'spec.workers') ??
+      optionalStringArray(manifest.spec.memberRefs, 'spec.memberRefs'),
+    description: stringValue(manifest.spec.description) ?? undefined,
+  })
+}
+
+function applyHumanManifest(api: ControllerApi, manifest: NormalizedManifest) {
+  return api.createHuman({
+    name: requiredString(manifest.metadata.name ?? manifest.spec.name, 'metadata.name'),
+    displayName: requiredString(manifest.spec.displayName ?? manifest.metadata.name, 'spec.displayName'),
+    email: stringValue(manifest.spec.email) ?? undefined,
+    permissionLevel: optionalNumber(manifest.spec.permissionLevel, 'spec.permissionLevel'),
   })
 }
 
@@ -256,6 +282,13 @@ function optionalBoolean(value: unknown, path: string): boolean | undefined {
   if (value == null) return undefined
   if (typeof value === 'boolean') return value
   throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply requires ${path} to be a boolean.`)
+}
+
+function optionalNumber(value: unknown, path: string): number | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value)
+  throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply requires ${path} to be a number.`)
 }
 
 function optionalObject(value: unknown, path: string): Record<string, unknown> {

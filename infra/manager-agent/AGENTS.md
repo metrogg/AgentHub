@@ -47,7 +47,7 @@ agenthub schema
 # List Workers
 agenthub worker list --workspace <workspace-id>
 
-# Apply a Worker/Room/Task manifest through Controller reconcile
+# Apply a Worker/Room/Task/Team/Human manifest through Controller reconcile
 agenthub apply -f worker.yaml
 
 # Create and assign a task

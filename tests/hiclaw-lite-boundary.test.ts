@@ -182,6 +182,8 @@ describe('HiClaw-lite kernel boundary', () => {
       'task-management',
       'channel-management',
       'project-management',
+      'team-management',
+      'human-management',
     ]
 
     for (const skillName of requiredSchemaSkills) {

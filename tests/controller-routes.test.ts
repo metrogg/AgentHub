@@ -138,7 +138,15 @@ describe('Controller HTTP API', () => {
     const apply = schema.operations.find((item) => item.id === 'apply.manifest')
     expect(apply?.path).toBe('/api/controller/apply')
     expect(apply?.body?.yaml.required).toBe(false)
-    expect(apply?.body?.yaml.description).toContain('Worker, Room, Task')
+    expect(apply?.body?.yaml.description).toContain('Worker, Room, Task, Team, Human')
+
+    const teamCreate = schema.operations.find((item) => item.id === 'teams.create')
+    expect(teamCreate?.path).toBe('/api/controller/teams')
+    expect(teamCreate?.body?.workers?.enum).toBeUndefined()
+
+    const humanCreate = schema.operations.find((item) => item.id === 'humans.create')
+    expect(humanCreate?.path).toBe('/api/controller/humans')
+    expect(humanCreate?.body?.permissionLevel?.description).toContain('permission level')
   })
 
   test('applies YAML Controller manifests through HTTP API', async () => {

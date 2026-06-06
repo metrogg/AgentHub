@@ -276,6 +276,96 @@ describe('Controller Plane', () => {
     })).rejects.toThrow(/spec\.kind/)
   })
 
+  test('controller apply creates Team manifests with existing Worker members only', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller Apply Team Workspace',
+        goal: 'Validate team manifest apply',
+      })
+      .returning()
+    const [workerAgent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'existing-builder',
+        role: 'Worker',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        modelId: 'test-model',
+        roleProfile: { workerRuntimeBase: 'opencode' },
+      })
+      .returning()
+    const api = new ControllerApi()
+
+    const result = await applyControllerManifest(api, {
+      resource: {
+        kind: 'Team',
+        metadata: { name: 'delivery-team' },
+        spec: {
+          workspaceId: workspace!.id,
+          leaderName: 'delivery-lead',
+          workers: ['existing-builder'],
+          description: 'Coordinates implementation delivery.',
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.applied[0]?.kind).toBe('Team')
+    expect(result.applied[0]?.result).toMatchObject({
+      name: 'delivery-team',
+      workspaceId: workspace!.id,
+      memberIds: [workerAgent!.id],
+      description: 'Coordinates implementation delivery.',
+    })
+
+    const [leader] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.name, 'delivery-lead'))
+      .limit(1)
+    expect(leader?.workspaceId).toBe(workspace!.id)
+    expect(leader?.roleType).toBe('orchestrator')
+
+    await expect(applyControllerManifest(api, {
+      resource: {
+        kind: 'Team',
+        metadata: { name: 'bad-team' },
+        spec: {
+          workspaceId: workspace!.id,
+          workers: ['missing-worker'],
+        },
+      },
+    })).rejects.toThrow(/Apply a Worker manifest/)
+  })
+
+  test('controller apply creates Human manifests through Controller API', async () => {
+    const api = new ControllerApi()
+
+    const result = await applyControllerManifest(api, {
+      resource: {
+        kind: 'Human',
+        metadata: { name: 'admin-user' },
+        spec: {
+          displayName: 'Admin User',
+          email: 'admin@example.test',
+          permissionLevel: '2',
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.applied[0]?.kind).toBe('Human')
+    expect(result.applied[0]?.result).toMatchObject({
+      name: 'admin-user',
+      displayName: 'Admin User',
+      permissionLevel: 2,
+    })
+  })
+
   test('controller API createWorker runs Member Reconcile stages and joins Matrix rooms', async () => {
     const [workspace] = await db
       .insert(workspaces)

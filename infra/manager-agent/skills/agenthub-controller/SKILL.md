@@ -105,6 +105,20 @@ agenthub room events --room <room-id> --limit 20
 agenthub room mention --room <room-id> --agent <agent-id> --body "Please start task task-123"
 ```
 
+### Team and Human Management
+
+```bash
+# Apply Team/Human manifests through the Controller.
+agenthub apply -f team.yaml
+agenthub apply -f human.yaml
+
+# Teams group existing Workers; create missing Workers separately first.
+agenthub team create --workspace <workspace-id> --name delivery-team --leader-name delivery-lead --workers existing-builder,existing-reviewer
+
+# Humans are first-class collaborators.
+agenthub human create --name admin-user --display-name "Admin User" --permission-level 1
+```
+
 ### Workspace State
 
 ```bash
@@ -150,7 +164,7 @@ agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 ## Runtime Base Rules
 
 - Manager runtime choices: `openclaw`, `qwenpaw`.
-- Worker runtime bases: `openclaw`, `qwenpaw`, `claude-code`, `opencode`, `codex`, `gemini`.
+- Worker runtime bases: `openclaw`, `qwenpaw`, `copaw`, `claude-code`, `opencode`, `codex`, `gemini`.
 - `openclaw` as Manager and `openclaw` as Worker are different role contracts.
 - Bridge-managed CLI Workers still use Matrix room timeline, WorkerInstance, RuntimeLease, SOUL/AGENTS, skills, shared task contract, and ArtifactStore.
 

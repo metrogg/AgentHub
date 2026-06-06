@@ -1,5 +1,5 @@
 export interface ControllerApiFieldSchema {
-  type: 'string' | 'string[]' | 'boolean' | 'object' | 'object[]'
+  type: 'string' | 'string[]' | 'boolean' | 'number' | 'object' | 'object[]'
   required?: boolean
   enum?: string[]
   description: string
@@ -33,7 +33,7 @@ export const CONTROLLER_WORKER_RUNTIME_BASES = ['openclaw', 'qwenpaw', 'copaw', 
 
 export const CONTROLLER_ROOM_KINDS = ['group', 'manager_dm', 'task', 'direct', 'human_intervention']
 
-export const CONTROLLER_APPLY_MANIFEST_KINDS = ['Worker', 'Room', 'Task']
+export const CONTROLLER_APPLY_MANIFEST_KINDS = ['Worker', 'Room', 'Task', 'Team', 'Human']
 
 export function getControllerApiSchema(): ControllerApiSchemaDocument {
   return CONTROLLER_API_SCHEMA
@@ -165,6 +165,39 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       },
     },
     {
+      id: 'teams.create',
+      skill: 'team-management',
+      method: 'POST',
+      path: '/api/controller/teams',
+      summary: 'Create or reconcile a lightweight Team around an existing leader and existing Worker members.',
+      danger: 'write',
+      approval: 'recommended',
+      audit: ['workspaceId', 'name', 'leaderName', 'workers'],
+      body: {
+        workspaceId: field('string', true, 'Workspace id.'),
+        name: field('string', true, 'Team name.'),
+        leaderName: field('string', false, 'Existing or created Team Leader display name.'),
+        workers: field('string[]', false, 'Existing WorkspaceAgent ids or names to add to the team room.'),
+        description: field('string', false, 'Team purpose.'),
+      },
+    },
+    {
+      id: 'humans.create',
+      skill: 'human-management',
+      method: 'POST',
+      path: '/api/controller/humans',
+      summary: 'Create or reconcile a Human participant identity.',
+      danger: 'write',
+      approval: 'recommended',
+      audit: ['name', 'displayName', 'permissionLevel'],
+      body: {
+        name: field('string', true, 'Human stable name.'),
+        displayName: field('string', true, 'Human display name.'),
+        email: field('string', false, 'Optional human email.'),
+        permissionLevel: field('number', false, 'HiClaw-style permission level.'),
+      },
+    },
+    {
       id: 'reconcile.resource',
       skill: 'task-coordination',
       method: 'POST',
@@ -187,7 +220,7 @@ const CONTROLLER_API_SCHEMA: ControllerApiSchemaDocument = {
       skill: 'project-management',
       method: 'POST',
       path: '/api/controller/apply',
-      summary: 'Apply JSON/YAML Controller manifests. First supported kinds: Worker, Room, Task.',
+      summary: 'Apply JSON/YAML Controller manifests. First supported kinds: Worker, Room, Task, Team, Human.',
       danger: 'write',
       approval: 'recommended',
       audit: ['kind', 'metadata.name', 'spec.workspaceId'],

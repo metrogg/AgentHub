@@ -655,14 +655,7 @@ export class ControllerApi {
       }
     }
 
-    const memberIds: string[] = []
-    for (const workerName of input.workers ?? []) {
-      const result = await this.createWorker({
-        workspaceId: input.workspaceId,
-        name: workerName,
-      })
-      memberIds.push(result.agentId)
-    }
+    const memberIds = await this.resolveExistingTeamMembers(input.workspaceId, input.workers ?? [])
 
     // Ensure group session and room exist, and reconcile participants (HiClaw model)
     const [workspace] = await db
@@ -710,6 +703,23 @@ export class ControllerApi {
     await db.delete(workspaceAgents)
       .where(and(eq(workspaceAgents.workspaceId, workspaceId), eq(workspaceAgents.name, teamName)))
     return { deleted: true, name: teamName }
+  }
+
+  private async resolveExistingTeamMembers(workspaceId: string, workers: string[]) {
+    if (workers.length === 0) return []
+    const agents = await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, workspaceId))
+    const memberIds: string[] = []
+    for (const workerRef of workers) {
+      const agent = agents.find((item) => item.id === workerRef || item.name === workerRef)
+      if (!agent) {
+        throw new Error(`Team member ${workerRef} does not exist in workspace ${workspaceId}. Apply a Worker manifest before adding it to a Team.`)
+      }
+      if (agent.roleType === 'orchestrator') {
+        throw new Error(`Team member ${workerRef} is a leader/orchestrator, not a Worker member.`)
+      }
+      memberIds.push(agent.id)
+    }
+    return memberIds
   }
 
   // ─── Human Management (HiClaw-style) ────────────────────────────────
