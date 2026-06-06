@@ -50,9 +50,8 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
         dm: { policy: 'allowlist', allowFrom: input.dmAllowFrom },
         groupPolicy: 'allowlist',
         groupAllowFrom: input.groupAllowFrom,
-        groups: { '*': { allow: true, requireMention: true } },
-        streaming: 'partial',
-        blockStreaming: true,
+        streaming: 'off',
+        blockStreaming: false,
       },
     },
     models: {
@@ -84,7 +83,7 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
       dmScope: 'per-channel-peer',
       resetByType: { dm: { mode: 'daily', atHour: 4 }, group: { mode: 'daily', atHour: 4 } },
     },
-    plugins: { load: { paths: [] }, entries: {} },
+    plugins: { load: { paths: [] }, entries: { matrix: { enabled: true } } },
     commands: { restart: true },
   }
 }

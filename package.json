@@ -8,7 +8,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -k -n server,web -c blue,green \"bun run dev:server\" \"bun run dev:web\"",
+    "dev": "node scripts/dev.mjs",
+    "dev:stop": "node scripts/stop-dev.mjs",
     "dev:web": "bun --filter @agenthub/web dev",
     "dev:server": "bun run db:migrate && NODE_NO_WARNINGS=1 bun --watch apps/server/src/index.ts",
     "dev:desktop": "bun --filter @agenthub/desktop tauri:dev",

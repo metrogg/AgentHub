@@ -5,7 +5,7 @@ import { createSessionSchema, updateSessionSchema } from '@agenthub/shared'
 import { db, sessions, sessionMembers, workspaceAgents, workspaces, eq, desc, and } from '@agenthub/db'
 import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
-import { roomService } from '../services/rooms'
+import { controllerReconcileQueue, resourceRef } from '../services/controller-plane'
 import { listRoomLastMessagePreviews } from '../services/rooms/room-last-message'
 
 export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -55,7 +55,14 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
       })
       .returning()
     if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
-    await roomService.ensureRoomForSession(session.id, user.sub)
+    controllerReconcileQueue.enqueue({
+      ref: resourceRef('Room', session.id, session.workspaceId),
+      reason: 'session-created',
+      payload: {
+        sessionId: session.id,
+        ownerId: user.sub,
+      },
+    })
     return c.json(session)
   })
   .get('/:id', async (c) => {

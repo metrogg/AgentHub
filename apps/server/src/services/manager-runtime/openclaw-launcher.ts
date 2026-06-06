@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
+import { matrixLocalpart } from '../rooms/matrix-client'
 
 // ─── OpenClaw Launcher ───────────────────────────────────────────────
 // Launches OpenClaw as a child process that connects to our Tuwunel
@@ -92,9 +93,14 @@ export class OpenClawLauncher {
     const matrixUrl = this.config.matrixUrl || 'http://localhost:6167'
     const matrixDomain = this.config.matrixDomain || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
+    const humanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
+    const managerAllowFrom = Array.from(new Set([`@admin:${matrixDomain}`, humanUserId]))
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
     const llmApiKey = this.config.llmApiKey || 'agenthub-internal'
-    const llmModel = this.config.llmModel || 'default'
+    const llmModel = this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL
+    if (!llmModel) {
+      throw new Error('OpenClaw Manager requires an explicit model. Configure AGENTHUB_MANAGER_LLM_MODEL or use OpenClawManagerProvider.')
+    }
 
     const config = {
       gateway: {
@@ -120,15 +126,12 @@ export class OpenClawLauncher {
           autoJoin: 'always',
           dm: {
             policy: 'allowlist',
-            allowFrom: [`@admin:${matrixDomain}`],
+            allowFrom: managerAllowFrom,
           },
           groupPolicy: 'allowlist',
-          groupAllowFrom: [`@admin:${matrixDomain}`],
-          groups: {
-            '*': { allow: true, requireMention: true },
-          },
-          streaming: 'partial',
-          blockStreaming: true,
+          groupAllowFrom: managerAllowFrom,
+          streaming: 'off',
+          blockStreaming: false,
         },
       },
       models: {
@@ -177,7 +180,9 @@ export class OpenClawLauncher {
       },
       plugins: {
         load: { paths: [] },
-        entries: {},
+        entries: {
+          matrix: { enabled: true },
+        },
       },
       commands: { restart: true },
     }
@@ -329,9 +334,14 @@ export class OpenClawLauncher {
 
     const matrixDomain = this.config.matrixDomain || 'agenthub.local'
     const matrixUserId = options.matrixUserId || `@worker-${workerName}:${matrixDomain}`
+    const humanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
+    const workerAllowFrom = Array.from(new Set([`@admin:${matrixDomain}`, `@manager:${matrixDomain}`, humanUserId]))
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
     const llmApiKey = this.config.llmApiKey || 'agenthub-internal'
-    const llmModel = options.llmModel || 'default'
+    const llmModel = options.llmModel || this.config.llmModel || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL
+    if (!llmModel) {
+      throw new Error('OpenClaw Worker requires an explicit model. Configure worker.modelId, AGENTHUB_WORKER_LLM_MODEL, or LLM_MODEL.')
+    }
 
     const config = {
       gateway: {
@@ -357,15 +367,12 @@ export class OpenClawLauncher {
           autoJoin: 'always',
           dm: {
             policy: 'allowlist',
-            allowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
+            allowFrom: workerAllowFrom,
           },
           groupPolicy: 'allowlist',
-          groupAllowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
-          groups: {
-            '*': { allow: true, requireMention: true },
-          },
-          streaming: 'partial',
-          blockStreaming: true,
+          groupAllowFrom: workerAllowFrom,
+          streaming: 'off',
+          blockStreaming: false,
         },
       },
       models: {
@@ -403,7 +410,9 @@ export class OpenClawLauncher {
       },
       plugins: {
         load: { paths: [] },
-        entries: {},
+        entries: {
+          matrix: { enabled: true },
+        },
       },
     }
 

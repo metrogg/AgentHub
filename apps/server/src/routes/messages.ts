@@ -460,6 +460,23 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       }
 
       await ensureSessionMembers(sessionId, user.sub, agentsToJoin.map((agent) => agent.id))
+      const groupRoom = await roomService.ensureRoomForSession(session.id, user.sub)
+      for (const agent of agentsToJoin) {
+        await roomService.addWorkerParticipant(groupRoom.id, agent.id)
+      }
+      await roomService.appendTimelineEvent({
+        roomId: groupRoom.id,
+        senderType: 'manager',
+        type: 'manager.message',
+        body: `已加入：${agentsToJoin.map((agent) => agent.name).join('、')}。现在可以让 Manager 重新规划并分发任务。`,
+        metadata: {
+          kind: 'member-proposal.confirmed',
+          confirmedProfileIds: selectedProfileIds,
+          createdAgentIds: createdAgents.map((agent) => agent.id),
+          reusedAgentIds: reusedAgents.map((agent) => agent.id),
+          sourceMessageId: messageId,
+        },
+      })
       const updatedSession = await refreshGroupMemberMetadata(session, user.sub)
       await db
         .update(workspaces)

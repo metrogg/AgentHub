@@ -17,6 +17,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { agentHubUserDataRoot } from '../system-paths'
+import { roomService } from '../rooms'
+import { resolveLlmRuntimeConfig } from '../llm-client'
 
 export interface ReconcileResult {
   phase: string
@@ -346,9 +348,10 @@ export class WorkerController {
       if (identity?.accessToken) {
         const matrixUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167'
         const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
-        const llmBaseUrl = process.env.LLM_BASE_URL || 'http://localhost:8000/v1'
-        const llmApiKey = process.env.LLM_API_KEY || 'agenthub-internal'
-        const llmModel = process.env.LLM_MODEL || 'default'
+        const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
+        const llmBaseUrl = process.env.AGENTHUB_WORKER_LLM_BASE_URL || process.env.LLM_BASE_URL || resolvedLlm.baseUrl
+        const llmApiKey = process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || resolvedLlm.apiKey || 'agenthub-internal'
+        const llmModel = worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model
         const gatewayPort = workerGatewayPort(worker.id)
         const workerName = agent?.name ?? worker.id
 
@@ -395,6 +398,9 @@ export class WorkerController {
               gatewayPort,
             },
           })
+          await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
+            mode: 'listening',
+          }).catch(() => {})
         } else {
           logger.warn({ workerId: worker.id, error: readiness.error }, 'Worker gateway did not become healthy')
         }
@@ -408,6 +414,9 @@ export class WorkerController {
           containerBackendPending: true,
         },
       })
+      await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
+        mode: 'ready',
+      }).catch(() => {})
     } else {
       const listenerResults = await startMatrixWorkerListeners(worker.id)
       anyListenerStarted = listenerResults.some((r) => r.started)
@@ -419,6 +428,9 @@ export class WorkerController {
             listeningAt: new Date().toISOString(),
           },
         })
+        await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
+          mode: 'listening',
+        }).catch(() => {})
       }
     }
 
@@ -862,9 +874,10 @@ export class WorkerController {
   ): Promise<string> {
     const matrixUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167'
     const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
-    const llmBaseUrl = process.env.LLM_BASE_URL || 'http://localhost:8000/v1'
-    const llmApiKey = process.env.LLM_API_KEY || 'agenthub-internal'
-    const llmModel = process.env.LLM_MODEL || 'default'
+    const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
+    const llmBaseUrl = process.env.AGENTHUB_WORKER_LLM_BASE_URL || process.env.LLM_BASE_URL || resolvedLlm.baseUrl
+    const llmApiKey = process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || resolvedLlm.apiKey || 'agenthub-internal'
+    const llmModel = worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model
     const gatewayPort = workerGatewayPort(worker.id)
     const workerWorkspace = join(agentHubUserDataRoot(), 'workers', worker.id)
 
@@ -893,9 +906,8 @@ export class WorkerController {
           dm: { policy: 'allowlist', allowFrom: [`@admin:${matrixDomain}`] },
           groupPolicy: 'allowlist',
           groupAllowFrom: [`@admin:${matrixDomain}`],
-          groups: { '*': { allow: true, requireMention: false } },
-          streaming: 'partial',
-          blockStreaming: true,
+          streaming: 'off',
+          blockStreaming: false,
         },
       },
       models: {
@@ -928,7 +940,7 @@ export class WorkerController {
         dmScope: 'per-channel-peer',
         resetByType: { dm: { mode: 'daily', atHour: 4 }, group: { mode: 'daily', atHour: 4 } },
       },
-      plugins: { load: { paths: [] }, entries: {} },
+      plugins: { load: { paths: [] }, entries: { matrix: { enabled: true } } },
       commands: { restart: true },
     }
 

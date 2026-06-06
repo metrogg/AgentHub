@@ -266,6 +266,79 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       diagnostics,
     })
   })
+  .post('/local-runtime/prepare', async (c) => {
+    const matrixConfig = applyLocalMatrixRuntimeConfig()
+    const infra = await startLocalHiclawLiteInfra()
+    const image = await ensureOpenClawRuntimeImage()
+    const provider = getManagerProvider('openclaw')
+    const managerStatus = provider?.ensureStarted
+      ? await provider.ensureStarted()
+      : await provider?.status()
+    const managerHealth = await provider?.healthCheck?.().catch((error: any) => ({
+      healthy: false,
+      error: error?.message || String(error),
+    }))
+    const [matrixDiagnostics, containerDiagnostics, controllerPlane] = await Promise.all([
+      describeMatrixDiagnostics(),
+      describeContainerRuntime(),
+      describeControllerPlane(),
+    ])
+    const matrixOk = matrixDiagnostics.configured && matrixDiagnostics.homeserver.reachable
+    const managerOk = Boolean(managerStatus?.running && !managerStatus.error)
+    const containerOk = containerDiagnostics.docker.available && image.present
+    const ok = Boolean(infra.ok && matrixOk && containerOk && managerOk)
+    const steps = [
+      {
+        id: 'matrix-config',
+        label: '应用本地 Matrix 配置',
+        ok: true,
+        message: `${matrixConfig.homeserverUrl} / ${matrixConfig.serverName}`,
+      },
+      {
+        id: 'infra',
+        label: '启动 Tuwunel / MinIO',
+        ok: infra.ok,
+        message: infra.message,
+        output: infra.output,
+      },
+      {
+        id: 'openclaw-image',
+        label: '准备 OpenClaw runtime 镜像',
+        ok: image.present,
+        message: image.present ? 'OpenClaw runtime 镜像可用。' : image.error || 'OpenClaw runtime 镜像不可用。',
+        output: image.output,
+      },
+      {
+        id: 'manager',
+        label: '启动 OpenClaw Manager',
+        ok: managerOk,
+        message: managerOk
+          ? 'OpenClaw Manager 已运行。'
+          : managerStatus?.error || managerHealth?.error || 'OpenClaw Manager 未运行。',
+      },
+    ]
+    logger.warn({ ok, steps }, 'Local HiClaw-lite runtime prepare requested from settings')
+    return c.json({
+      ok,
+      message: ok
+        ? '本机 HiClaw-lite 运行环境已就绪，可以创建 Matrix Room 并让 OpenClaw Manager 接管群聊。'
+        : firstFailedStepMessage(steps) || '本机运行环境还没有完全就绪，请查看步骤详情。',
+      steps,
+      diagnostics: {
+        matrix: matrixDiagnostics,
+        containerRuntime: containerDiagnostics,
+        controllerPlane,
+        managerRuntime: {
+          configuredRuntimeType: getConfiguredRuntimeType(),
+          activeRuntimeType: provider?.runtimeType ?? 'openclaw',
+          activeStatus: managerStatus ?? null,
+          activeHealth: managerHealth ?? null,
+          providers: await listManagerProviders(),
+          message: managerStatus ? managerRuntimeStatusMessage(managerStatus) : 'OpenClaw Manager provider 不可用。',
+        },
+      },
+    })
+  })
   .get('/container-runtime/logs/:name', async (c) => {
     const name = c.req.param('name')
     if (!/^agenthub-(manager|worker)-[a-zA-Z0-9_.-]+$/.test(name)) {

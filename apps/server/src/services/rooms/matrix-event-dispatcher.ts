@@ -96,14 +96,16 @@ export class MatrixRoomEventDispatcher {
         const provider = getActiveManagerProvider()
         if (provider && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
           const status = await provider.status()
-          if (status.running) {
+          if (status.running && !status.error) {
             return { consumed: true, skipped: true, reason: 'resident-manager-active' }
           }
           return {
             consumed: false,
             skipped: true,
-            reason: 'resident-manager-not-running',
-            error: 'Manager runtime is not running. Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_OPENCLAW_MANAGER_ENDPOINT.',
+            reason: status.error ? 'resident-manager-not-ready' : 'resident-manager-not-running',
+            error:
+              status.error ||
+              'Manager runtime is not running. Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_OPENCLAW_MANAGER_ENDPOINT.',
           }
         }
         return { consumed: false, skipped: true, reason: 'no-resident-manager-provider' }
@@ -290,27 +292,6 @@ export class MatrixRoomEventDispatcher {
       if (isConsumedResult(resumeResult)) return true
     }
 
-    // Human message in group room → trigger Manager step (HiClaw model)
-    if (event.senderType === 'human' && (room.kind === 'group' || room.kind === 'manager_dm')) {
-      // Handle human interrupt for active run before stepping Manager
-      if (room.workspaceId && room.sessionId) {
-        await this.maybeHandleHumanInterrupt({
-          groupSessionId: room.sessionId,
-          workspaceId: room.workspaceId,
-          ownerId: room.ownerId,
-          content: event.body,
-          eventId: event.id,
-        }).catch(() => {})
-      }
-      await this.handlers.stepManagerRoom({
-        roomId: room.id,
-        ownerId: room.ownerId,
-        afterSequence: Math.max(0, event.sequence - 1),
-        source: event.metadata?.kind === 'matrix.sync.imported' ? 'matrix-sync' : 'platform-timeline',
-      })
-      return true
-    }
-
     for (const participantId of mentionedParticipantIds) {
       const [participant] = await db
         .select()
@@ -367,18 +348,20 @@ export class MatrixRoomEventDispatcher {
       }
 
       // Group room @Worker → forward to active task room if any (HiClaw model)
-      if (participant.participantType === 'worker' && room.kind === 'group' && participant.workspaceAgentId && participant.workerInstanceId) {
-        const [activeThread] = await db
-          .select()
-          .from(taskThreads)
-          .where(
-            and(
-              eq(taskThreads.workerInstanceId, participant.workerInstanceId),
-              eq(taskThreads.status, 'active'),
-            ),
-          )
-          .orderBy(desc(taskThreads.updatedAt))
-          .limit(1)
+      if (participant.participantType === 'worker' && room.kind === 'group' && participant.workspaceAgentId) {
+        const [activeThread] = participant.workerInstanceId
+          ? await db
+              .select()
+              .from(taskThreads)
+              .where(
+                and(
+                  eq(taskThreads.workerInstanceId, participant.workerInstanceId),
+                  eq(taskThreads.status, 'active'),
+                ),
+              )
+              .orderBy(desc(taskThreads.updatedAt))
+              .limit(1)
+          : []
         if (activeThread) {
           const [taskRoom] = await db
             .select()
@@ -400,20 +383,60 @@ export class MatrixRoomEventDispatcher {
               },
             })
           }
+          return true
         }
-        // Even if no active task, the mention is already in group timeline; no further action needed.
+        const runResult = await workerRuntimeService.runGroupMentionRoom({
+          roomId: room.id,
+          ownerId: room.ownerId,
+          workspaceAgentId: participant.workspaceAgentId,
+          sourceEventId: event.id,
+          prompt: event.body,
+        })
+        if (runResult.appendedEventIds.length > 0 && participant.workerInstanceId) {
+          await markWorkerInstanceState(participant.workerInstanceId, 'idle', {
+            message: 'Worker answered group room mention.',
+            health: {
+              roomId: room.id,
+              sourceEventId: event.id,
+              appendedEventIds: runResult.appendedEventIds,
+            },
+          })
+        }
         return true
       }
 
       if (participant.participantType === 'manager' && (room.kind === 'group' || room.kind === 'manager_dm')) {
-        await this.handlers.stepManagerRoom({
+        const managerResult = await this.handlers.stepManagerRoom({
           roomId: room.id,
           ownerId: room.ownerId,
           afterSequence: Math.max(0, event.sequence - 1),
           source: 'matrix-manager-mention',
         })
+        await this.appendManagerDispatchDiagnostic(room, event, managerResult)
         return true
       }
+    }
+
+    // Human message in group room without a more specific @mention → Manager observes.
+    if (event.senderType === 'human' && (room.kind === 'group' || room.kind === 'manager_dm')) {
+      // Handle human interrupt for active run before stepping Manager
+      if (room.workspaceId && room.sessionId) {
+        await this.maybeHandleHumanInterrupt({
+          groupSessionId: room.sessionId,
+          workspaceId: room.workspaceId,
+          ownerId: room.ownerId,
+          content: event.body,
+          eventId: event.id,
+        }).catch(() => {})
+      }
+      const managerResult = await this.handlers.stepManagerRoom({
+        roomId: room.id,
+        ownerId: room.ownerId,
+        afterSequence: Math.max(0, event.sequence - 1),
+        source: event.metadata?.kind === 'matrix.sync.imported' ? 'matrix-sync' : 'platform-timeline',
+      })
+      await this.appendManagerDispatchDiagnostic(room, event, managerResult)
+      return true
     }
 
     // Direct room: Worker picks up human messages via its own /sync loop.
@@ -421,6 +444,35 @@ export class MatrixRoomEventDispatcher {
     // and responds autonomously.
 
     return false
+  }
+
+  private async appendManagerDispatchDiagnostic(
+    room: typeof rooms.$inferSelect,
+    sourceEvent: typeof timelineEvents.$inferSelect,
+    result: unknown,
+  ) {
+    if (!result || typeof result !== 'object') return
+    const payload = result as Record<string, unknown>
+    const consumed = payload.consumed === true
+    const error = typeof payload.error === 'string' ? payload.error : ''
+    if (consumed && !error) return
+    const reason = typeof payload.reason === 'string' ? payload.reason : 'manager-dispatch-not-consumed'
+    await roomService.appendTimelineEvent({
+      roomId: room.id,
+      senderParticipantId: null,
+      senderType: 'system',
+      type: 'system',
+      body: managerDispatchDiagnosticBody(reason, error),
+      metadata: {
+        kind: 'manager.dispatch.diagnostic',
+        reason,
+        sourceEventId: sourceEvent.id,
+        sourceEventSequence: sourceEvent.sequence,
+        result: payload,
+        hiddenFromChat: true,
+        uiPresentation: 'room-status',
+      },
+    })
   }
 
   private async maybeHandleHumanInterrupt(params: {
@@ -554,6 +606,19 @@ function parseMatrixControlCommand(body: string | null | undefined) {
   if (command === 'approve' || command === 'ok' || command === 'yes') return { type: 'approve' as const, reason: rest }
   if (command === 'deny' || command === 'reject' || command === 'no') return { type: 'deny' as const, reason: rest }
   return null
+}
+
+function managerDispatchDiagnosticBody(reason: string, error: string) {
+  if (reason === 'resident-manager-not-running') {
+    return 'Manager 当前未在线。请在设置页启动 OpenClaw / QwenPaw Manager 后再由 Manager 接管群聊。'
+  }
+  if (reason === 'resident-manager-not-ready') {
+    return 'Manager Runtime 尚未就绪。请检查设置页的 Manager Runtime / Matrix 状态。'
+  }
+  if (reason === 'no-resident-manager-provider') {
+    return '尚未配置可接管群聊的 Manager Runtime。'
+  }
+  return error || 'Manager runtime 没有接住这条消息，请检查设置页的 Manager Runtime / Matrix 状态。'
 }
 
 function isConsumedResult(result: unknown): result is { consumed: boolean } {

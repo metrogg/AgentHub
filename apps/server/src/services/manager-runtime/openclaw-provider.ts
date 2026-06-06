@@ -2,10 +2,12 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
+import { db, eq, rooms } from '@agenthub/db'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
 import { getRuntimeServerPort } from '../../lib/runtime-server'
-import { createMatrixClientFromEnv } from '../rooms/matrix-client'
+import { resolveLlmRuntimeConfig } from '../llm-client'
+import { createMatrixClientFromEnv, matrixLocalpart } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import {
   containerControllerUrl,
@@ -88,6 +90,14 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     const running = containerMode
       ? Boolean(container?.running)
       : this.process !== null && !this.process.killed
+    const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
+    const configInspection = inspectOpenClawManagerConfig(this.getConfigPath(), matrixDomain)
+    const configError =
+      !endpoint && configInspection.exists && !configInspection.matrixPluginEnabled
+        ? 'OpenClaw Manager config has channels.matrix enabled but plugins.entries.matrix is not enabled; restart/regenerate Manager runtime config.'
+        : !endpoint && configInspection.exists && !configInspection.humanAllowed
+          ? `OpenClaw Manager config does not allow the AgentHub human Matrix user (${configInspection.expectedHumanUserId}); restart/regenerate Manager runtime config.`
+          : null
 
     return {
       runtimeType: this.runtimeType,
@@ -101,7 +111,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       endpoint,
       stepEndpoint: endpoint ? resolveStepEndpoint(endpoint) : null,
       healthEndpoint: endpoint ? resolveHealthEndpoint(endpoint) : null,
-      error: !containerMode && !binaryPath && !endpoint ? 'OpenClaw binary not found and no endpoint configured' : null,
+      error: configError || (!containerMode && !binaryPath && !endpoint ? 'OpenClaw binary not found and no endpoint configured' : null),
       diagnostics: {
         backend: containerMode ? 'docker' : 'local-process',
         containerName: containerMode ? managerContainerName(this.runtimeType) : null,
@@ -111,6 +121,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         endpointConfigured: endpoint !== null,
         synchronousStepReady: endpoint !== null,
         gatewayPort: this.managerGatewayPort,
+        configInspection,
         note: endpoint
           ? 'OpenClaw Manager endpoint is configured; AgentHub can call POST /step.'
           : containerMode
@@ -126,7 +137,10 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
 
   async ensureStarted(): Promise<ManagerRuntimeStatus> {
     const st = await this.status()
-    if (st.running) return st
+    if (st.running && !st.error) return st
+    if (st.running && st.error) {
+      await this.stop?.()
+    }
     if (st.endpoint) return st // external endpoint, no need to start
 
     if (!managerContainersEnabled() && !st.binaryPath) {
@@ -155,8 +169,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       return { ...st, error: `Matrix identity failed: ${err}` }
     }
 
-    // Generate config with Matrix credentials
-    this.generateConfig()
+    // Generate config with Matrix credentials and a real model catalog target.
+    await this.generateConfig()
 
     // Copy agent files
     this.copyAgentFiles()
@@ -258,15 +272,20 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return join(this.managerWorkspace, 'openclaw.json')
   }
 
-  private generateConfig(): string {
+  private async generateConfig(): Promise<string> {
     const matrixUrl = this.config.matrixUrl || (managerContainersEnabled() ? containerMatrixUrl() : process.env.AGENTHUB_MATRIX_HOMESERVER_URL) || 'http://localhost:6167'
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
-    const llmBaseUrl = this.config.llmBaseUrl || process.env.AGENTHUB_MANAGER_LLM_BASE_URL || (managerContainersEnabled() ? containerLlmBaseUrl() : process.env.LLM_BASE_URL) || 'http://localhost:8000/v1'
-    const llmApiKey = this.config.llmApiKey || process.env.AGENTHUB_MANAGER_LLM_API_KEY || process.env.LLM_API_KEY || 'agenthub-internal'
-    const llmModel = this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL || 'default'
+    const defaultHumanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
+    const adminUserId = `@admin:${matrixDomain}`
+    const managerAllowFrom = Array.from(new Set([adminUserId, defaultHumanUserId]))
+    const resolvedLlm = await resolveLlmRuntimeConfig(this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL || undefined)
+    const llmBaseUrl = this.config.llmBaseUrl || process.env.AGENTHUB_MANAGER_LLM_BASE_URL || (managerContainersEnabled() ? containerLlmBaseUrl() : resolvedLlm.baseUrl)
+    const llmApiKey = this.config.llmApiKey || process.env.AGENTHUB_MANAGER_LLM_API_KEY || resolvedLlm.apiKey || process.env.LLM_API_KEY || 'agenthub-internal'
+    const llmModel = this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || resolvedLlm.model
     const llmContextWindow = Number(process.env.AGENTHUB_MANAGER_LLM_CONTEXT_WINDOW || '128000')
     const llmMaxTokens = Number(process.env.AGENTHUB_MANAGER_LLM_MAX_TOKENS || '8192')
+    const matrixGroups = await loadOpenClawMatrixGroups()
 
     const config = {
       gateway: {
@@ -286,11 +305,12 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
           encryption: false,
           network: { dangerouslyAllowPrivateNetwork: true },
           autoJoin: 'always',
-          dm: { policy: 'allowlist', allowFrom: [`@admin:${matrixDomain}`] },
-          groupPolicy: 'open',
-          groupAllowFrom: [`@admin:${matrixDomain}`],
-          streaming: 'partial',
-          blockStreaming: true,
+          dm: { policy: 'allowlist', allowFrom: managerAllowFrom },
+          groupPolicy: 'allowlist',
+          groupAllowFrom: managerAllowFrom,
+          groups: matrixGroups,
+          streaming: 'off',
+          blockStreaming: false,
         },
       },
       models: {
@@ -325,7 +345,9 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       },
       plugins: {
         load: { paths: [join(this.managerWorkspace, 'skills')] },
-        entries: {},
+        entries: {
+          matrix: { enabled: true },
+        },
       },
       commands: { restart: true },
     }
@@ -508,6 +530,24 @@ function preferredManagerGatewayPort() {
   return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 18799
 }
 
+async function loadOpenClawMatrixGroups() {
+  const rows = await db
+    .select({ providerRoomId: rooms.providerRoomId })
+    .from(rooms)
+    .where(eq(rooms.status, 'active'))
+
+  const groups: Record<string, { enabled: true; requireMention: false; autoReply: true }> = {}
+  for (const row of rows) {
+    if (!row.providerRoomId) continue
+    groups[row.providerRoomId] = {
+      enabled: true,
+      requireMention: false,
+      autoReply: true,
+    }
+  }
+  return groups
+}
+
 async function findAvailablePort(start: number, attempts: number) {
   for (let offset = 0; offset < attempts; offset += 1) {
     const port = start + offset
@@ -525,4 +565,51 @@ function isPortAvailable(port: number) {
       server.close(() => resolve(true))
     })
   })
+}
+
+function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) {
+  const expectedHumanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
+  const result = {
+    exists: existsSync(configPath),
+    expectedHumanUserId,
+    allowFrom: [] as string[],
+    groupAllowFrom: [] as string[],
+    groupPolicy: null as string | null,
+    requireMention: null as boolean | null,
+    matrixChannelEnabled: false,
+    matrixPluginEnabled: false,
+    matrixGroupCount: 0,
+    humanAllowed: false,
+    error: null as string | null,
+  }
+  if (!result.exists) return result
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+    const matrix = ((parsed.channels as any)?.matrix ?? {}) as Record<string, unknown>
+    const matrixPlugin = ((parsed.plugins as any)?.entries?.matrix ?? {}) as Record<string, unknown>
+    const dm = (matrix.dm ?? {}) as Record<string, unknown>
+    result.allowFrom = arrayOfStrings(dm.allowFrom)
+    result.groupAllowFrom = arrayOfStrings(matrix.groupAllowFrom)
+    result.groupPolicy = typeof matrix.groupPolicy === 'string' ? matrix.groupPolicy : null
+    const groups = isPlainRecord(matrix.groups) ? matrix.groups : {}
+    const wildcardGroup = ((groups as any)?.['*'] ?? {}) as Record<string, unknown>
+    result.requireMention = typeof wildcardGroup.requireMention === 'boolean' ? wildcardGroup.requireMention : null
+    result.matrixChannelEnabled = matrix.enabled === true
+    result.matrixPluginEnabled = matrixPlugin.enabled === true
+    result.matrixGroupCount = Object.keys(groups).length
+    const allowed = new Set([...result.allowFrom, ...result.groupAllowFrom])
+    result.humanAllowed = allowed.has(expectedHumanUserId) || allowed.has('*')
+  } catch (err) {
+    result.error = err instanceof Error ? err.message : String(err)
+  }
+  return result
+}
+
+function arrayOfStrings(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }

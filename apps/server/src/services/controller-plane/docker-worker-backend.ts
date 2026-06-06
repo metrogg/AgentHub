@@ -12,6 +12,7 @@ import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resource
 import { workerController } from '../orchestrator/worker-controller'
 import { deployWorkerConfig, getWorkerWorkspaceDir } from '../worker-runtime/worker-openclaw-config'
 import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-reporter'
+import { resolveLlmRuntimeConfig } from '../llm-client'
 import {
   localCliWorkerBackend,
   type WorkerBackend,
@@ -78,6 +79,7 @@ export class DockerWorkerBackend implements WorkerBackend {
     const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const gatewayPort = workerGatewayPort(worker.id)
     const workerName = agent?.name ?? worker.id
+    const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
     deployWorkerConfig({
       workerInstanceId: worker.id,
       workerName,
@@ -85,9 +87,9 @@ export class DockerWorkerBackend implements WorkerBackend {
       matrixDomain,
       matrixUserId: identity.userId,
       matrixAccessToken: identity.accessToken,
-      llmBaseUrl: containerLlmBaseUrl(),
-      llmApiKey: process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || 'agenthub-internal',
-      llmModel: worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || 'default',
+      llmBaseUrl: process.env.AGENTHUB_WORKER_LLM_BASE_URL || containerLlmBaseUrl() || resolvedLlm.baseUrl,
+      llmApiKey: process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || resolvedLlm.apiKey || 'agenthub-internal',
+      llmModel: worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model,
       gatewayPort,
       dmAllowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
       groupAllowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
