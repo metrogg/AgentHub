@@ -52,12 +52,17 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
   - `workerRuntimes[]` 会逐个暴露 WorkerInstance 的 runtime mode（resident OpenClaw / resident QwenPaw / bridge）、runtime base、observed/desired state、Matrix identity、Room participant、listener owner、heartbeat、last error 和标准 contract 文件完整性。
   - 对 OpenCode / Claude Code / Codex / Gemini 这类 bridge Worker，诊断会调用 `inspectCodeAgentRuntime()`，检查 CLI 安装、模型凭据、执行开关、cwd 和 blockers，避免只用文件存在性假装 runtime healthy。
   - 该接口只描述 AgentHub 内部资源调和层，不做 Manager 智能决策，也不读取或暴露敏感 token。
+- `apps/server/src/services/controller-plane/resident-worker-self-test.ts`
+  - 提供 resident Worker 自检入口，用于验证 OpenClaw/QwenPaw Worker 是否真的具备常驻运行条件。
+  - dry-run 检查 WorkerInstance、runtime base、WorkspaceAgent、标准 Worker contract、Matrix identity、Room participant 和 WorkerBackend health。
+  - 显式 `dispatch=true` 时会通过真实 Room timeline 写入 @mention probe，并等待 Worker 以 `TASK_COMPLETED / QUESTION / BLOCKED / PHASE_DONE` 协议回复；这用于现场验证 resident Worker 是否真的通过自己的 Matrix `/sync` 接单，而不是被 AgentHub bridge 代跑。
 
 运行与诊断入口：
 
 - 服务启动时 `apps/server/src/index.ts` 会启动 `controllerReconcileQueue`，并记录队列状态。
 - 后端暴露 `GET /api/settings/controller-plane/status`，返回 `describeControllerPlane()`。
-- 设置页已经展示 `Controller Plane` 诊断卡，显示队列是否运行、注册的 resource kinds、Worker/Room/Run/RuntimeLease/Artifact 等资源计数，并展示每个 Worker 的 resident/bridge 模式、Matrix listener owner、contract ready/missing、bridge runtime ready/blocked、heartbeat 和错误状态。
+- 后端暴露 `POST /api/settings/controller-plane/workers/:workerInstanceId/resident-self-test`，返回 resident Worker readiness / probe 结果。
+- 设置页已经展示 `Controller Plane` 诊断卡，显示队列是否运行、注册的 resource kinds、Worker/Room/Run/RuntimeLease/Artifact 等资源计数，并展示每个 Worker 的 resident/bridge 模式、Matrix listener owner、contract ready/missing、bridge runtime ready/blocked、heartbeat 和错误状态。resident Worker 行提供 `Resident 自检`，默认 dry-run，不污染 Room timeline。
 
 2026-06-07 现场补充：
 
@@ -75,6 +80,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - 新增 `apps/server/src/services/agent-contract/`：Manager 和 Worker 的 SOUL/AGENTS/Skills/registry/state 生成逻辑归口到这里。Manager contract 会生成 `runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / state.json / rooms.json / logs`，并镜像到 OpenClaw `agentDir`；`manager-runtime/manager-config.ts` 只保留兼容外壳。
 - 新增 bridge contract projection：`EphemeralCodeAgentWorkerRuntime` 在调用 OpenCode / Claude Code / Codex / Gemini CLI 前，会把标准 Worker contract 投影到本次执行 cwd 的 `AGENTS.md` 和 `.agenthub/worker-contract/`，让 bridge Worker 和 resident Worker 共享 SOUL/AGENTS/Skills/registry/state 语义。
 - Controller Plane 诊断已补上 Worker runtime 明细：设置页现在可以直接看出某个 Worker 是 `resident-openclaw`、`resident-qwenpaw` 还是 `bridge`，是否拥有 Matrix identity/participant，SOUL/AGENTS/skills/state/rooms/tasks 是否齐全，以及最近 heartbeat/error。bridge Worker 还会展示 `inspectCodeAgentRuntime()` 的结果，例如 CLI 未安装、模型凭据缺失、执行开关关闭或 cwd 无效。
+- Resident Worker 自检已接入 Controller Plane：设置页可对 OpenClaw/QwenPaw resident worker 做 dry-run readiness 检查；自动化测试覆盖 `dispatch=true` 的 Matrix probe，确保 self-test request 写入 Room timeline 后能观察到 Worker 协议回复。
 
 Manager Runtime 已调整：
 
@@ -92,6 +98,7 @@ Manager Runtime 已调整：
   - 验证 Manager Runtime `create_worker` action 会真正创建 Worker、加入当前 group room，并写入 applied 阶段结果。
   - 验证默认 reconcile queue 能 dispatch Worker request。
   - 验证 `describeControllerPlane()` 返回控制面边界、资源计数和 Worker runtime 明细，并检查标准 Worker contract 文件已生成、bridge runtime inspection 已执行。
+  - 验证 resident Worker self-test 能检查 readiness，并能通过 Matrix probe 观察到 Worker 协议回复。
 - `tests/manager-runtime.test.ts`
   - 验证 Manager tools 仍可执行。
 

@@ -749,6 +749,34 @@ export interface WorkerRuntimeDiagnostic {
   }
 }
 
+export interface ResidentWorkerSelfTestResult {
+  ok: boolean
+  workerInstanceId: string
+  runtimeBase: string | null
+  dispatchAttempted: boolean
+  dispatchEventId: string | null
+  probeRoom: {
+    roomId: string
+    roomKind: string
+    providerRoomId: string
+    participantId: string
+  } | null
+  observedReply: {
+    eventId: string
+    sequence: number
+    body: string
+    protocol: 'TASK_COMPLETED' | 'BLOCKED' | 'QUESTION' | 'PHASE_DONE' | 'NO_REPLY' | 'message'
+  } | null
+  checks: Array<{
+    id: string
+    label: string
+    ok: boolean
+    message: string
+    details?: Record<string, unknown>
+  }>
+  message: string
+}
+
 export interface ContainerRuntimeDiagnostics {
   provider: 'docker'
   enabled: boolean
@@ -1903,6 +1931,18 @@ export const api = {
   stopLocalMatrix: () =>
     request<LocalMatrixActionResult>('/settings/matrix/local/stop', { method: 'POST', timeout: 70_000 }),
   getControllerPlaneStatus: () => request<ControllerPlaneDiagnostics>('/settings/controller-plane/status'),
+  runResidentWorkerSelfTest: (
+    workerInstanceId: string,
+    input?: { dispatch?: boolean; roomId?: string | null; timeoutMs?: number },
+  ) =>
+    request<ResidentWorkerSelfTestResult>(
+      `/settings/controller-plane/workers/${encodeURIComponent(workerInstanceId)}/resident-self-test`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input ?? {}),
+        timeout: input?.dispatch ? 70_000 : 20_000,
+      },
+    ),
   getContainerRuntimeStatus: () => request<ContainerRuntimeDiagnostics>('/settings/container-runtime/status'),
   prepareLocalContainerRuntime: () =>
     request<PrepareLocalContainerRuntimeResult>('/settings/container-runtime/prepare-local', {

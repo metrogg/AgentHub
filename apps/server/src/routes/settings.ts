@@ -35,6 +35,7 @@ import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/
 import { describeContainerRuntime, ensureOpenClawRuntimeImage } from '../services/container-runtime/agent-runtime-containers'
 import { dockerRuntime } from '../services/container-runtime/docker-runtime'
 import { describeControllerPlane } from '../services/controller-plane/diagnostics'
+import { runResidentWorkerSelfTest } from '../services/controller-plane/resident-worker-self-test'
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
@@ -246,6 +247,23 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/controller-plane/status', async (c) => {
     return c.json(await describeControllerPlane())
+  })
+  .post('/controller-plane/workers/:workerInstanceId/resident-self-test', async (c) => {
+    const workerInstanceId = c.req.param('workerInstanceId')
+    const user = c.get('user') ?? DEFAULT_USER
+    const body = await c.req.json<{
+      dispatch?: boolean
+      roomId?: string | null
+      timeoutMs?: number
+    }>().catch(() => ({} as { dispatch?: boolean; roomId?: string | null; timeoutMs?: number }))
+    const result = await runResidentWorkerSelfTest({
+      workerInstanceId,
+      ownerId: user.sub,
+      dispatch: body.dispatch === true,
+      roomId: body.roomId ?? null,
+      timeoutMs: body.timeoutMs,
+    })
+    return c.json(result)
   })
   .get('/container-runtime/status', async (c) => {
     return c.json(await describeContainerRuntime())

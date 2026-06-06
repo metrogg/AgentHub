@@ -1,10 +1,11 @@
-import './setup'
+import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const {
   db,
   eq,
+  matrixIdentities,
   roomParticipants,
   rooms,
   sessions,
@@ -20,9 +21,12 @@ const {
   condition,
   controllerReconcileQueue,
   describeControllerPlane,
+  runResidentWorkerSelfTest,
   resourceKey,
   resourceRef,
 } = await import('../apps/server/src/services/controller-plane')
+const { ensureWorkerAgentContract } = await import('../apps/server/src/services/agent-contract')
+const { roomService } = await import('../apps/server/src/services/rooms')
 
 describe('Controller Plane', () => {
   test('resource refs and conditions use stable control-plane shape', () => {
@@ -362,4 +366,139 @@ describe('Controller Plane', () => {
       expect(typeof workerRuntime.runtimeInspection.nativeProbe?.ok).toBe('boolean')
     }
   })
+
+  test('resident Worker self-test checks readiness and observes Matrix probe replies', async () => {
+    const previousWorkerBackend = process.env.AGENTHUB_WORKER_BACKEND
+    const previousContainerRuntime = process.env.AGENTHUB_CONTAINER_RUNTIME
+    process.env.AGENTHUB_WORKER_BACKEND = 'local'
+    delete process.env.AGENTHUB_CONTAINER_RUNTIME
+    try {
+      const { worker, agent, room, participant } = await createResidentWorkerSelfTestFixture()
+
+      const dryRun = await runResidentWorkerSelfTest({
+        workerInstanceId: worker.id,
+        ownerId: 'default-user',
+        dispatch: false,
+      })
+
+      expect(dryRun.ok).toBe(true)
+      expect(dryRun.runtimeBase).toBe('openclaw')
+      expect(dryRun.dispatchAttempted).toBe(false)
+      expect(dryRun.probeRoom?.roomId).toBe(room.id)
+      expect(dryRun.checks.find((item) => item.id === 'contract')?.ok).toBe(true)
+      expect(dryRun.checks.find((item) => item.id === 'matrix-identity')?.ok).toBe(true)
+
+      const running = runResidentWorkerSelfTest({
+        workerInstanceId: worker.id,
+        ownerId: 'default-user',
+        dispatch: true,
+        timeoutMs: 800,
+      })
+
+      await waitForCondition(
+        async () => {
+          const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+          return events.some((event) => event.metadata?.kind === 'worker-runtime.resident-self-test.request')
+        },
+        Boolean,
+        { timeoutMs: 1000, description: 'resident self-test probe request' },
+      )
+
+      await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: participant.id,
+        senderType: 'worker',
+        type: 'worker.message',
+        body: 'TASK_COMPLETED: resident-self-test-ok',
+        metadata: {
+          workerInstanceId: worker.id,
+          workspaceAgentId: agent.id,
+        },
+      })
+
+      const result = await running
+      expect(result.ok).toBe(true)
+      expect(result.dispatchAttempted).toBe(true)
+      expect(result.dispatchEventId).toBeTruthy()
+      expect(result.observedReply).toMatchObject({
+        body: 'TASK_COMPLETED: resident-self-test-ok',
+        protocol: 'TASK_COMPLETED',
+      })
+    } finally {
+      if (previousWorkerBackend === undefined) {
+        delete process.env.AGENTHUB_WORKER_BACKEND
+      } else {
+        process.env.AGENTHUB_WORKER_BACKEND = previousWorkerBackend
+      }
+      if (previousContainerRuntime === undefined) {
+        delete process.env.AGENTHUB_CONTAINER_RUNTIME
+      } else {
+        process.env.AGENTHUB_CONTAINER_RUNTIME = previousContainerRuntime
+      }
+    }
+  })
 })
+
+async function createResidentWorkerSelfTestFixture() {
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({
+      ownerId: 'default-user',
+      name: 'Resident Self Test Workspace',
+      goal: 'Validate resident Worker self-test',
+    })
+    .returning()
+  const [agent] = await db
+    .insert(workspaceAgents)
+    .values({
+      workspaceId: workspace!.id,
+      name: 'Resident Builder',
+      role: 'Resident Worker',
+      modelId: 'test-model',
+      runtimeType: 'code-agent',
+      codeAgentType: null,
+      roleProfile: { workerRuntimeBase: 'openclaw' },
+    })
+    .returning()
+  const [worker] = await db
+    .insert(workerInstances)
+    .values({
+      workspaceId: workspace!.id,
+      workspaceAgentId: agent!.id,
+      runtimeFamily: 'worker',
+      runtimeBase: 'openclaw',
+      modelId: 'test-model',
+      observedState: 'listening',
+      desiredState: 'running',
+    })
+    .returning()
+  await db.insert(matrixIdentities).values({
+    ownerType: 'worker',
+    ownerId: worker!.id,
+    serverName: 'agenthub.local',
+    localpart: `worker-${worker!.id.slice(0, 8)}`,
+    userId: `@worker-${worker!.id.slice(0, 8)}:agenthub.local`,
+    accessToken: 'resident-worker-token',
+    displayName: agent!.name,
+  })
+  await ensureWorkerAgentContract({
+    workerInstanceId: worker!.id,
+    agent: agent!,
+    runtimeBase: 'openclaw',
+    matrixUserId: `@worker-${worker!.id.slice(0, 8)}:agenthub.local`,
+    runtimeConfigPath: 'openclaw.json',
+    currentRooms: [],
+  })
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      title: 'Resident Self Test Group',
+      type: 'group',
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+    })
+    .returning()
+  const room = await roomService.ensureRoomForSession(session!.id, 'default-user')
+  const participant = await roomService.addWorkerParticipant(room.id, agent!.id, worker!.id)
+  return { workspace: workspace!, agent: agent!, worker: worker!, room, participant }
+}

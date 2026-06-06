@@ -2724,6 +2724,36 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
+  async function runResidentWorkerSelfTest(worker: ControllerPlaneDiagnostics['workerRuntimes'][number]) {
+    const key = `resident-self-test:${worker.workerInstanceId}`
+    setBusy(key)
+    try {
+      const result = await api.runResidentWorkerSelfTest(worker.workerInstanceId, { dispatch: false })
+      const failed = result.checks.find((item) => !item.ok)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'controller-plane/resident-self-test',
+        content: result.ok
+          ? `${worker.agentName}: ${result.message}`
+          : `${worker.agentName}: ${failed?.label ?? 'self-test'} - ${failed?.message ?? result.message}`,
+      })
+      const controller = await api.getControllerPlaneStatus().catch(() => null)
+      if (controller) setControllerPlane(controller)
+      showNotice(result.ok ? `${worker.agentName} resident 自检通过` : `${worker.agentName} 自检未通过：${failed?.message ?? result.message}`)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '前端',
+        module: 'controller-plane/resident-self-test',
+        content: error?.message || 'Resident Worker 自检失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function openPathWithFallback(path: string | undefined, label: string) {
     if (!path) {
       showNotice(t('路径尚未就绪'))
@@ -3686,7 +3716,12 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               ) : (
                 <div className="space-y-2">
                   {controllerPlane.workerRuntimes.slice(0, 12).map((worker) => (
-                    <WorkerRuntimeDiagnosticRow key={worker.workerInstanceId} worker={worker} />
+                    <WorkerRuntimeDiagnosticRow
+                      key={worker.workerInstanceId}
+                      worker={worker}
+                      busy={busy === `resident-self-test:${worker.workerInstanceId}`}
+                      onSelfTest={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker)}
+                    />
                   ))}
                 </div>
               )}
@@ -3748,7 +3783,15 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   )
 }
 
-function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnostics['workerRuntimes'][number] }) {
+function WorkerRuntimeDiagnosticRow({
+  worker,
+  busy,
+  onSelfTest,
+}: {
+  worker: ControllerPlaneDiagnostics['workerRuntimes'][number]
+  busy?: boolean
+  onSelfTest?: () => void
+}) {
   const contractMissing = Object.entries(worker.contractFiles)
     .filter(([, ok]) => !ok)
     .map(([name]) => name)
@@ -3820,6 +3863,12 @@ function WorkerRuntimeDiagnosticRow({ worker }: { worker: ControllerPlaneDiagnos
           <div className="mt-1 truncate" style={{ color: '#dc2626' }} title={runtimeHealth.blockers.join(' / ')}>
             {runtimeHealth.blockers[0]}
           </div>
+        )}
+        {onSelfTest && (
+          <button type="button" onClick={onSelfTest} disabled={busy} className="settings-soft-button mt-2 h-7 px-2 text-xs">
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+            Resident 自检
+          </button>
         )}
       </div>
     </div>

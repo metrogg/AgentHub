@@ -17,6 +17,10 @@ export {
 } from './controller-api'
 export { describeControllerPlane, type ControllerPlaneDiagnostics } from './diagnostics'
 export {
+  runResidentWorkerSelfTest,
+  type ResidentWorkerSelfTestResult,
+} from './resident-worker-self-test'
+export {
   LocalCliWorkerBackend,
   localCliWorkerBackend,
   type WorkerBackend,
