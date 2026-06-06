@@ -22,7 +22,7 @@
       "enabled": true,
       "homeserver": "http://localhost:6167",
       "userId": "@manager:agenthub.local",
-      "accessToken": "IrPgDl5tM5Dz1GreAgBwpWNMl5glF1w7",
+      "accessToken": "mZdaPtPc9U5AgXFvTrYHWq8XDttNtFlR",
       "encryption": false,
       "network": {
         "dangerouslyAllowPrivateNetwork": true
@@ -51,19 +51,19 @@
     "mode": "merge",
     "providers": {
       "agenthub-llm": {
-        "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
-        "apiKey": "tp-c73dgjhtdfgp6fd7l62580s5iz8uqwd8ahl9wbj3o9hdqc8c",
+        "baseUrl": "http://localhost:8000/v1",
+        "apiKey": "agenthub-internal",
         "api": "openai-completions",
         "models": [
           {
-            "id": "mimo-v2.5",
+            "id": "default",
             "reasoning": false,
             "contextWindow": 128000,
             "maxTokens": 8192,
             "input": [
               "text"
             ],
-            "name": "mimo-v2.5"
+            "name": "default"
           }
         ]
       }
@@ -74,7 +74,7 @@
       "timeoutSeconds": 1800,
       "workspace": "~",
       "model": {
-        "primary": "agenthub-llm/mimo-v2.5"
+        "primary": "agenthub-llm/default"
       },
       "maxConcurrent": 8,
       "subagents": {

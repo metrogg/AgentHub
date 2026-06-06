@@ -21,18 +21,23 @@ echo "=== AgentHub OpenClaw Setup ==="
 echo ""
 echo "[1/4] Checking prerequisites..."
 
-if ! command -v node &>/dev/null; then
-  echo "ERROR: Node.js not found. Install Node.js 22+ first."
+NODE_BIN=""
+for candidate in node.exe node; do
+  if command -v "$candidate" &>/dev/null; then
+    NODE_VERSION=$("$candidate" -v | sed 's/v//' | cut -d. -f1)
+    if [ "$NODE_VERSION" -ge 22 ] 2>/dev/null; then
+      NODE_BIN="$candidate"
+      break
+    fi
+  fi
+done
+
+if [ -z "$NODE_BIN" ]; then
+  echo "ERROR: Node.js 22+ not found. Install node.exe 24+ or node 22+ first."
   exit 1
 fi
 
-NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
-if [ "$NODE_VERSION" -lt 22 ]; then
-  echo "ERROR: Node.js 22+ required, found v$NODE_VERSION"
-  exit 1
-fi
-
-echo "Node.js $(node -v)"
+echo "Node.js $("$NODE_BIN" -v)"
 
 # ─── Step 2: Install OpenClaw ────────────────────────────────────────
 echo ""
@@ -43,7 +48,7 @@ if [ "$FROM_SOURCE" = "--from-source" ]; then
   OPENCLAW_BRANCH="hiclaw-2026.4.14"
 
   # Fix PATH for npm global binaries
-  NPM_GLOBAL="$(npm config get prefix 2>/dev/null)/bin"
+  NPM_GLOBAL="$("$NODE_BIN" -p 'process.env.APPDATA ? `${process.env.APPDATA}\\npm` : ""' 2>/dev/null)"
   if [ -d "$NPM_GLOBAL" ] && [[ ":$PATH:" != *":$NPM_GLOBAL:"* ]]; then
     export PATH="$NPM_GLOBAL:$PATH"
   fi
