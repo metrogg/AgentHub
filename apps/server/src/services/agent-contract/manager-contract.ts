@@ -11,6 +11,7 @@ import {
   workerInstances,
 } from '@agenthub/db'
 import { agentHubUserDataRoot } from '../system-paths'
+import { runtimeAdapterContract } from './worker-contract'
 
 const CONTEXT_START = '<!-- AGENTHUB:MANAGER-CONTEXT:START -->'
 const CONTEXT_END = '<!-- AGENTHUB:MANAGER-CONTEXT:END -->'
@@ -311,6 +312,7 @@ async function buildManagerControllerSnapshot(): Promise<{
       roleType: agent?.roleType ?? null,
       runtimeBase: worker.runtimeBase,
       runtimeFamily: worker.runtimeFamily,
+      runtimeContract: runtimeAdapterContract(worker.runtimeBase),
       modelId: worker.modelId,
       desiredState: worker.desiredState,
       observedState: worker.observedState,

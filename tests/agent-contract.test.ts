@@ -222,6 +222,15 @@ describe('Agent contract generator', () => {
     expect(workersRegistry.workers.some((item: any) => item.workerInstanceId === worker!.id)).toBe(true)
     const registryWorker = workersRegistry.workers.find((item: any) => item.workerInstanceId === worker!.id)
     expect(registryWorker.runtimeBase).toBe('opencode')
+    expect(registryWorker.runtimeContract.mode).toBe('bridge')
+    expect(registryWorker.runtimeContract.baseProfile.label).toBe('OpenCode Worker')
+    expect(registryWorker.runtimeContract.baseProfile.matrixIntegration.owner).toBe('agenthub-supervisor')
+    expect(registryWorker.runtimeContract.parityCapabilities).toEqual(expect.arrayContaining([
+      'matrix_identity',
+      'room_timeline_io',
+      'workspace_contract',
+      'heartbeat',
+    ]))
     expect(registryWorker.matrixUserId).toBe('@registry-worker:agenthub.local')
     expect(registryWorker.roomIds).toContain(room!.id)
     expect(registryWorker.activeLeaseIds).toHaveLength(1)

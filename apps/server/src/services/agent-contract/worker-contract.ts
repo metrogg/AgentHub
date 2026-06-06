@@ -257,7 +257,7 @@ function runtimeModeForBase(runtimeBase: string | null): 'resident' | 'bridge' |
   return runtimeBase === 'openclaw' || runtimeBase === 'qwenpaw' ? 'resident' : 'bridge'
 }
 
-function runtimeAdapterContract(runtimeBase: string | null) {
+export function runtimeAdapterContract(runtimeBase: string | null) {
   const mode = runtimeModeForBase(runtimeBase)
   const baseProfile = runtimeBaseProfile(runtimeBase)
   return {
