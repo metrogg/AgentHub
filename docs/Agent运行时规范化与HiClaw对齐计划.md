@@ -366,7 +366,8 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 进展：`agenthub room create/events/mention` 已改为调用 `/api/controller/rooms*`。这让 Manager 的 channel/worker/task skill 更接近 HiClaw 的“自然语言 -> skill -> Controller API -> Matrix Room timeline”链路。
    - 进展：新增 `agenthub.controller-api.v1alpha1` 轻量 operation schema，并通过 `GET /api/controller/schema` 和 `agenthub schema` 暴露。第一版覆盖 Worker 创建、Task 派发、Room 创建/事件/mention、Artifact 注册、资源 reconcile、平台状态、workspace-state 和 heartbeat，附带必填字段、runtime enum、danger、approval 和 audit 元数据。
    - 进展：`POST /api/controller/apply` 已从 stub 变成真实 manifest apply；`agenthub apply -f <file>` 可以提交 JSON / 轻量 YAML，当前支持 `Worker`、`Room` 和 `Task`，分别进入 Member Reconcile、Room 创建和 Task 派发控制面。
-   - 剩余：把各 skill 的命令示例继续改成读取/遵循 schema，补危险操作 approval、持久审计字段、完整 OpenAPI/JSON schema 和更严格的 apply 校验。
+   - 进展：`agenthub-controller`、`worker-management`、`task-management`、`channel-management`、`project-management` skill 第一轮已改成先读 `agenthub schema`，再用 `agenthub apply -f ...` 或最小 Controller CLI 命令操作真实资源；旧 `/api/internal/manager/actions` 和硬编码产品态 `/api/rooms` 已被边界测试禁止。
+   - 剩余：补危险操作 approval、持久审计字段、完整 OpenAPI/JSON schema、更严格的 apply 校验，以及 Team/Human/Manager 资源 manifest。
 5. **Resident Worker e2e**
    - OpenClaw / QwenPaw Worker 用自己的 Matrix `/sync` 接 @mention，自主回复和执行。
    - 进展：OpenClaw Worker config 生成已开始 room-aware。`deployWorkerConfig()` 会接收 Controller 查到的 Worker room bindings，把实际 `providerRoomId` 写入 `channels.matrix.groups`，并把同房间 human / manager Matrix user id 加入 `groupAllowFrom`；本地进程和 Docker resident backend 都走同一份 room binding。Worker contract 也会同步当前 rooms，避免 OpenClaw config 知道房间但 `AGENTS.md / rooms.json` 不知道。

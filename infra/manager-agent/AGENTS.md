@@ -41,17 +41,17 @@ Always trust injected environment variables and `runtime.json` over examples in 
 
 **Quick examples:**
 ```bash
-# List Workers
-curl -s -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"action":"list_workers","params":{"workspaceId":"..."}}' \
-  "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions"
+# Read the current Controller operation schema before using a capability
+agenthub schema
 
-# Create task
-curl -s -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"action":"create_task","params":{"workspaceId":"...","title":"...","spec":"...","assignToAgentId":"..."}}' \
-  "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions"
+# List Workers
+agenthub worker list --workspace <workspace-id>
+
+# Apply a Worker/Room/Task manifest through Controller reconcile
+agenthub apply -f worker.yaml
+
+# Create and assign a task
+agenthub task create --workspace <workspace-id> --title "..." --assign-to <agent-id> --spec "..."
 ```
 
 **Available skills:**

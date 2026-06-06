@@ -100,6 +100,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `POST /api/controller/tasks` 已切到 `ControllerApi.assignTask()`：受 Manager token 保护的 HTTP 入口会创建真实 Run / Task / TaskThread / task room / RuntimeLease，并在 task room 生成 Matrix mention-first assignment。测试已覆盖该入口不会停留在路由层 fake message，而是能从 DB 观察到 `workspace_tasks`、`task_threads`、`rooms`、`room_participants` 和 `timeline_events(metadata.matrixExecutionBus=true)`。
 - `GET /api/controller/schema` 已接入：schema 覆盖 Worker 创建、Task 派发、Room 创建/事件/mention、Artifact 注册、资源 reconcile、平台状态、workspace-state 和 heartbeat，并带上 danger/approval/audit 元数据。`agenthub schema` 会读取同一份 schema，供 Manager skills 和人工调试使用。
 - `POST /api/controller/apply` 已不再是 stub：第一版支持 JSON / 轻量 YAML manifest，能创建 Worker、Room 或派发 Task。`agenthub apply -f <file>` 现在会进入这条真实控制面路径；Worker apply 仍遵守显式 runtime base、显式模型和 Member Reconcile 约束。
+- Manager skill bundle 第一轮已对齐这条控制面：`agenthub-controller`、`worker-management`、`task-management`、`channel-management`、`project-management` 会先读取 `agenthub schema`，再通过 `agenthub apply -f ...` 或 Controller CLI 操作 Worker / Room / Task；边界测试禁止重新出现 `/api/internal/manager/actions` 和硬编码 `localhost:8000/api/rooms`。
 
 Manager Runtime 已调整：
 
@@ -156,7 +157,7 @@ Manager Runtime 已调整：
 1. 继续把 `agenthub.controller-api.v1alpha1` 从轻量 operation schema 收敛到完整 OpenAPI/JSON schema：补错误码、危险操作 approval、审计字段和更完整的 apply schema 校验。
 2. 增加 durable reconcile request 表，替代纯内存队列，服务重启后可恢复未完成 request。
 3. 给 `workspace_agents` / `worker_instances` 引入 generation 语义：Agent 配置变化后自动 enqueue Worker reconcile。
-4. 把 `ManagerRuntime` tools 从“字符串工具名 + executor map”进一步收敛到 Controller API schema，方便 OpenClaw/QwenPaw 直接调用。
+4. 把 `ManagerRuntime` tools 从“字符串工具名 + executor map”进一步收敛到 Controller API schema，方便 OpenClaw/QwenPaw 直接调用；Manager skill 示例已经第一轮迁到 `agenthub schema/apply`，下一步是让 runtime 自动消费 schema，而不是只靠 Markdown 说明。
 5. 实现 `OpenClawWorkerBackend`：resident Worker 通过 Matrix listener 自主接单，而不是 service dispatch 启动。
 6. 补 Team/Human/Manager controller：Human 作为一等 participant，Team Leader 作为可 reconcile 的 Manager/Worker 复合资源。
 7. 把启动恢复、patrol、stale lease recovery 都改成 enqueue reconcile request，而不是各处直接调用 controller 方法。

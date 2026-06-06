@@ -36,7 +36,7 @@ bun run matrix:logs
 查看 AgentHub 侧 Matrix 诊断：
 
 ```bash
-curl http://localhost:8000/api/rooms/matrix/diagnostics
+curl "${AGENTHUB_API_BASE:-http://127.0.0.1:8000}/api/rooms/matrix/diagnostics"
 ```
 
 诊断接口会返回 provider、homeserver `/versions` 探测、注册配置是否存在、Matrix rooms / identities / backend participants 数量，以及 Manager / Worker listener 的 `lastSyncedAt`、`lastOkAt`、`lastErrorAt`、`consecutiveErrors`。该接口只读，不会启动或停止 listener，也不会返回 access token、registration token 或 password。

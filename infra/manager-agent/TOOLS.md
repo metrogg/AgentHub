@@ -11,6 +11,7 @@
 | file-sync-management | Inspect task refs and artifact visibility | `agenthub artifact ...` when available |
 | review-and-synthesis | Final review after evidence exists | Room timeline + artifacts |
 | heartbeat | Patrol runtime health and room bindings | `agenthub heartbeat ...` |
+| project-management | Apply Controller manifests | `agenthub schema`, `agenthub apply -f ...` |
 
 ## Cross-Skill Combos
 
@@ -26,7 +27,7 @@
 
 Use `AGENTHUB_CONTROLLER_URL` and `AGENTHUB_MANAGER_TOKEN`. Do not hard-code localhost ports; local, Docker, and future remote modes differ.
 
-Prefer the bundled `agenthub` CLI. It wraps Controller actions and returns JSON. Read `skills/agenthub-controller/SKILL.md` for concrete commands.
+Prefer the bundled `agenthub` CLI. It wraps Controller actions and returns JSON. Start with `agenthub schema` to inspect the current operation contract, then use `agenthub apply -f ...` or the smallest specific command. Read `skills/agenthub-controller/SKILL.md` for concrete commands.
 
 Controller owns:
 

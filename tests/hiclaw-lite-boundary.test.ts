@@ -155,6 +155,53 @@ describe('HiClaw-lite kernel boundary', () => {
     }
   })
 
+  test('Manager skill bundle uses Controller schema/apply instead of legacy manager actions', () => {
+    const managerRoot = join(process.cwd(), 'infra/manager-agent')
+    const files = listTextFiles(managerRoot, /\.(md|json|ya?ml|sh|ts)$/)
+    const violations: string[] = []
+
+    for (const file of files) {
+      const rel = toRepoPath(file)
+      const text = readFileSync(file, 'utf8')
+      if (text.includes('/api/internal/manager/actions')) {
+        violations.push(`${rel} references legacy manager action endpoint`)
+      }
+      if (/localhost:8000\/api\/rooms/.test(text)) {
+        violations.push(`${rel} hard-codes product room routes`)
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
+
+  test('core Manager skills discover Controller capabilities through agenthub schema', () => {
+    const skillRoot = join(process.cwd(), 'infra/manager-agent/skills')
+    const requiredSchemaSkills = [
+      'agenthub-controller',
+      'worker-management',
+      'task-management',
+      'channel-management',
+      'project-management',
+    ]
+
+    for (const skillName of requiredSchemaSkills) {
+      const skill = readFileSync(join(skillRoot, skillName, 'SKILL.md'), 'utf8')
+      expect(skill).toContain('agenthub schema')
+    }
+
+    const worker = readFileSync(join(skillRoot, 'worker-management', 'SKILL.md'), 'utf8')
+    expect(worker).toContain('kind: Worker')
+    expect(worker).toContain('runtimeBase: <openclaw|qwenpaw|opencode|claude-code|codex|gemini>')
+
+    const task = readFileSync(join(skillRoot, 'task-management', 'SKILL.md'), 'utf8')
+    expect(task).toContain('kind: Task')
+    expect(task).toContain('Controller assignment creates the task room')
+
+    const channel = readFileSync(join(skillRoot, 'channel-management', 'SKILL.md'), 'utf8')
+    expect(channel).toContain('kind: Room')
+    expect(channel).toContain('Do not call product UI `/api/rooms` routes directly')
+  })
+
   test('Manager contract generator owns SOUL AGENTS registries and runtime context', () => {
     const contract = readFileSync(
       join(process.cwd(), 'apps/server/src/services/agent-contract/manager-contract.ts'),
@@ -288,6 +335,23 @@ function listSourceFiles(root: string): string[] {
       continue
     }
     if (/\.(ts|tsx)$/.test(entry)) {
+      files.push(path)
+    }
+  }
+  return files
+}
+
+function listTextFiles(root: string, pattern: RegExp): string[] {
+  const entries = readdirSync(root)
+  const files: string[] = []
+  for (const entry of entries) {
+    const path = join(root, entry)
+    const stat = statSync(path)
+    if (stat.isDirectory()) {
+      files.push(...listTextFiles(path, pattern))
+      continue
+    }
+    if (pattern.test(entry)) {
       files.push(path)
     }
   }

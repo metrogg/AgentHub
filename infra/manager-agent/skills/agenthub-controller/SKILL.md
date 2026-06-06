@@ -19,6 +19,13 @@ The CLI reads these automatically. No manual header injection needed. Do not har
 
 ## Commands
 
+### Capability Discovery
+
+```bash
+# Read the Controller operation schema before using unfamiliar capabilities.
+agenthub schema
+```
+
 ### Worker Management
 
 ```bash
@@ -27,6 +34,9 @@ agenthub worker list --workspace <workspace-id>
 
 # Create a new worker with an explicit Worker runtime base
 agenthub worker create --workspace <workspace-id> --name builder --runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> --model <model-id> --join-group-room true
+
+# Apply a Worker manifest through the Controller.
+agenthub apply -f worker.yaml
 
 # Check worker status
 agenthub worker status --id <worker-id>
@@ -43,6 +53,9 @@ agenthub worker stop --id <worker-id>
 ```bash
 # Create and assign a task
 agenthub task create --workspace <workspace-id> --title "Build UI" --assign-to <agent-id> --spec "## Goal\nBuild a React dashboard"
+
+# Apply a Task manifest through the Controller.
+agenthub apply -f task.yaml
 
 # List tasks in a run
 agenthub task list --run <run-id>
@@ -82,6 +95,9 @@ agenthub run list --workspace <workspace-id>
 # Create a room
 agenthub room create --owner <owner-id> --title "Worker: builder" --kind task
 
+# Apply a Room manifest through the Controller.
+agenthub apply -f room.yaml
+
 # Read room timeline
 agenthub room events --room <room-id> --limit 20
 
@@ -110,17 +126,18 @@ agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 ## Decision Pattern
 
 ### Simple goal (1 task, 1 Worker)
-1. `agenthub worker list --workspace <id>` — check existing workers
-2. If no suitable worker: ask for or use the explicitly requested runtime base and model, then `agenthub worker create --workspace <id> --name <name> --runtime-base <runtime-base> --model <model-id>`
-3. `agenthub task create --workspace <id> --title "..." --assign-to <agent-id> --spec "..."`
-4. `agenthub room mention --room <task-room> --agent <agent-id> --body "Please start task <id>"`
+1. `agenthub schema` — confirm the current Controller operation contract.
+2. `agenthub worker list --workspace <id>` — check existing workers
+3. If no suitable worker: ask for or use the explicitly requested runtime base and model, then `agenthub worker create --workspace <id> --name <name> --runtime-base <runtime-base> --model <model-id>` or `agenthub apply -f worker.yaml`
+4. `agenthub task create --workspace <id> --title "..." --assign-to <agent-id> --spec "..."` or `agenthub apply -f task.yaml`
+5. Let the Controller-created task room @mention wake the Worker; use `agenthub room mention` only for explicit follow-up messages.
 
 ### Complex goal (multiple tasks)
-1. `agenthub run create --workspace <id> --goal "..."` — create run
-2. `agenthub task create` for each task with `--run <run-id>` and dependency info
-3. `agenthub room mention` for each worker when dependencies are met
-4. `agenthub run status --id <run-id>` to monitor progress
-5. Synthesize results when all tasks complete
+1. `agenthub schema` — inspect `tasks.assign`, `apply.manifest`, and `reconcile.resource`.
+2. `agenthub run create --workspace <id> --goal "..."` — create run if a multi-task run is needed.
+3. `agenthub task create` or `agenthub apply -f tasks.yaml` for each task with `--run <run-id>` and dependency info.
+4. Monitor with `agenthub run status --id <run-id>` and room timeline events.
+5. Synthesize results when all tasks complete.
 
 ## Error Handling
 
