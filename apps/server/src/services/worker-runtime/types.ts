@@ -49,6 +49,7 @@ export interface WorkerRuntimeContext {
   sessionId: string
   workspaceId: string
   workspaceAgentId: string
+  workerParticipantId?: string | null
   workerInstanceId?: string | null
   taskId?: string | null
   taskThreadId?: string | null

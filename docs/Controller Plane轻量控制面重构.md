@@ -70,6 +70,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `WorkerRuntimeService.runGroupMentionRoom()` 会把真实 runtime result status 返回给 dispatcher；Worker 执行失败时保持 `failed`，不再被旧 group mention bridge 覆盖成 `idle`。
 - OpenCode / Claude Code / Codex / Gemini 当前仍是 AgentHub-managed Worker bridge；OpenClaw Worker 是 resident Worker 目标形态，需要独立 Matrix identity、room membership、openclaw config 和长期 gateway/listener。
 - 新增 `apps/server/src/services/agent-contract/`：Manager 和 Worker 的 SOUL/AGENTS/Skills/registry/state 生成逻辑归口到这里。Manager contract 会生成 `runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / state.json / rooms.json / logs`，并镜像到 OpenClaw `agentDir`；`manager-runtime/manager-config.ts` 只保留兼容外壳。
+- 新增 bridge contract projection：`EphemeralCodeAgentWorkerRuntime` 在调用 OpenCode / Claude Code / Codex / Gemini CLI 前，会把标准 Worker contract 投影到本次执行 cwd 的 `AGENTS.md` 和 `.agenthub/worker-contract/`，让 bridge Worker 和 resident Worker 共享 SOUL/AGENTS/Skills/registry/state 语义。
 
 Manager Runtime 已调整：
 

@@ -95,7 +95,7 @@ function normalizeCodeAgentType(agent: AgentRow): AgentRunProfile['codeAgentType
   ) {
     return agent.codeAgentType
   }
-  return 'codex'
+  return undefined
 }
 
 function normalizeSandboxPolicy(value?: string | null): AgentRunProfile['sandboxPolicy'] {

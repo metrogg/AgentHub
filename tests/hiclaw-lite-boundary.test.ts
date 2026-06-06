@@ -184,6 +184,31 @@ describe('HiClaw-lite kernel boundary', () => {
     expect(cli).not.toContain('|| "codex"')
   })
 
+  test('backend Worker creation and bridge paths do not silently default missing bases to Codex', () => {
+    const guardedFiles = [
+      'apps/server/src/services/agents/profile-builder.ts',
+      'apps/server/src/services/rooms/room-chat-bridge.ts',
+      'apps/server/src/services/workspace/workspace-queries.ts',
+      'apps/server/src/services/code-agent-adapter.ts',
+      'apps/server/src/services/agent-draft.ts',
+      'apps/server/src/routes/workspaces.ts',
+      'apps/server/src/routes/messages.ts',
+    ]
+    const forbiddenPatterns = [
+      /\?\?\s*['"]codex['"]/,
+      /\|\|\s*['"]codex['"]/,
+      /codeAgentType:\s*[^,\n]*\?\?\s*['"]codex['"]/,
+    ]
+    const violations: string[] = []
+    for (const file of guardedFiles) {
+      const text = readFileSync(join(process.cwd(), file), 'utf8')
+      for (const pattern of forbiddenPatterns) {
+        if (pattern.test(text)) violations.push(`${file} matches ${pattern}`)
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
   test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {
     const guardedDirs = [
       'apps/server/src/services/rooms',

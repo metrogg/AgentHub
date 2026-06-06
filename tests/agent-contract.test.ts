@@ -1,10 +1,13 @@
 import './setup'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const { db, workspaceAgents, workspaces } = dbApi
 const { ensureManagerAgentContract, ensureWorkerAgentContract } = await import('../apps/server/src/services/agent-contract')
+const { projectWorkerContractIntoBridgeCwd } = await import('../apps/server/src/services/worker-runtime/worker-bridge-contract')
 
 describe('Agent contract generator', () => {
   test('creates normalized Manager contract files and mirrors OpenClaw agentDir context', () => {
@@ -145,5 +148,69 @@ describe('Agent contract generator', () => {
     const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as Record<string, unknown>
     expect(runtime.runtimeBase).toBe('opencode')
     expect(runtime.modelId).toBe('mimo-v2.5')
+  })
+
+  test('projects Worker contract into bridge CLI execution cwd idempotently', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Bridge Contract Workspace',
+        goal: 'Verify bridge CLI sees SOUL AGENTS skills contract',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Bridge Contract Worker',
+        role: 'Bridge implementation specialist',
+        roleType: 'coder',
+        description: 'Runs through AgentHub-managed CLI bridge but follows the same Worker contract.',
+        systemPrompt: 'Follow Matrix room protocol and write back clear progress.',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        modelId: 'mimo-v2.5',
+        sandboxPolicy: 'workspace-write',
+        skillIds: [],
+      })
+      .returning()
+    const executionCwd = mkdtempSync(join(tmpdir(), 'agenthub-bridge-contract-'))
+
+    const projection = await projectWorkerContractIntoBridgeCwd({
+      workerInstanceId: `bridge-contract-worker-${Date.now()}`,
+      agent: agent!,
+      executionCwd,
+      runtimeBase: 'opencode',
+      room: {
+        roomId: 'room-bridge',
+        roomKind: 'task',
+        providerRoomId: '!bridge:agenthub.local',
+        participantId: 'participant-bridge',
+        title: 'Bridge Task Room',
+      },
+      controllerUrl: 'http://127.0.0.1:8000',
+      sharedStorageRoot: '.agenthub/shared',
+    })
+
+    expect(projection).toBeTruthy()
+    expect(existsSync(join(executionCwd, 'AGENTS.md'))).toBe(true)
+    expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'SOUL.md'))).toBe(true)
+    expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'profile.json'))).toBe(true)
+
+    const agentsText = readFileSync(join(executionCwd, 'AGENTS.md'), 'utf8')
+    expect(agentsText).toContain('AGENTHUB:BRIDGE-RUNTIME-CONTEXT:START')
+    expect(agentsText).toContain('Canonical Worker AGENTS.md')
+    expect(agentsText).toContain('Runtime base: opencode')
+    expect(agentsText).toContain('Bridge Task Room')
+
+    await projectWorkerContractIntoBridgeCwd({
+      workerInstanceId: projection!.contract.root.split(/[\\/]/).pop()!,
+      agent: agent!,
+      executionCwd,
+      runtimeBase: 'opencode',
+    })
+    const updatedAgentsText = readFileSync(join(executionCwd, 'AGENTS.md'), 'utf8')
+    expect(updatedAgentsText.match(/AGENTHUB:BRIDGE-RUNTIME-CONTEXT:START/g)).toHaveLength(1)
   })
 })

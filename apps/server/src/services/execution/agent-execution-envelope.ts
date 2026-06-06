@@ -68,6 +68,14 @@ export interface AgentExecutionEnvelope {
   sandboxEnv?: Record<string, string>
   /** 容器型沙箱执行上下文；存在时 Code Agent 命令会被容器 runtime 包装 */
   sandboxContainer?: SandboxContainerSpec
+  /** Controller 生成的标准 Worker contract 根目录 */
+  agentContractRoot?: string | null
+  /** 投影到本次 CLI cwd 的 Worker contract 根目录 */
+  projectedAgentContractRoot?: string | null
+  /** 投影到本次 CLI cwd 的 AGENTS.md 路径 */
+  projectedAgentsPath?: string | null
+  /** 投影到本次 CLI cwd 的 SOUL.md 路径 */
+  projectedSoulPath?: string | null
   /** 模型目标配置（注入到子进程 env） */
   modelTarget?: {
     apiKey?: string

@@ -3,6 +3,7 @@ import { buildAgentProfile } from '../agents/profile-builder'
 import { isCodeAgentProfile, runtimeRegistry } from '../runtime'
 import type { AgentExecutionEnvelope } from '../execution/agent-execution-envelope'
 import type { WorkerRuntime, WorkerRuntimeContext, WorkerRuntimeEvent, WorkerRuntimeResult } from './types'
+import { projectWorkerContractIntoBridgeCwd } from './worker-bridge-contract'
 
 type WorkspaceAgentRow = typeof workspaceAgents.$inferSelect
 
@@ -46,6 +47,26 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
       sandboxPolicy: profile.sandboxPolicy,
       envAllowlist: [],
       sandboxEnv: context.sandboxEnv,
+    }
+    const projection = await projectWorkerContractIntoBridgeCwd({
+      workerInstanceId: context.workerInstanceId,
+      agent: this.agent,
+      executionCwd: envelope.worktreePath,
+      runtimeBase: profile.codeAgentType,
+      room: {
+        roomId: context.roomId,
+        roomKind: 'task',
+        participantId: context.workerParticipantId ?? null,
+        title: context.taskId ?? context.roomId,
+      },
+      controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+      sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+    })
+    if (projection) {
+      envelope.agentContractRoot = projection.contract.root
+      envelope.projectedAgentContractRoot = projection.bridgeRoot
+      envelope.projectedAgentsPath = projection.agentsPath
+      envelope.projectedSoulPath = projection.soulPath
     }
 
     let sessionId: string | undefined

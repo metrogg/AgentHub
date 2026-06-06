@@ -876,6 +876,7 @@ function buildCodeAgentPrompt(
     sharedTaskRelativeRoot: envelope?.a2a?.sharedTaskRelativeRoot,
     sharedTaskSpecPath: envelope?.a2a?.sharedTaskSpecPath,
   })
+  const bridgeContract = buildBridgeWorkerContractBlock(envelope)
   const recent = history
     .slice(-12)
     .map((message) => ({
@@ -904,6 +905,7 @@ function buildCodeAgentPrompt(
       ? `原项目根路径（只读参考）：${sourcePath}。请从这里读取已有代码和文档，不要直接写入这里。`
       : '',
     `Agent 执行目录：${executionPath}。新的文件、临时产物和中间结果优先放在这里。`,
+    bridgeContract,
     sharedTaskProtocol,
     skillContext,
     '',
@@ -912,6 +914,20 @@ function buildCodeAgentPrompt(
     '',
     '当前用户请求：',
     userMsg.content,
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function buildBridgeWorkerContractBlock(envelope?: AgentExecutionEnvelope) {
+  if (!envelope?.projectedAgentContractRoot && !envelope?.agentContractRoot) return ''
+  return [
+    'AgentHub Worker 契约：',
+    envelope.projectedAgentsPath ? `- 本次执行 AGENTS.md：${envelope.projectedAgentsPath}` : '',
+    envelope.projectedSoulPath ? `- 本次执行 SOUL.md：${envelope.projectedSoulPath}` : '',
+    envelope.projectedAgentContractRoot ? `- 本次投影 contract：${envelope.projectedAgentContractRoot}` : '',
+    envelope.agentContractRoot ? `- Controller 标准 contract：${envelope.agentContractRoot}` : '',
+    '- 先遵守 AGENTS.md / SOUL.md 中的协作协议，再执行当前任务。',
   ]
     .filter(Boolean)
     .join('\n')
@@ -1658,7 +1674,8 @@ function formatMetadataDuration(ms: number) {
 
 function runtimeTypeForAdapter(adapter: CodeAgentAdapter): CodeAgentType {
   const entry = Object.entries(adapters).find(([, item]) => item === adapter)
-  return (entry?.[0] as CodeAgentType | undefined) ?? 'codex'
+  if (!entry?.[0]) throw new Error(`Unknown Code Agent adapter: ${adapter.displayName}`)
+  return entry[0] as CodeAgentType
 }
 
 function requiresCodeAgentOutputReview(_adapter: CodeAgentAdapter) {

@@ -719,6 +719,7 @@ export class WorkerRuntimeService {
           sessionId: room.sessionId ?? thread?.sessionId ?? room.id,
           workspaceId: room.workspaceId ?? agent.workspaceId,
           workspaceAgentId: agent.id,
+          workerParticipantId: workerParticipant.id,
           workerInstanceId: thread?.workerInstanceId ?? null,
           taskId: room.taskId,
           taskThreadId: room.taskThreadId,
