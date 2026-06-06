@@ -500,6 +500,12 @@ async function cmdStatus(args: string[]) {
   output(result, f)
 }
 
+async function cmdSchema(args: string[]) {
+  const { flags: f } = parseArgs(args)
+  const result = await api('/api/controller/schema')
+  output(result, f)
+}
+
 async function cmdVersion(args: string[]) {
   const { flags: f } = parseArgs(args)
   output({ version: VERSION, controllerUrl: CONTROLLER_URL }, f)
@@ -534,6 +540,7 @@ Usage:
   agenthub team     <create|list|get|update|delete>
   agenthub human    <create|list|delete>
   agenthub apply    -f <yaml-file>  |  agenthub apply worker --name <N> ...
+  agenthub schema
   agenthub status
   agenthub version
   agenthub state    --workspace <id>
@@ -560,6 +567,7 @@ async function main() {
       case 'team':      await cmdTeam(rest); break
       case 'human':     await cmdHuman(rest); break
       case 'apply':     await cmdApply(rest); break
+      case 'schema':    await cmdSchema(rest); break
       case 'status':    await cmdStatus(rest); break
       case 'version':   await cmdVersion(rest); break
       case 'state':     await cmdState(rest); break

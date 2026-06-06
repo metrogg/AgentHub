@@ -15,6 +15,12 @@ export {
   controllerApi,
   type ControllerApiOptions,
 } from './controller-api'
+export {
+  getControllerApiSchema,
+  type ControllerApiFieldSchema,
+  type ControllerApiOperationSchema,
+  type ControllerApiSchemaDocument,
+} from './controller-api-schema'
 export { describeControllerPlane, type ControllerPlaneDiagnostics } from './diagnostics'
 export {
   runResidentWorkerSelfTest,

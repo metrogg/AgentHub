@@ -100,6 +100,41 @@ describe('Controller HTTP API', () => {
     expect(reconcile.result.phase).toBe('observed')
   })
 
+  test('exposes Controller API schema for Manager skills', async () => {
+    const token = await createManagerToken()
+    const schema = await controllerJson<{
+      schema: string
+      auth: { type: string }
+      invariants: string[]
+      operations: Array<{
+        id: string
+        method: string
+        path: string
+        danger: string
+        approval: string
+        body?: Record<string, { required?: boolean; enum?: string[] }>
+      }>
+    }>('/api/controller/schema', token)
+
+    expect(schema.schema).toBe('agenthub.controller-api.v1alpha1')
+    expect(schema.auth.type).toBe('manager-matrix-token')
+    expect(schema.invariants.some((item) => item.includes('/api/controller/*'))).toBe(true)
+
+    const workerCreate = schema.operations.find((item) => item.id === 'workers.create')
+    expect(workerCreate?.method).toBe('POST')
+    expect(workerCreate?.path).toBe('/api/controller/workers')
+    expect(workerCreate?.body?.runtimeBase.required).toBe(true)
+    expect(workerCreate?.body?.runtimeBase.enum).toContain('qwenpaw')
+
+    const taskAssign = schema.operations.find((item) => item.id === 'tasks.assign')
+    expect(taskAssign?.path).toBe('/api/controller/tasks')
+    expect(taskAssign?.body?.workspaceId.required).toBe(true)
+
+    const mention = schema.operations.find((item) => item.id === 'rooms.mention_worker')
+    expect(mention?.path).toBe('/api/controller/rooms/{roomId}/mentions')
+    expect(mention?.danger).toBe('write')
+  })
+
   test('assigns tasks through ControllerApi and writes Matrix mention-first task rooms', async () => {
     const token = await createManagerToken()
     const [workspace] = await db

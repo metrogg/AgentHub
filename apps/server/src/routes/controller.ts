@@ -3,7 +3,7 @@ import { and, db, eq, matrixIdentities } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
 import { controllerApi } from '../services/controller-plane/controller-api'
-import { controllerReconcileQueue, resourceRef, type ControllerResourceKind } from '../services/controller-plane'
+import { controllerReconcileQueue, getControllerApiSchema, resourceRef, type ControllerResourceKind } from '../services/controller-plane'
 
 // ─── Auth Middleware ───────────────────────────────────────────────────
 
@@ -27,6 +27,10 @@ async function managerAuth(c: Context, next: () => Promise<void>) {
 
 export const controllerRoutes = new Hono()
 controllerRoutes.use('*', managerAuth)
+
+controllerRoutes.get('/schema', async (c) => {
+  return c.json(getControllerApiSchema())
+})
 
 // ─── Worker ───────────────────────────────────────────────────────────
 
