@@ -14,7 +14,7 @@ Manage the lifecycle of Worker agents via the `agenthub` CLI.
 agenthub worker list --workspace <workspace-id>
 
 # Create a new worker with an explicit Worker runtime base
-agenthub worker create --workspace <workspace-id> --name builder --code-agent <openclaw|opencode|claude-code|codex|gemini>
+agenthub worker create --workspace <workspace-id> --name builder --runtime-base <openclaw|opencode|claude-code|codex|gemini> --model <model-id> --join-group-room true
 
 # Check worker status
 agenthub worker status --id <worker-id>
@@ -33,6 +33,7 @@ agenthub worker stop --id <worker-id>
 - Worker names must be lowercase alphanumeric with hyphens.
 - Each Worker needs: name, Worker runtime base, model binding, skills, and sandbox policy.
 - Never default a missing runtime base to Codex. Ask the human or report the missing configuration.
+- Use `--runtime-base`; `--code-agent` is only a compatibility alias for Codex/OpenCode/Claude Code/Gemini CLI bases and must not be used as a default.
 
 ## Decision Pattern
 

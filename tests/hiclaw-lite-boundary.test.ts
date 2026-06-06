@@ -177,6 +177,13 @@ describe('HiClaw-lite kernel boundary', () => {
     }
   })
 
+  test('AgentHub Controller CLI requires explicit Worker runtime base', () => {
+    const cli = readFileSync(join(process.cwd(), 'infra/agenthub-cli/agenthub.ts'), 'utf8')
+    expect(cli).toContain('--runtime-base <openclaw|opencode|claude-code|codex|gemini> is required')
+    expect(cli).not.toContain("|| 'codex'")
+    expect(cli).not.toContain('|| "codex"')
+  })
+
   test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {
     const guardedDirs = [
       'apps/server/src/services/rooms',

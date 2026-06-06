@@ -62,6 +62,8 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - `ControllerApi.createWorker()` 现在要求 Worker 必须有显式模型绑定，或存在 `AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL` 作为 Worker 模型来源；否则直接失败，不创建必然进入 failed 的 WorkerInstance。
 - `ControllerApi.createWorker()` 不再把缺失的 Worker runtime base 静默默认成 Codex。解析顺序是：显式 `runtimeBase / workerRuntimeBase / codeAgentType` → `AGENTHUB_WORKER_RUNTIME_BASE` → 当前 workspace 已有 Worker 基座 → 报错要求补齐。
 - `POST /api/workspaces/:id/workers` 已接入 Member Reconcile：添加 Worker 时由 Controller 统一负责 direct/group room reconcile、Worker participant、contract refresh 和 Manager announcement，不再由 route 自己散写 direct session。
+- `ManagerRuntimeService` 的 `create_worker` action 已接入 Member Reconcile：Manager 运行时输出显式 member spec 后，会调用 `ControllerApi.createWorker()` 创建 Worker、加入当前 group room、创建 direct room，并写回 `manager.action.create_worker.applied / failed`。
+- `infra/agenthub-cli/agenthub.ts` 的 `worker create/apply` 已取消 Codex 默认值，必须显式传 `--runtime-base`；OpenClaw Manager skill 示例也已更新为 `--runtime-base ... --model ...`。
 - OpenClaw Worker 的 `roleProfile.workerRuntimeBase=openclaw` 会保持为 resident Worker 语义，`workspace_agents.codeAgentType` 不再写成 `codex`。
 - `WorkerRuntimeService.runGroupMentionRoom()` 会把真实 runtime result status 返回给 dispatcher；Worker 执行失败时保持 `failed`，不再被旧 group mention bridge 覆盖成 `idle`。
 - OpenCode / Claude Code / Codex / Gemini 当前仍是 AgentHub-managed Worker bridge；OpenClaw Worker 是 resident Worker 目标形态，需要独立 Matrix identity、room membership、openclaw config 和长期 gateway/listener。
@@ -80,6 +82,7 @@ Manager Runtime 已调整：
   - 验证 reconcile queue `describe()` 的诊断结构。
   - 验证 workspace agent 可 apply 成 Worker resource。
   - 验证 `createWorker()` 走 Member Reconcile 5 阶段，并能加入 group/direct room、写入 Manager announcement。
+  - 验证 Manager Runtime `create_worker` action 会真正创建 Worker、加入当前 group room，并写入 applied 阶段结果。
   - 验证默认 reconcile queue 能 dispatch Worker request。
   - 验证 `describeControllerPlane()` 返回控制面边界和资源计数。
 - `tests/manager-runtime.test.ts`

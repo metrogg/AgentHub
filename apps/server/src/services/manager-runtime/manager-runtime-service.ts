@@ -2,6 +2,8 @@ import { db, eq, roomParticipants, rooms, workspaceAgents } from '@agenthub/db'
 import { roomService } from '../rooms'
 import { ensureManagerParticipantForRoom, resolveRoomManagerAgent } from '../rooms/manager-participant'
 import { getActiveManagerProvider, getManagerProvider } from './manager-runtime-registry'
+import { controllerApi } from '../controller-plane'
+import { memberProposalsFromManagerAction } from './member-proposals'
 import type {
   ManagerAction,
   ManagerActionType,
@@ -415,6 +417,9 @@ async function appendManagerAction(
       },
     })
   }
+  if (action.type === 'create_worker') {
+    return applyCreateWorkerAction(roomId, action, runtimeType, managerParticipant?.id ?? null)
+  }
   return roomService.appendTimelineEvent({
     roomId,
     senderParticipantId: managerParticipant?.id ?? null,
@@ -429,6 +434,107 @@ async function appendManagerAction(
       ...(action.metadata ?? {}),
     },
   })
+}
+
+async function applyCreateWorkerAction(
+  roomId: string,
+  action: ManagerAction,
+  runtimeType: string,
+  managerParticipantId: string | null,
+) {
+  const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
+  if (!room?.workspaceId) {
+    return roomService.appendTimelineEvent({
+      roomId,
+      senderParticipantId: managerParticipantId,
+      senderType: 'manager',
+      type: 'system',
+      body: 'Manager 无法创建 Worker：当前房间没有绑定 workspace。',
+      metadata: {
+        kind: 'manager.action.create_worker.failed',
+        actionType: action.type,
+        reason: 'missing-workspace',
+        runtimeType,
+        action,
+      },
+    })
+  }
+
+  const proposal = memberProposalsFromManagerAction(action)[0]
+  if (!proposal) {
+    return roomService.appendTimelineEvent({
+      roomId,
+      senderParticipantId: managerParticipantId,
+      senderType: 'manager',
+      type: 'system',
+      body: 'Manager 无法创建 Worker：create_worker action 缺少有效的 member spec。',
+      metadata: {
+        kind: 'manager.action.create_worker.failed',
+        actionType: action.type,
+        reason: 'invalid-member-spec',
+        runtimeType,
+        action,
+      },
+    })
+  }
+
+  try {
+    const result = await controllerApi.createWorker({
+      workspaceId: room.workspaceId,
+      ownerId: room.ownerId,
+      groupSessionId: room.sessionId,
+      joinGroupRoom: room.kind === 'group' || room.kind === 'manager_dm',
+      createDirectSession: true,
+      announce: true,
+      name: proposal.name,
+      runtimeType: proposal.runtimeType ?? 'code-agent',
+      runtimeBase: proposal.workerRuntimeBase ?? proposal.codeAgentType ?? undefined,
+      codeAgentType: proposal.codeAgentType ?? undefined,
+      modelId: proposal.modelId ?? null,
+      skillIds: proposal.skillIds ?? [],
+      role: proposal.role,
+      roleType: proposal.roleType,
+      sandboxPolicy: proposal.sandboxPolicy,
+    })
+    return roomService.appendTimelineEvent({
+      roomId,
+      senderParticipantId: managerParticipantId,
+      senderType: 'manager',
+      type: 'system',
+      body: `${proposal.name} 的创建与入群流程已完成。`,
+      metadata: {
+        kind: 'manager.action.create_worker.applied',
+        actionType: action.type,
+        runtimeType,
+        workspaceAgentId: result.agentId,
+        workerInstanceId: result.workerInstanceId,
+        runtimeBase: result.runtimeBase,
+        stages: result.stages,
+        groupRoomId: result.groupRoom?.id ?? null,
+        directRoomId: result.directRoom?.id ?? null,
+        directSessionId: result.directSession?.id ?? null,
+        announcements: result.announcements,
+        proposal,
+        hiddenFromChat: true,
+      },
+    })
+  } catch (error) {
+    return roomService.appendTimelineEvent({
+      roomId,
+      senderParticipantId: managerParticipantId,
+      senderType: 'manager',
+      type: 'system',
+      body: `Manager 创建 Worker 失败：${error instanceof Error ? error.message : String(error)}`,
+      metadata: {
+        kind: 'manager.action.create_worker.failed',
+        actionType: action.type,
+        reason: 'controller-error',
+        runtimeType,
+        proposal,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    })
+  }
 }
 
 async function findParticipant(

@@ -94,15 +94,26 @@ async function cmdWorker(args: string[]) {
     case 'create': {
       const name = requireFlag(f, 'name')
       const workspaceId = requireFlag(f, 'workspace')
+      const runtimeBase = f['runtime-base'] || f['worker-runtime-base'] || f['code-agent'] || f.runtime
+      if (!runtimeBase) {
+        console.error('Error: --runtime-base <openclaw|opencode|claude-code|codex|gemini> is required')
+        process.exit(1)
+      }
       const result = await api('/api/controller/workers', {
         method: 'POST',
         body: {
           workspaceId, name,
           runtimeType: f.runtime || 'code-agent',
-          codeAgentType: f['code-agent'] || 'codex',
+          runtimeBase,
+          codeAgentType: f['code-agent'] || undefined,
           modelId: f.model || undefined,
           skillIds: f.skills ? f.skills.split(',') : undefined,
           soul: f.soul || undefined,
+          ownerId: f.owner || undefined,
+          groupSessionId: f.session || undefined,
+          joinGroupRoom: f['join-room'] === 'true' || f['join-group-room'] === 'true',
+          createDirectSession: f['direct-session'] !== 'false',
+          announce: f.announce !== 'false',
         },
       })
       output(result, f)
@@ -168,14 +179,25 @@ async function cmdWorker(args: string[]) {
     case 'apply': {
       const name = requireFlag(f, 'name')
       const workspaceId = f.workspace || ''
+      const runtimeBase = f['runtime-base'] || f['worker-runtime-base'] || f['code-agent'] || f.runtime
+      if (!runtimeBase) {
+        console.error('Error: --runtime-base <openclaw|opencode|claude-code|codex|gemini> is required')
+        process.exit(1)
+      }
       const result = await api('/api/controller/workers', {
         method: 'POST',
         body: {
           workspaceId, name,
           runtimeType: f.runtime || 'code-agent',
-          codeAgentType: f['code-agent'] || 'codex',
+          runtimeBase,
+          codeAgentType: f['code-agent'] || undefined,
           modelId: f.model || undefined,
           skillIds: f.skills ? f.skills.split(',') : undefined,
+          ownerId: f.owner || undefined,
+          groupSessionId: f.session || undefined,
+          joinGroupRoom: f['join-room'] === 'true' || f['join-group-room'] === 'true',
+          createDirectSession: f['direct-session'] !== 'false',
+          announce: f.announce !== 'false',
         },
       })
       output(result, f)
@@ -192,6 +214,7 @@ async function cmdWorker(args: string[]) {
     }
     default:
       console.error('Usage: agenthub worker <create|list|get|update|delete|wake|stop|sleep|ensure-ready|status|apply|report-ready> [options]')
+      console.error('Create/apply require: --runtime-base <openclaw|opencode|claude-code|codex|gemini>')
       process.exit(1)
   }
 }

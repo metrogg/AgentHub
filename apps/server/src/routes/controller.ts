@@ -44,6 +44,11 @@ controllerRoutes.post('/workers', async (c) => {
     role: body.role,
     roleType: body.roleType,
     sandboxPolicy: body.sandboxPolicy,
+    ownerId: body.ownerId || null,
+    groupSessionId: body.groupSessionId || body.sessionId || null,
+    joinGroupRoom: Boolean(body.joinGroupRoom),
+    createDirectSession: body.createDirectSession !== false,
+    announce: body.announce !== false,
   })
   return c.json({ success: true, ...result })
 })

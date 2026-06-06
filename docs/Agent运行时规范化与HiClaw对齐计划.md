@@ -300,8 +300,10 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 状态：第一刀已落地。
    - 新增 `apps/server/src/services/controller-plane/member-reconciler.ts`，`ControllerApi.createWorker()` 已委托它执行 `ResolveMemberSpec -> ApplyWorkspaceAgent -> ApplyWorkerInstance -> JoinRooms -> AnnounceAndObserve`。
    - `POST /api/workspaces/:id/workers` 现在把 `ownerId / createDirectSession / joinGroupRoom / announce` 传给 Controller API，由 MemberReconciler 创建/更新 direct room、group room participant，并返回 `stages / runtimeBase / groupRoom / directRoom / participants / announcements`。
+   - Manager Runtime 的 `create_worker` action 已接入同一条 Controller API / MemberReconcile 路径：从 action metadata / `memberProposal` 规范化 member spec，创建 Worker、加入当前 group room、创建 direct room，并写入 `manager.action.create_worker.applied` 阶段结果。
+   - OpenClaw Manager workspace 内的 `agenthub` CLI 已修正：`worker create/apply` 必须显式 `--runtime-base <openclaw|opencode|claude-code|codex|gemini>`，不再隐式 `codex`。
    - 缺 runtime base 或 model 仍 fail-loudly，不默认 Codex，不创建注定 failed 的 Worker。
-   - 剩余：Manager 补员确认卡和 OpenClaw skill `create_worker` 还要显式带上 member spec，并展示/消费阶段结果。
+   - 剩余：Manager 补员确认卡还要显式带上 member spec，并展示/消费阶段结果。
 4. **Manager skill migration**
    - 以 HiClaw 16 skill 为模板，改写成 AgentHub Controller API 版本。
 5. **Resident Worker e2e**
