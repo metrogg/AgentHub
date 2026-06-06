@@ -17,8 +17,18 @@ export interface WorkerOpenClawConfigInput {
   gatewayPort: number
   dmAllowFrom: string[]
   groupAllowFrom: string[]
+  rooms?: WorkerOpenClawRoomBinding[]
   timeoutSeconds: number
   maxConcurrent: number
+}
+
+export interface WorkerOpenClawRoomBinding {
+  roomId: string
+  providerRoomId: string
+  kind: string
+  participantId?: string | null
+  title?: string | null
+  allowFrom?: string[]
 }
 
 export function getWorkerWorkspaceDir(workerInstanceId: string): string {
@@ -36,6 +46,7 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
       input.matrixUserId,
     ].filter(Boolean)),
   )
+  const roomBindings = buildMatrixRoomBindings(input)
 
   return {
     gateway: {
@@ -61,14 +72,8 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
         autoJoin: 'always',
         dm: { policy: 'allowlist', allowFrom: input.dmAllowFrom },
         groupPolicy: 'allowlist',
-        groupAllowFrom: input.groupAllowFrom,
-        groups: {
-          '*': {
-            enabled: true,
-            requireMention: true,
-            autoReply: true,
-          },
-        },
+        groupAllowFrom: roomBindings.groupAllowFrom,
+        groups: roomBindings.groups,
         streaming: 'partial',
         blockStreaming: true,
       },
@@ -136,6 +141,52 @@ export function generateWorkerOpenClawJson(input: WorkerOpenClawConfigInput): ob
     },
     plugins: { load: { paths: ['~/skills'] }, entries: { matrix: { enabled: true } } },
     commands: { restart: true },
+  }
+}
+
+function buildMatrixRoomBindings(input: WorkerOpenClawConfigInput): {
+  groupAllowFrom: string[]
+  groups: Record<string, {
+    enabled: true
+    requireMention: true
+    autoReply: true
+    skills: string[]
+    systemPrompt: string
+  }>
+} {
+  const baseAllowFrom = new Set(input.groupAllowFrom.filter(Boolean))
+  const groups: Record<string, {
+    enabled: true
+    requireMention: true
+    autoReply: true
+    skills: string[]
+    systemPrompt: string
+  }> = {}
+  const defaultGroup = workerGroupConfig(input.workerName, null)
+  groups['*'] = defaultGroup
+  for (const room of input.rooms ?? []) {
+    if (!room.providerRoomId) continue
+    for (const userId of room.allowFrom ?? []) {
+      if (userId) baseAllowFrom.add(userId)
+    }
+    groups[room.providerRoomId] = workerGroupConfig(input.workerName, room)
+  }
+  return {
+    groupAllowFrom: Array.from(baseAllowFrom),
+    groups,
+  }
+}
+
+function workerGroupConfig(workerName: string, room: WorkerOpenClawRoomBinding | null) {
+  const roomLabel = room ? `${room.title || room.roomId} (${room.kind})` : 'any AgentHub room'
+  return {
+    enabled: true as const,
+    requireMention: true as const,
+    autoReply: true as const,
+    skills: ['task-progress', 'file-sync'],
+    systemPrompt:
+      `You are ${workerName}, an AgentHub resident Worker in ${roomLabel}. ` +
+      'Only act when explicitly @mentioned. Read SOUL.md and AGENTS.md first, use shared task contracts, report blockers, progress, artifacts, and completion back to the same Matrix room.',
   }
 }
 

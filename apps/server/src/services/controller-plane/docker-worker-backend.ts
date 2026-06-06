@@ -20,6 +20,8 @@ import { roomService } from '../rooms/room-service'
 import { ensureWorkerAgentContract } from '../agent-contract'
 import {
   localCliWorkerBackend,
+  loadWorkerOpenClawRoomBindings,
+  workerRoomBindingsToContractRooms,
   type WorkerBackend,
   type WorkerBackendEnsureInput,
   type WorkerBackendInspectResult,
@@ -135,6 +137,7 @@ export class DockerWorkerBackend implements WorkerBackend {
 
     const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const gatewayPort = workerGatewayPort(worker.id)
+    const roomBindings = await loadWorkerOpenClawRoomBindings(worker.id)
     const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
     const configPath = deployWorkerConfig({
       workerInstanceId: worker.id,
@@ -149,7 +152,8 @@ export class DockerWorkerBackend implements WorkerBackend {
       llmModel: worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model,
       gatewayPort,
       dmAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
-      groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
+      groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId, ...roomBindings.allowFrom],
+      rooms: roomBindings.rooms,
       timeoutSeconds: 600,
       maxConcurrent: 4,
     })
@@ -162,6 +166,7 @@ export class DockerWorkerBackend implements WorkerBackend {
         runtimeConfigPath: configPath,
         controllerUrl: containerControllerUrl(),
         sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+        currentRooms: workerRoomBindingsToContractRooms(roomBindings.rooms),
       })
     }
 

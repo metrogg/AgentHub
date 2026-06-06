@@ -1,13 +1,17 @@
 import { workerRuntimeService } from '../worker-runtime'
 import { workerController, type WorkerReconcileContext } from '../orchestrator/worker-controller'
-import { and, db, eq, matrixIdentities, roomParticipants, workerInstances, workspaceAgents } from '@agenthub/db'
+import { and, db, eq, matrixIdentities, roomParticipants, rooms, workerInstances, workspaceAgents } from '@agenthub/db'
 import { openclawLauncher, preferredWorkerGatewayPort } from '../manager-runtime/openclaw-launcher'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import { roomService } from '../rooms/room-service'
-import { deployWorkerConfig, getWorkerWorkspaceDir } from '../worker-runtime/worker-openclaw-config'
+import {
+  deployWorkerConfig,
+  getWorkerWorkspaceDir,
+  type WorkerOpenClawRoomBinding,
+} from '../worker-runtime/worker-openclaw-config'
 import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-reporter'
 import { ensureWorkerAgentContract } from '../agent-contract'
 
@@ -111,6 +115,7 @@ export class LocalCliWorkerBackend implements WorkerBackend {
       const managerIdentity = await ensureOpenClawManagerIdentity()
       const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
       const gatewayPort = preferredWorkerGatewayPort(latestWorker.id)
+      const roomBindings = await loadWorkerOpenClawRoomBindings(latestWorker.id)
       const resolvedLlm = await resolveLlmRuntimeConfig(
         latestWorker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined,
       )
@@ -127,7 +132,8 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         llmModel: latestWorker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model,
         gatewayPort,
         dmAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
-        groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
+        groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId, ...roomBindings.allowFrom],
+        rooms: roomBindings.rooms,
         timeoutSeconds: 600,
         maxConcurrent: 4,
       })
@@ -140,6 +146,7 @@ export class LocalCliWorkerBackend implements WorkerBackend {
           runtimeConfigPath: configPath,
           controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
           sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+          currentRooms: workerRoomBindingsToContractRooms(roomBindings.rooms),
         })
       }
 
@@ -298,6 +305,7 @@ export class LocalCliWorkerBackend implements WorkerBackend {
       }
       const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
       const gatewayPort = preferredWorkerGatewayPort(worker.id)
+      const roomBindings = await loadWorkerOpenClawRoomBindings(worker.id)
       const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
       const configPath = deployWorkerConfig({
         workerInstanceId: worker.id,
@@ -312,7 +320,8 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         llmModel: worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model,
         gatewayPort,
         dmAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
-        groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
+        groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId, ...roomBindings.allowFrom],
+        rooms: roomBindings.rooms,
         timeoutSeconds: 600,
         maxConcurrent: 4,
       })
@@ -325,6 +334,7 @@ export class LocalCliWorkerBackend implements WorkerBackend {
           runtimeConfigPath: configPath,
           controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
           sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+          currentRooms: workerRoomBindingsToContractRooms(roomBindings.rooms),
         })
       }
       return {
@@ -381,6 +391,69 @@ async function ensureOpenClawManagerIdentity() {
     displayName: 'Manager',
   })
   return identity
+}
+
+export async function loadWorkerOpenClawRoomBindings(workerInstanceId: string): Promise<{
+  rooms: WorkerOpenClawRoomBinding[]
+  allowFrom: string[]
+}> {
+  const rows = await db
+    .select({
+      roomId: rooms.id,
+      providerRoomId: rooms.providerRoomId,
+      kind: rooms.kind,
+      title: rooms.title,
+      participantType: roomParticipants.participantType,
+      providerUserId: roomParticipants.providerUserId,
+      status: roomParticipants.status,
+    })
+    .from(roomParticipants)
+    .innerJoin(rooms, eq(rooms.id, roomParticipants.roomId))
+    .where(eq(rooms.status, 'active'))
+
+  const workerParticipants = await db
+    .select({ roomId: roomParticipants.roomId, participantId: roomParticipants.id })
+    .from(roomParticipants)
+    .where(and(eq(roomParticipants.workerInstanceId, workerInstanceId), eq(roomParticipants.status, 'joined')))
+  const targetRoomIds = new Set(workerParticipants.map((participant) => participant.roomId))
+  const workerParticipantByRoomId = new Map(workerParticipants.map((participant) => [participant.roomId, participant.participantId]))
+
+  const allowFrom = new Set<string>()
+  const roomBindings: WorkerOpenClawRoomBinding[] = []
+  for (const roomId of targetRoomIds) {
+    const roomRows = rows.filter((row) => row.roomId === roomId)
+    const room = roomRows[0]
+    if (!room) continue
+    const roomAllowFrom = roomRows
+      .filter((row) => row.status === 'joined')
+      .filter((row) => row.participantType === 'human' || row.participantType === 'manager')
+      .map((row) => row.providerUserId)
+      .filter((userId): userId is string => Boolean(userId))
+    for (const userId of roomAllowFrom) allowFrom.add(userId)
+    roomBindings.push({
+      roomId: room.roomId,
+      providerRoomId: room.providerRoomId,
+      kind: room.kind,
+      participantId: workerParticipantByRoomId.get(room.roomId) ?? null,
+      title: room.title,
+      allowFrom: roomAllowFrom,
+    })
+  }
+
+  return {
+    rooms: roomBindings,
+    allowFrom: Array.from(allowFrom),
+  }
+}
+
+export function workerRoomBindingsToContractRooms(roomBindings: WorkerOpenClawRoomBinding[]) {
+  return roomBindings.map((room) => ({
+    roomId: room.roomId,
+    roomKind: room.kind,
+    providerRoomId: room.providerRoomId,
+    participantId: room.participantId ?? null,
+    title: room.title ?? null,
+  }))
 }
 
 async function rebindWorkerRoomParticipants(workspaceAgentId: string | null, workerInstanceId: string) {

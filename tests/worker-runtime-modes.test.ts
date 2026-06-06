@@ -86,6 +86,14 @@ describe('WorkerRuntime modes', () => {
       gatewayPort: 18880,
       dmAllowFrom: ['@manager:agenthub.local'],
       groupAllowFrom: ['@manager:agenthub.local'],
+      rooms: [{
+        roomId: 'room-1',
+        providerRoomId: '!task-room:agenthub.local',
+        kind: 'task',
+        title: 'Task Room',
+        participantId: 'worker-participant-1',
+        allowFrom: ['@human-default:agenthub.local', '@manager:agenthub.local'],
+      }],
       timeoutSeconds: 600,
       maxConcurrent: 4,
     }) as any
@@ -118,6 +126,15 @@ describe('WorkerRuntime modes', () => {
       requireMention: true,
       autoReply: true,
     })
+    expect(config.channels.matrix.groupAllowFrom).toContain('@manager:agenthub.local')
+    expect(config.channels.matrix.groupAllowFrom).toContain('@human-default:agenthub.local')
+    expect(config.channels.matrix.groups['!task-room:agenthub.local']).toMatchObject({
+      enabled: true,
+      requireMention: true,
+      autoReply: true,
+      skills: ['task-progress', 'file-sync'],
+    })
+    expect(config.channels.matrix.groups['!task-room:agenthub.local'].systemPrompt).toContain('Task Room')
   })
 
   test('OpenClaw launcher generates a resident Manager config with identity and Matrix binding', async () => {

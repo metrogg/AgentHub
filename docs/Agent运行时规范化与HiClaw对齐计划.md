@@ -316,6 +316,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 以 HiClaw 16 skill 为模板，改写成 AgentHub Controller API 版本。
 5. **Resident Worker e2e**
    - OpenClaw Worker 用自己的 Matrix `/sync` 接 @mention，自主回复和执行。
+   - 进展：OpenClaw Worker config 生成已开始 room-aware。`deployWorkerConfig()` 会接收 Controller 查到的 Worker room bindings，把实际 `providerRoomId` 写入 `channels.matrix.groups`，并把同房间 human / manager Matrix user id 加入 `groupAllowFrom`；本地进程和 Docker resident backend 都走同一份 room binding。Worker contract 也会同步当前 rooms，避免 OpenClaw config 知道房间但 `AGENTS.md / rooms.json` 不知道。
 6. **Bridge hardening**
    - 状态：第一刀已落地。
    - OpenCode / Claude / Codex / Gemini bridge 执行目录现在能看到同一套规范 workspace、SOUL/AGENTS、skills 和 runtime/profile/state 文件；prompt 也会显式指向本次投影 contract 和 Controller 标准 contract。
