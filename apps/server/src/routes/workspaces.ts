@@ -30,6 +30,7 @@ import { ensureGroupSession } from '../services/workspace/session-manager'
 
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
+import { controllerApi } from '../services/controller-plane/controller-api'
 import { controllerReconcileQueue, resourceRef } from '../services/controller-plane'
 
 // ---------- Validation schemas ----------
@@ -96,6 +97,10 @@ const createAgentSchema = z.object({
 })
 
 const updateAgentSchema = createAgentSchema.partial()
+
+const createWorkspaceWorkerSchema = createAgentSchema.extend({
+  createSession: z.boolean().default(true),
+})
 
 const agentRelationsReplaceSchema = z.object({
   relations: z.array(
@@ -944,6 +949,152 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.body(null, 204)
   })
 
+  // ---- Workers ----
+  .post('/:id/workers', zValidator('json', createWorkspaceWorkerSchema), async (c) => {
+    const user = c.get('user')
+    const workspaceId = c.req.param('id')
+    await ensureWorkspace(workspaceId, user.sub)
+    const body = c.req.valid('json') as z.infer<typeof createWorkspaceWorkerSchema>
+    const input = normalizeAgentCreateDefaults(body as z.infer<typeof createAgentSchema>)
+
+    const workerRuntimeBase = readWorkerRuntimeBase(input)
+    if (!input.modelId?.trim()) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '创建 Worker 需要先绑定模型')
+    }
+
+    const { agentId, worker } = await controllerApi.createWorker({
+      workspaceId,
+      name: input.name,
+      runtimeType: input.runtimeType,
+      runtimeBase: workerRuntimeBase,
+      codeAgentType: input.codeAgentType ?? undefined,
+      modelId: input.modelId,
+      skillIds: input.skillIds,
+      role: input.role,
+      roleType: input.roleType,
+      sandboxPolicy: input.sandboxPolicy,
+    })
+
+    let session = await findDirectWorkerSession(workspaceId, agentId)
+    if (!session && Boolean(body.createSession)) {
+      const [created] = await db
+        .insert(sessions)
+        .values({
+          ownerId: user.sub,
+          title: input.name,
+          type: 'direct',
+          workspaceId,
+          workspaceAgentId: agentId,
+          metadata: {
+            kind: 'agent-direct',
+            createdFrom: 'workspace-worker-create',
+            workerRuntimeBase,
+          },
+        })
+        .returning()
+      if (created) {
+        session = created
+        controllerReconcileQueue.enqueue({
+          ref: resourceRef('Room', created.id, workspaceId),
+          reason: 'workspace-worker-created',
+          payload: {
+            sessionId: created.id,
+            ownerId: user.sub,
+          },
+        })
+      }
+    } else if (session) {
+      const [updated] = await db
+        .update(sessions)
+        .set({
+          title: input.name,
+          workspaceAgentId: agentId,
+          metadata: {
+            ...(session.metadata ?? {}),
+            kind: 'agent-direct',
+            createdFrom: 'workspace-worker-create',
+            workerRuntimeBase,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(sessions.id, session.id))
+        .returning()
+      if (updated) session = updated
+    }
+
+    await touchWorkspace(workspaceId)
+    return c.json({ success: true, agentId, worker, session: session ?? null })
+  })
+
+  .post('/:id/workers/:agentId/apply', async (c) => {
+    const user = c.get('user')
+    const workspaceId = c.req.param('id')
+    const agentId = c.req.param('agentId')
+    await ensureWorkspace(workspaceId, user.sub)
+
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, workspaceId)))
+      .limit(1)
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
+
+    const worker = await controllerApi.applyWorker({
+      workspaceId,
+      workspaceAgentId: agentId,
+    })
+
+    let session = await findDirectWorkerSession(workspaceId, agentId)
+    if (!session) {
+      const [created] = await db
+        .insert(sessions)
+        .values({
+          ownerId: user.sub,
+          title: agent.name,
+          type: 'direct',
+          workspaceId,
+          workspaceAgentId: agentId,
+          metadata: {
+            kind: 'agent-direct',
+            createdFrom: 'workspace-worker-apply',
+            workerRuntimeBase: agent.roleProfile?.workerRuntimeBase ?? agent.codeAgentType ?? 'codex',
+          },
+        })
+        .returning()
+      if (created) {
+        session = created
+        controllerReconcileQueue.enqueue({
+          ref: resourceRef('Room', created.id, workspaceId),
+          reason: 'workspace-worker-applied',
+          payload: {
+            sessionId: created.id,
+            ownerId: user.sub,
+          },
+        })
+      }
+    } else {
+      const [updated] = await db
+        .update(sessions)
+        .set({
+          title: agent.name,
+          workspaceAgentId: agentId,
+          metadata: {
+            ...(session.metadata ?? {}),
+            kind: 'agent-direct',
+            createdFrom: 'workspace-worker-apply',
+            workerRuntimeBase: agent.roleProfile?.workerRuntimeBase ?? agent.codeAgentType ?? 'codex',
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(sessions.id, session.id))
+        .returning()
+      if (updated) session = updated
+    }
+
+    await touchWorkspace(workspaceId)
+    return c.json({ success: true, agentId, session: session ?? null, worker })
+  })
+
   // ---- Tasks ----
   .post('/:id/tasks', zValidator('json', createTaskSchema), async (c) => {
     const user = c.get('user')
@@ -984,3 +1135,30 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     await touchWorkspace(id)
     return c.body(null, 204)
   })
+
+function readWorkerRuntimeBase(
+  input: Pick<z.infer<typeof createAgentSchema>, 'roleProfile' | 'codeAgentType'>,
+) {
+  const value = input.roleProfile?.workerRuntimeBase
+  if (
+    value === 'openclaw' ||
+    value === 'codex' ||
+    value === 'claude-code' ||
+    value === 'opencode' ||
+    value === 'gemini'
+  ) {
+    return value
+  }
+  return input.codeAgentType ?? 'codex'
+}
+
+async function findDirectWorkerSession(workspaceId: string, workspaceAgentId: string) {
+  const items = await db
+    .select()
+    .from(sessions)
+    .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.workspaceAgentId, workspaceAgentId)))
+  return items.find((session) => {
+    const metadata = session.metadata ?? {}
+    return session.type === 'direct' && metadata.kind === 'agent-direct'
+  }) ?? null
+}

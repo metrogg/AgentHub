@@ -274,17 +274,14 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     const managerStatus = provider?.ensureStarted
       ? await provider.ensureStarted()
       : await provider?.status()
-    const managerHealth = await provider?.healthCheck?.().catch((error: any) => ({
-      healthy: false,
-      error: error?.message || String(error),
-    }))
+    const managerHealth = await waitForManagerRuntimeHealth(provider)
     const [matrixDiagnostics, containerDiagnostics, controllerPlane] = await Promise.all([
       describeMatrixDiagnostics(),
       describeContainerRuntime(),
       describeControllerPlane(),
     ])
     const matrixOk = matrixDiagnostics.configured && matrixDiagnostics.homeserver.reachable
-    const managerOk = Boolean(managerStatus?.running && !managerStatus.error)
+    const managerOk = Boolean(managerStatus?.running && !managerStatus.error && managerHealth?.healthy)
     const containerOk = containerDiagnostics.docker.available && image.present
     const ok = Boolean(infra.ok && matrixOk && containerOk && managerOk)
     const steps = [
@@ -314,7 +311,7 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
         ok: managerOk,
         message: managerOk
           ? 'OpenClaw Manager 已运行。'
-          : managerStatus?.error || managerHealth?.error || 'OpenClaw Manager 未运行。',
+          : managerHealth?.error || managerStatus?.error || 'OpenClaw Manager 未运行。',
       },
     ]
     logger.warn({ ok, steps }, 'Local HiClaw-lite runtime prepare requested from settings')
@@ -937,11 +934,27 @@ function parseManagerRuntimeType(value: string): ManagerRuntimeType {
 function managerRuntimeStatusMessage(status: {
   runtimeType: ManagerRuntimeType
   available: boolean
+  connectionMode?: 'external-endpoint' | 'managed-process' | 'managed-docker' | 'unavailable'
   running: boolean
   syncReady?: boolean
   endpoint?: string | null
   error?: string | null
 }) {
+  if (status.connectionMode === 'external-endpoint') {
+    if (status.running) {
+      return 'OpenClaw 外部 endpoint 已接通，AgentHub 正在把它当作 resident Manager 使用。'
+    }
+    return status.error || 'OpenClaw 外部 endpoint 未就绪。'
+  }
+  if (status.connectionMode === 'managed-docker') {
+    if (status.running) {
+      return 'OpenClaw Docker resident Manager 正在运行，通过 Matrix /sync 自主协调。'
+    }
+    if (status.available) {
+      return 'OpenClaw Docker 管理中，但容器尚未运行。请检查容器状态。'
+    }
+    return status.error || '未检测到 OpenClaw Docker runtime。'
+  }
   if (status.runtimeType === 'openclaw') {
     if (status.running) {
       return 'OpenClaw resident Manager 正在运行，通过 Matrix /sync 自主协调。'
@@ -961,6 +974,28 @@ function firstFailedStepMessage(steps: Array<{ ok: boolean; label: string; messa
   const failed = steps.find((step) => !step.ok)
   if (!failed) return ''
   return `${failed.label}失败：${failed.message || '请查看日志。'}`
+}
+
+async function waitForManagerRuntimeHealth(
+  provider: { healthCheck?: () => Promise<{ healthy: boolean; latencyMs?: number; error?: string }> } | null | undefined,
+  options: { timeoutMs?: number; intervalMs?: number } = {},
+) {
+  if (!provider?.healthCheck) return { healthy: false, error: 'OpenClaw Manager provider 不支持健康检查。' }
+  const timeoutMs = options.timeoutMs ?? 20_000
+  const intervalMs = options.intervalMs ?? 1_000
+  const startedAt = Date.now()
+  let lastHealth: { healthy: boolean; latencyMs?: number; error?: string } | null = null
+
+  while (Date.now() - startedAt < timeoutMs) {
+    lastHealth = await provider.healthCheck().catch((error: any) => ({
+      healthy: false,
+      error: error?.message || String(error),
+    }))
+    if (lastHealth.healthy) return lastHealth
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+
+  return lastHealth ?? { healthy: false, error: 'OpenClaw Manager 未在等待时间内通过健康检查。' }
 }
 
 async function startLocalTuwunel() {

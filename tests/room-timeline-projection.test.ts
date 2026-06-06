@@ -442,4 +442,56 @@ describe('room timeline projection', () => {
       },
     })
   })
+
+  test('keeps manager slow and timeout status out of the main chat projection', () => {
+    const projection = projectRoomTimeline({
+      room: {
+        ...room,
+        kind: 'group',
+        sessionId: 'group-session-1',
+        taskId: null,
+        taskThreadId: null,
+      },
+      participants: [worker],
+      sessionId: 'group-session-1',
+      timeline: [
+        event({
+          id: 'event-pending',
+          type: 'manager.message',
+          sequence: 1,
+          senderType: 'manager',
+          body: 'Manager 已收到，正在处理...',
+          metadata: {
+            kind: 'manager.status.pending',
+            sourceEventId: 'source-1',
+          },
+        }),
+        event({
+          id: 'event-slow',
+          type: 'manager.message',
+          sequence: 2,
+          senderType: 'manager',
+          body: 'Manager 仍在处理，OpenClaw 队列或模型响应较慢。',
+          metadata: {
+            kind: 'manager.status.slow',
+            sourceEventId: 'source-1',
+          },
+        }),
+        event({
+          id: 'event-timeout',
+          type: 'manager.message',
+          sequence: 3,
+          senderType: 'manager',
+          body: 'Manager 处理超时。请检查设置页的 OpenClaw Manager / Matrix / 模型状态。',
+          metadata: {
+            kind: 'manager.status.timeout',
+            sourceEventId: 'source-1',
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(0)
+    expect(projection.events).toHaveLength(3)
+  })
 })

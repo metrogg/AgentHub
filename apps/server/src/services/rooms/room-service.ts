@@ -1,4 +1,4 @@
-import { and, db, eq, roomParticipants, rooms, sessions, taskThreads, workspaceAgents, workspaces, workspaceTasks } from '@agenthub/db'
+import { and, db, eq, roomParticipants, rooms, sessions, taskThreads, workerInstances, workspaceAgents, workspaces, workspaceTasks } from '@agenthub/db'
 import { WsEvent } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { broadcastSessionEvent } from '../agent-runner'
@@ -150,11 +150,19 @@ export class RoomService {
   async addWorkerParticipant(roomId: string, workspaceAgentId: string, workerInstanceId?: string | null) {
     const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, workspaceAgentId)).limit(1)
     if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
+    const resolvedWorkerInstanceId =
+      workerInstanceId ??
+      await db
+        .select({ id: workerInstances.id })
+        .from(workerInstances)
+        .where(eq(workerInstances.workspaceAgentId, workspaceAgentId))
+        .limit(1)
+        .then((rows) => rows[0]?.id ?? null)
     const participant = await this.addParticipant({
       roomId,
       participantType: 'worker',
       workspaceAgentId,
-      workerInstanceId: workerInstanceId ?? null,
+      workerInstanceId: resolvedWorkerInstanceId,
       displayName: agent.name,
       role: 'member',
     })

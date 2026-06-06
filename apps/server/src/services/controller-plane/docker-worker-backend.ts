@@ -1,4 +1,4 @@
-import { and, db, eq, matrixIdentities, workerInstances, workspaceAgents } from '@agenthub/db'
+import { and, db, eq, matrixIdentities, roomParticipants, workerInstances, workspaceAgents } from '@agenthub/db'
 import {
   containerLlmBaseUrl,
   containerMatrixUrl,
@@ -15,6 +15,7 @@ import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-repor
 import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
+import { roomService } from '../rooms/room-service'
 import {
   localCliWorkerBackend,
   type WorkerBackend,
@@ -65,6 +66,7 @@ export class DockerWorkerBackend implements WorkerBackend {
       .where(eq(workspaceAgents.id, worker.workspaceAgentId))
       .limit(1)
     const workerName = agent?.name ?? worker.id
+    await rebindWorkerRoomParticipants(worker.workspaceAgentId, worker.id)
 
     let [identity] = await db
       .select()
@@ -97,6 +99,37 @@ export class DockerWorkerBackend implements WorkerBackend {
         message: 'OpenClaw Worker container requires a Matrix identity with access token.',
       }
     }
+    let [managerIdentity] = await db
+      .select()
+      .from(matrixIdentities)
+      .where(and(eq(matrixIdentities.ownerType, 'manager'), eq(matrixIdentities.ownerId, 'manager')))
+      .limit(1)
+    if (!managerIdentity?.accessToken || !managerIdentity.userId) {
+      try {
+        const client = createMatrixClientFromEnv()
+        const identityService = new MatrixIdentityService(client)
+        managerIdentity = await identityService.ensureIdentity({
+          ownerType: 'manager',
+          ownerId: 'manager',
+          displayName: 'Manager',
+        })
+      } catch (err) {
+        return {
+          workerInstanceId: worker.id,
+          ready: false,
+          state: 'manager-matrix-identity-create-failed',
+          message: `OpenClaw Worker container failed to resolve Manager Matrix identity: ${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+    }
+    if (!managerIdentity?.userId) {
+      return {
+        workerInstanceId: worker.id,
+        ready: false,
+        state: 'missing-manager-matrix-identity',
+        message: 'OpenClaw Worker container requires the Manager Matrix identity.',
+      }
+    }
 
     const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const gatewayPort = workerGatewayPort(worker.id)
@@ -108,12 +141,13 @@ export class DockerWorkerBackend implements WorkerBackend {
       matrixDomain,
       matrixUserId: identity.userId,
       matrixAccessToken: identity.accessToken,
+      managerMatrixUserId: managerIdentity.userId,
       llmBaseUrl: process.env.AGENTHUB_WORKER_LLM_BASE_URL || containerLlmBaseUrl() || resolvedLlm.baseUrl,
       llmApiKey: process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || resolvedLlm.apiKey || 'agenthub-internal',
       llmModel: worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model,
       gatewayPort,
-      dmAllowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
-      groupAllowFrom: [`@admin:${matrixDomain}`, `@manager:${matrixDomain}`],
+      dmAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
+      groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
       timeoutSeconds: 600,
       maxConcurrent: 4,
     })
@@ -253,3 +287,19 @@ function workerGatewayPort(workerId: string): number {
 }
 
 export const dockerWorkerBackend = new DockerWorkerBackend()
+
+async function rebindWorkerRoomParticipants(workspaceAgentId: string | null, workerInstanceId: string) {
+  if (!workspaceAgentId) return
+  const participantRows = await db
+    .select({ roomId: roomParticipants.roomId })
+    .from(roomParticipants)
+    .where(
+      and(
+        eq(roomParticipants.participantType, 'worker'),
+        eq(roomParticipants.workspaceAgentId, workspaceAgentId),
+      ),
+    )
+  for (const row of participantRows) {
+    await roomService.addWorkerParticipant(row.roomId, workspaceAgentId, workerInstanceId)
+  }
+}

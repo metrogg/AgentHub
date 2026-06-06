@@ -87,17 +87,17 @@ export default function SessionList({
   const { t, language } = useI18n()
   const location = useLocation()
   const { sessionId } = useParams()
-  const {
-    sessions,
-    currentSession,
-    taskBoard,
-    sessionsBootstrapped,
-    loadingSessions,
-    currentSessionId,
-    fetchSessions,
-    selectSession,
-    deleteSession,
-  } = useChatStoreShallow(selectSessionListState)
+  const sessions = useChatStore((state) => state.sessions)
+  const currentSession = useChatStore((state) => state.currentSession)
+  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
+  const currentWorkspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
+  const taskBoard = useChatStore((state) => state.taskBoard)
+  const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
+  const loadingSessions = useChatStore((state) => state.loadingSessions)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const selectSession = useChatStore((state) => state.selectSession)
+  const deleteSession = useChatStore((state) => state.deleteSession)
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
@@ -113,6 +113,8 @@ export default function SessionList({
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const [hint, setHint] = useState('')
+  const [workerPickerOpen, setWorkerPickerOpen] = useState(false)
+  const [workerCreatingAgentId, setWorkerCreatingAgentId] = useState<string | null>(null)
   const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, number>>({})
   const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<
     Record<string, WorkspaceAgent[]>
@@ -447,6 +449,29 @@ export default function SessionList({
   function addAgent() {
     setQuickCreateOpen(false)
     navigate('/agent-config?newAgent=1')
+  }
+
+  function openWorkerPicker() {
+    setWorkerPickerOpen(true)
+  }
+
+  async function applyWorkspaceWorker(agent: WorkspaceAgent) {
+    if (!currentWorkspace || workerCreatingAgentId) return
+    setWorkerCreatingAgentId(agent.id)
+    try {
+      const result = await api.applyWorkspaceWorker(currentWorkspace.id, agent.id)
+      await fetchSessions()
+      if (result.session) {
+        navigate(`/chat/${result.session.id}`)
+        await selectSession(result.session.id)
+      }
+      setWorkerPickerOpen(false)
+      showHint(`${agent.name} 已成为真 Worker`)
+    } catch (error) {
+      showHint(friendlyErrorMessage(error, `创建 ${agent.name} Worker 失败`))
+    } finally {
+      setWorkerCreatingAgentId(null)
+    }
   }
 
   function toggleWorkspaceExpanded(workspaceId?: string | null) {
@@ -830,7 +855,7 @@ export default function SessionList({
               ) : (
                 <button
                   type="button"
-                  onClick={() => setTabOverride('agents')}
+                  onClick={openWorkerPicker}
                   className="mx-2 flex h-10 w-[calc(100%-1rem)] items-center justify-center gap-2 rounded-xl border border-dashed border-neutral-200 bg-white text-xs text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
                 >
                   <UserPlus className="h-3.5 w-3.5" />
@@ -1464,6 +1489,18 @@ export default function SessionList({
           onConfirm={confirmDeleteSession}
         />
       )}
+      {workerPickerOpen && (
+        <WorkerPickerDialog
+          workspaceName={currentWorkspace?.name ?? ''}
+          agents={currentWorkspaceAgents.filter((agent) => agent.roleType !== 'orchestrator')}
+          creatingAgentId={workerCreatingAgentId}
+          onClose={() => {
+            if (workerCreatingAgentId) return
+            setWorkerPickerOpen(false)
+          }}
+          onCreate={applyWorkspaceWorker}
+        />
+      )}
       </aside>
       <MobilePairingDialog open={mobilePairingOpen} onClose={() => setMobilePairingOpen(false)} />
     </>
@@ -1859,6 +1896,115 @@ function childTaskStatusText(status?: string) {
     default:
       return '等待执行'
   }
+}
+
+function WorkerPickerDialog({
+  workspaceName,
+  agents,
+  creatingAgentId,
+  onClose,
+  onCreate,
+}: {
+  workspaceName: string
+  agents: WorkspaceAgent[]
+  creatingAgentId: string | null
+  onClose: () => void
+  onCreate: (agent: WorkspaceAgent) => Promise<void>
+}) {
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="worker-picker-title"
+      onMouseDown={onClose}
+    >
+      <div
+        className="w-full max-w-[420px] rounded-2xl border border-neutral-200 bg-white p-4 shadow-[0_28px_90px_rgba(15,23,42,0.18)]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div id="worker-picker-title" className="text-sm font-semibold text-neutral-950">
+              添加 Worker
+            </div>
+            <div className="mt-1 text-xs text-neutral-500">
+              从 {workspaceName || '当前工作区'} 的成员里选一个，直接变成常驻 Worker。
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+            aria-label="关闭"
+            title="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 max-h-[320px] space-y-2 overflow-auto">
+          {agents.length ? (
+            agents.map((agent) => {
+              const creating = creatingAgentId === agent.id
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  onClick={() => void onCreate(agent)}
+                  disabled={Boolean(creatingAgentId)}
+                  className="flex w-full items-center gap-3 rounded-xl border border-neutral-200 px-3 py-2.5 text-left hover:bg-neutral-50 disabled:opacity-60"
+                >
+                  <div
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                    style={{ background: agent.color || '#111827' }}
+                  >
+                    {agent.avatar ? (
+                      <img
+                        src={agent.avatar}
+                        alt={agent.name}
+                        className="h-full w-full bg-white object-contain"
+                        decoding="async"
+                        draggable={false}
+                      />
+                    ) : (
+                      agent.name.slice(0, 1).toUpperCase()
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-neutral-950">{agent.name}</div>
+                    <div className="mt-0.5 truncate text-xs text-neutral-500">
+                      {agent.role || 'Worker 成员'}
+                    </div>
+                  </div>
+                  {creating ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />
+                  ) : (
+                    <Plus className="h-4 w-4 text-neutral-400" />
+                  )}
+                </button>
+              )
+            })
+          ) : (
+            <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-8 text-center text-xs text-neutral-400">
+              当前工作区还没有可用成员，先去 Agent 配置新建一个。
+            </div>
+          )}
+        </div>
+
+        {!agents.length && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-4 inline-flex h-9 items-center rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            关闭
+          </button>
+        )}
+      </div>
+    </div>,
+    document.body,
+  )
 }
 
 function groupSessionAgents(session: Session, agents: WorkspaceAgent[]) {

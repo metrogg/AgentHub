@@ -314,7 +314,8 @@ function timelineEventToMessage(
 ): Message | null {
   const eventMetadata = asRecord(event.metadata)
   if (eventMetadata?.hiddenFromChat === true) return null
-  if (isDirectRuntimeInternalEvent(event, room, eventMetadata)) return null
+  const kind = asString(eventMetadata?.kind)
+  if (kind?.startsWith('manager.status.')) return null
 
   if (
     event.type !== 'human.message' &&

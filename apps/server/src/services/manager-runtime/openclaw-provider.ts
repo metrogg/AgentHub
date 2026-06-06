@@ -30,6 +30,7 @@ export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
 export interface ManagerRuntimeStatus {
   runtimeType: ManagerRuntimeType
   available: boolean
+  connectionMode: 'external-endpoint' | 'managed-process' | 'managed-docker' | 'unavailable'
   syncReady?: boolean
   running: boolean
   pid: number | null
@@ -87,9 +88,19 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     const endpoint = this.config.endpoint || process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT || null
     const containerMode = managerContainersEnabled()
     const container = containerMode ? await dockerRuntime.inspect(managerContainerName(this.runtimeType)) : null
-    const running = containerMode
-      ? Boolean(container?.running)
-      : this.process !== null && !this.process.killed
+    const connectionMode: ManagerRuntimeStatus['connectionMode'] = endpoint
+      ? 'external-endpoint'
+      : containerMode
+        ? 'managed-docker'
+        : binaryPath
+          ? 'managed-process'
+          : 'unavailable'
+    const running = endpoint
+      ? true
+      : containerMode
+        ? Boolean(container?.running)
+        : this.process !== null && !this.process.killed
+    const residentSyncReady = endpoint ? true : running
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const configInspection = inspectOpenClawManagerConfig(this.getConfigPath(), matrixDomain)
     const managerDiagnostics = await describeOpenClawManagerDiagnostics({
@@ -111,7 +122,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return {
       runtimeType: this.runtimeType,
       available: containerMode || binaryPath !== null || endpoint !== null,
-      syncReady: endpoint !== null,
+      connectionMode,
+      syncReady: residentSyncReady,
       running,
       pid: containerMode ? null : running ? this.process!.pid ?? null : null,
       workspace: this.managerWorkspace,
@@ -128,14 +140,14 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         image: containerMode ? OPENCLAW_RUNTIME_IMAGE : null,
         binaryInstalled: binaryPath !== null,
         endpointConfigured: endpoint !== null,
-        synchronousStepReady: endpoint !== null,
+        synchronousStepReady: residentSyncReady,
         configInspection,
         ...managerDiagnostics,
         note: endpoint
           ? 'OpenClaw Manager endpoint is configured; AgentHub can call POST /step.'
           : containerMode
             ? 'OpenClaw Manager is managed as a resident Docker container and coordinates through Matrix.'
-            : 'OpenClaw binary availability only means lifecycle can be managed. Configure AGENTHUB_OPENCLAW_MANAGER_ENDPOINT for synchronous Manager steps.',
+            : 'OpenClaw resident process is running and coordinates through Matrix /sync.',
       },
       startedAt: containerMode ? this.containerStartedAt : this.startedAt,
       uptime: (containerMode ? this.containerStartedAt : this.startedAt)
@@ -221,9 +233,21 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       }
     }
 
-    // Managed process: check if still running
+    // Managed process/container: the process can exist briefly while OpenClaw is
+    // still validating config, so probe the gateway health endpoint.
     if (st.running) {
-      return { healthy: true }
+      try {
+        const start = Date.now()
+        const resp = await fetch(`http://127.0.0.1:${this.managerGatewayPort}/health`, {
+          signal: AbortSignal.timeout(5000),
+        })
+        return { healthy: resp.ok, latencyMs: Date.now() - start }
+      } catch (e) {
+        return {
+          healthy: false,
+          error: `Gateway health unreachable: ${e instanceof Error ? e.message : String(e)}`,
+        }
+      }
     }
 
     return { healthy: false, error: st.error || 'OpenClaw not running' }
@@ -285,6 +309,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     const matrixUrl = this.config.matrixUrl || (managerContainersEnabled() ? containerMatrixUrl() : process.env.AGENTHUB_MATRIX_HOMESERVER_URL) || 'http://localhost:6167'
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
+    const managerAgentDir = join(this.managerWorkspace, '.openclaw', 'agents', 'manager', 'agent')
     const defaultHumanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
     const adminUserId = `@admin:${matrixDomain}`
     const managerAllowFrom = Array.from(new Set([adminUserId, defaultHumanUserId]))
@@ -342,6 +367,40 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
           subagents: { maxConcurrent: 16 },
           elevatedDefault: 'full',
           heartbeat: { every: '1h', prompt: 'Read ~/HEARTBEAT.md and follow the checklist.' },
+          skipBootstrap: true,
+        },
+        list: [
+          {
+            id: 'manager',
+            name: 'AgentHub Manager',
+            default: true,
+            workspace: this.managerWorkspace,
+            agentDir: managerAgentDir,
+            identity: {
+              name: 'AgentHub Manager',
+              emoji: '🧭',
+            },
+            model: { primary: `agenthub-llm/${llmModel}` },
+            skills: ['agenthub-controller'],
+            groupChat: {
+              mentionPatterns: ['@Orchestrator', '@Manager', 'Orchestrator', 'Manager', '管理者'],
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: 'manager',
+          match: {
+            channel: 'matrix',
+            accountId: '*',
+          },
+        },
+      ],
+      messages: {
+        groupChat: {
+          visibleReplies: 'automatic',
+          historyLimit: 50,
         },
       },
       tools: {
@@ -502,6 +561,7 @@ export class QwenPawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return {
       runtimeType: this.runtimeType,
       available: false,
+      connectionMode: 'unavailable',
       syncReady: false,
       running: false,
       pid: null,
@@ -634,7 +694,7 @@ async function describeOpenClawManagerDiagnostics(input: {
       kind: room.kind,
       providerRoomId: room.providerRoomId,
       configured: configuredRoomIds.has(room.providerRoomId!) || input.configInspection.wildcardGroupEnabled,
-      sessionKey: `agenthub:manager:room:${room.providerRoomId}`,
+      sessionKey: `agent:manager:matrix:channel:${room.providerRoomId}`,
       managerParticipantId: room.participantId ?? null,
       managerParticipantStatus: room.participantStatus ?? null,
       managerParticipantUserId: room.participantUserId ?? null,
@@ -660,7 +720,7 @@ async function describeOpenClawManagerDiagnostics(input: {
         ? latestReply.metadata.kind
         : null,
     lastQueueDepth: null,
-    expectedResidentSessionKeyPrefix: 'agenthub:manager:room:',
+    expectedResidentSessionKeyPrefix: 'agent:manager:matrix:channel:',
     endpoint: input.endpoint,
     gatewayPort: input.gatewayPort,
   }
@@ -709,14 +769,23 @@ function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) 
     groupKeys: [] as string[],
     wildcardGroupEnabled: false,
     wildcardAgentHubSkillEnabled: false,
+    bindingsCount: 0,
+    managerBindingConfigured: false,
+    managerIdentityName: null as string | null,
+    managerAgentDir: null as string | null,
     humanAllowed: false,
     error: null as string | null,
   }
   if (!result.exists) return result
   try {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
+    const agents =
+      isPlainRecord(parsed.agents) && Array.isArray(parsed.agents.list)
+        ? (parsed.agents.list as Array<Record<string, unknown>>)
+        : []
     const matrix = ((parsed.channels as any)?.matrix ?? {}) as Record<string, unknown>
     const matrixPlugin = ((parsed.plugins as any)?.entries?.matrix ?? {}) as Record<string, unknown>
+    const bindings = Array.isArray(parsed.bindings) ? parsed.bindings : []
     const dm = (matrix.dm ?? {}) as Record<string, unknown>
     result.allowFrom = arrayOfStrings(dm.allowFrom)
     result.groupAllowFrom = arrayOfStrings(matrix.groupAllowFrom)
@@ -730,6 +799,22 @@ function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) 
     result.matrixGroupCount = result.groupKeys.length
     result.wildcardGroupEnabled = wildcardGroup.enabled === true
     result.wildcardAgentHubSkillEnabled = arrayOfStrings(wildcardGroup.skills).includes('agenthub-controller')
+    result.bindingsCount = bindings.length
+    result.managerBindingConfigured = bindings.some((binding) => {
+      if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return false
+      const rec = binding as Record<string, unknown>
+      if (rec.agentId !== 'manager') return false
+      const match = isPlainRecord(rec.match) ? (rec.match as Record<string, unknown>) : null
+      if (!match) return false
+      return match.channel === 'matrix' && (match.accountId === '*' || typeof match.accountId === 'string')
+    })
+    const managerAgent = agents.find((agent) => agent?.id === 'manager') ?? null
+    result.managerIdentityName =
+      managerAgent?.identity && isPlainRecord(managerAgent.identity) && typeof managerAgent.identity.name === 'string'
+        ? managerAgent.identity.name
+        : null
+    result.managerAgentDir =
+      typeof managerAgent?.agentDir === 'string' ? managerAgent.agentDir : null
     const allowed = new Set([...result.allowFrom, ...result.groupAllowFrom])
     result.humanAllowed = allowed.has(expectedHumanUserId) || allowed.has('*')
   } catch (err) {

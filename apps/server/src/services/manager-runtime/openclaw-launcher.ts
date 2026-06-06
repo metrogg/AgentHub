@@ -39,13 +39,31 @@ export interface OpenClawLauncherConfig {
   e2ee?: boolean
 }
 
+export interface OpenClawWorkerStatus {
+  workerKey: string
+  displayName: string
+  workspaceKey: string
+  gatewayPort: number
+  configPath: string
+  running: boolean
+  pid: number | null
+  startedAt: string | null
+}
+
 export class OpenClawLauncher {
   private process: ChildProcess | null = null
   private config: OpenClawLauncherConfig
   private managerWorkspace: string
 
   constructor(config: OpenClawLauncherConfig = {}) {
-    this.config = config
+    this.config = {
+      matrixUrl: process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167',
+      matrixDomain: process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local',
+      llmBaseUrl: process.env.AGENTHUB_WORKER_LLM_BASE_URL || process.env.AGENTHUB_MANAGER_LLM_BASE_URL || 'http://localhost:8000/v1',
+      llmApiKey: process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.AGENTHUB_MANAGER_LLM_API_KEY || process.env.LLM_API_KEY || 'agenthub-internal',
+      llmModel: process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL,
+      ...config,
+    }
     this.managerWorkspace = join(agentHubUserDataRoot(), 'manager', 'global')
   }
 
@@ -93,6 +111,7 @@ export class OpenClawLauncher {
     const matrixUrl = this.config.matrixUrl || 'http://localhost:6167'
     const matrixDomain = this.config.matrixDomain || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
+    const managerAgentDir = join(this.managerWorkspace, '.openclaw', 'agents', 'manager', 'agent')
     const humanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
     const managerAllowFrom = Array.from(new Set([`@admin:${matrixDomain}`, humanUserId]))
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
@@ -165,6 +184,40 @@ export class OpenClawLauncher {
             every: '1h',
             prompt: 'Read ~/HEARTBEAT.md and follow the checklist.',
           },
+          skipBootstrap: true,
+        },
+        list: [
+          {
+            id: 'manager',
+            name: 'AgentHub Manager',
+            default: true,
+            workspace: this.managerWorkspace,
+            agentDir: managerAgentDir,
+            identity: {
+              name: 'AgentHub Manager',
+              emoji: '🧭',
+            },
+            model: { primary: `agenthub-llm/${llmModel}` },
+            skills: ['agenthub-controller'],
+            groupChat: {
+              mentionPatterns: ['@Orchestrator', '@Manager', 'Orchestrator', 'Manager', '管理者'],
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: 'manager',
+          match: {
+            channel: 'matrix',
+            accountId: '*',
+          },
+        },
+      ],
+      messages: {
+        groupChat: {
+          visibleReplies: 'automatic',
+          historyLimit: 50,
         },
       },
       tools: {
@@ -319,21 +372,26 @@ export class OpenClawLauncher {
   // ─── Worker Management ──────────────────────────────────────────
 
   private workerProcesses = new Map<string, ChildProcess>()
+  private workerStatus = new Map<string, OpenClawWorkerStatus>()
 
   /**
    * Generate openclaw.json for a Worker.
    * Aligned with HiClaw's worker-openclaw.json.tmpl.
    */
-  generateWorkerConfig(workerName: string, options: {
+  generateWorkerConfig(workerKey: string, options: {
+    displayName?: string
+    workspaceKey?: string
+    gatewayPort?: number
     matrixUserId?: string
     matrixAccessToken?: string
     llmModel?: string
   } = {}): string {
-    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', workerName)
+    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', options.workspaceKey ?? workerKey)
     mkdirSync(workerWorkspace, { recursive: true })
 
     const matrixDomain = this.config.matrixDomain || 'agenthub.local'
-    const matrixUserId = options.matrixUserId || `@worker-${workerName}:${matrixDomain}`
+    const displayName = options.displayName || workerKey
+    const matrixUserId = options.matrixUserId || `@worker-${matrixLocalpart(displayName)}:${matrixDomain}`
     const humanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
     const workerAllowFrom = Array.from(new Set([`@admin:${matrixDomain}`, `@manager:${matrixDomain}`, humanUserId]))
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
@@ -342,14 +400,25 @@ export class OpenClawLauncher {
     if (!llmModel) {
       throw new Error('OpenClaw Worker requires an explicit model. Configure worker.modelId, AGENTHUB_WORKER_LLM_MODEL, or LLM_MODEL.')
     }
+    const gatewayPort = options.gatewayPort ?? preferredWorkerGatewayPort(workerKey)
+    const workerAgentId = `worker-${matrixLocalpart(options.workspaceKey ?? workerKey).slice(0, 32) || 'agent'}`
+    const workerAgentDir = join(workerWorkspace, '.openclaw', 'agents', workerAgentId, 'agent')
+    const mentionPatterns = Array.from(
+      new Set([
+        `@${displayName}`,
+        displayName,
+        matrixUserId.split(':')[0],
+        matrixUserId,
+      ].filter(Boolean)),
+    )
 
     const config = {
       gateway: {
         mode: 'local',
-        port: 0,
+        port: gatewayPort,
         bind: 'lan',
-        auth: { token: `agenthub-worker-${workerName}` },
-        remote: { token: `agenthub-worker-${workerName}` },
+        auth: { token: `agenthub-worker-${workerKey}` },
+        remote: { token: `agenthub-worker-${workerKey}` },
         controlUi: {
           dangerouslyDisableDeviceAuth: true,
           allowInsecureAuth: true,
@@ -402,6 +471,38 @@ export class OpenClawLauncher {
           maxConcurrent: 4,
           subagents: { maxConcurrent: 8 },
           elevatedDefault: 'full',
+          skipBootstrap: true,
+        },
+        list: [
+          {
+            id: workerAgentId,
+            name: displayName,
+            default: true,
+            workspace: workerWorkspace,
+            agentDir: workerAgentDir,
+            identity: {
+              name: displayName,
+            },
+            model: { primary: `agenthub-llm/${llmModel}` },
+            groupChat: {
+              mentionPatterns,
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: workerAgentId,
+          match: {
+            channel: 'matrix',
+            accountId: '*',
+          },
+        },
+      ],
+      messages: {
+        groupChat: {
+          visibleReplies: 'automatic',
+          historyLimit: 50,
         },
       },
       tools: {
@@ -431,21 +532,25 @@ export class OpenClawLauncher {
       }
     }
 
-    logger.info({ workerName, configPath }, 'Generated OpenClaw Worker config')
+    logger.info({ workerKey, displayName, configPath, gatewayPort }, 'Generated OpenClaw Worker config')
     return configPath
   }
 
   /**
    * Launch an OpenClaw Worker as a child process.
    */
-  launchWorker(workerName: string, options: {
+  launchWorker(workerKey: string, options: {
+    displayName?: string
+    workspaceKey?: string
+    gatewayPort?: number
+    configPath?: string
     matrixUserId?: string
     matrixAccessToken?: string
     llmModel?: string
   } = {}): ChildProcess | null {
-    if (this.workerProcesses.has(workerName)) {
-      logger.warn({ workerName }, 'OpenClaw Worker is already running')
-      return this.workerProcesses.get(workerName)!
+    if (this.workerProcesses.has(workerKey)) {
+      logger.warn({ workerKey }, 'OpenClaw Worker is already running')
+      return this.workerProcesses.get(workerKey)!
     }
 
     const openclawPath = this.config.openclawPath || this.findOpenClawBinary()
@@ -454,8 +559,10 @@ export class OpenClawLauncher {
       return null
     }
 
-    const configPath = this.generateWorkerConfig(workerName, options)
-    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', workerName)
+    const gatewayPort = options.gatewayPort ?? preferredWorkerGatewayPort(workerKey)
+    const configPath = options.configPath ?? this.generateWorkerConfig(workerKey, { ...options, gatewayPort })
+    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', options.workspaceKey ?? workerKey)
+    const displayName = options.displayName || workerKey
 
     const env = {
       ...process.env,
@@ -464,51 +571,73 @@ export class OpenClawLauncher {
       HOME: workerWorkspace,
     }
 
-    logger.info({ workerName, openclawPath, configPath }, 'Launching OpenClaw Worker...')
+    logger.info({ workerKey, displayName, openclawPath, configPath, gatewayPort }, 'Launching OpenClaw Worker...')
 
+    const isCmd = openclawPath.toLowerCase().endsWith('.cmd')
+    const shell = process.platform === 'win32' || isCmd
     const proc = spawn(openclawPath, ['gateway', 'run', '--verbose', '--force'], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: workerWorkspace,
+      shell,
+      windowsHide: true,
     })
 
     proc.stdout?.on('data', (data: Buffer) => {
       const lines = data.toString().trim().split('\n')
       for (const line of lines) {
-        if (line.trim()) logger.info({ source: `openclaw-worker-${workerName}` }, line.trim())
+        if (line.trim()) logger.info({ source: `openclaw-worker-${displayName}` }, line.trim())
       }
     })
 
     proc.stderr?.on('data', (data: Buffer) => {
       const lines = data.toString().trim().split('\n')
       for (const line of lines) {
-        if (line.trim()) logger.warn({ source: `openclaw-worker-${workerName}` }, line.trim())
+        if (line.trim()) logger.warn({ source: `openclaw-worker-${displayName}` }, line.trim())
       }
     })
 
     proc.on('exit', (code, signal) => {
-      logger.info({ workerName, code, signal }, 'OpenClaw Worker exited')
-      this.workerProcesses.delete(workerName)
+      logger.info({ workerKey, code, signal }, 'OpenClaw Worker exited')
+      this.workerProcesses.delete(workerKey)
     })
 
     proc.on('error', (err) => {
-      logger.error({ workerName, err }, 'OpenClaw Worker process error')
-      this.workerProcesses.delete(workerName)
+      logger.error({ workerKey, err }, 'OpenClaw Worker process error')
+      this.workerProcesses.delete(workerKey)
     })
 
-    this.workerProcesses.set(workerName, proc)
+    this.workerProcesses.set(workerKey, proc)
+    this.workerStatus.set(workerKey, {
+      workerKey,
+      displayName,
+      workspaceKey: options.workspaceKey ?? workerKey,
+      gatewayPort,
+      configPath,
+      running: true,
+      pid: proc.pid ?? null,
+      startedAt: new Date().toISOString(),
+    })
     return proc
   }
 
   /**
    * Stop a specific OpenClaw Worker.
    */
-  stopWorker(workerName: string): void {
-    const proc = this.workerProcesses.get(workerName)
+  stopWorker(workerKey: string): void {
+    const proc = this.workerProcesses.get(workerKey)
     if (proc) {
-      logger.info({ workerName }, 'Stopping OpenClaw Worker...')
+      logger.info({ workerKey }, 'Stopping OpenClaw Worker...')
       proc.kill('SIGTERM')
-      this.workerProcesses.delete(workerName)
+      this.workerProcesses.delete(workerKey)
+      const previous = this.workerStatus.get(workerKey)
+      if (previous) {
+        this.workerStatus.set(workerKey, {
+          ...previous,
+          running: false,
+          pid: null,
+        })
+      }
     }
   }
 
@@ -521,6 +650,13 @@ export class OpenClawLauncher {
       proc.kill('SIGTERM')
     }
     this.workerProcesses.clear()
+    for (const [workerKey, status] of this.workerStatus) {
+      this.workerStatus.set(workerKey, {
+        ...status,
+        running: false,
+        pid: null,
+      })
+    }
   }
 
   /**
@@ -528,6 +664,17 @@ export class OpenClawLauncher {
    */
   listRunningWorkers(): string[] {
     return Array.from(this.workerProcesses.keys())
+  }
+
+  getWorkerStatus(workerKey: string): OpenClawWorkerStatus | null {
+    const status = this.workerStatus.get(workerKey)
+    if (!status) return null
+    const proc = this.workerProcesses.get(workerKey)
+    return {
+      ...status,
+      running: Boolean(proc && !proc.killed),
+      pid: proc?.pid ?? null,
+    }
   }
 
   // ─── User OpenClaw Integration ──────────────────────────────────
@@ -632,3 +779,12 @@ export class OpenClawLauncher {
 // ─── Singleton ──────────────────────────────────────────────────────
 
 export const openclawLauncher = new OpenClawLauncher()
+
+export function preferredWorkerGatewayPort(workerKey: string) {
+  let hash = 0
+  for (let i = 0; i < workerKey.length; i++) {
+    hash = ((hash << 5) - hash) + workerKey.charCodeAt(i)
+    hash |= 0
+  }
+  return 18800 + (Math.abs(hash) % 200)
+}
