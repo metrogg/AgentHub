@@ -3,7 +3,7 @@
  * agenthub CLI — AgentHub Controller command-line interface.
  * Aligned with HiClaw's `hiclaw` CLI pattern.
  *
- * Routes: /api/controller/* (REST) + /api/internal/manager/actions (legacy)
+ * Routes: /api/controller/* (REST)
  *
  * Environment:
  *   AGENTHUB_CONTROLLER_URL  (default: http://localhost:3001)
@@ -345,7 +345,7 @@ async function cmdRoom(args: string[]) {
     case 'create': {
       const ownerId = requireFlag(f, 'owner')
       const title = requireFlag(f, 'title')
-      const result = await api('/api/rooms', {
+      const result = await api('/api/controller/rooms', {
         method: 'POST',
         body: { ownerId, title, kind: f.kind || 'group', workspaceId: f.workspace || undefined },
       })
@@ -354,7 +354,9 @@ async function cmdRoom(args: string[]) {
     }
     case 'events': case 'timeline': {
       const roomId = requireFlag(f, 'room')
-      const result = await api(`/api/rooms/${roomId}/timeline?limit=${f.limit || '20'}`)
+      const result = await api(`/api/controller/rooms/${roomId}/events`, {
+        query: { limit: f.limit || '20' },
+      })
       output(result, f)
       break
     }
@@ -362,7 +364,7 @@ async function cmdRoom(args: string[]) {
       const roomId = requireFlag(f, 'room')
       const agentId = requireFlag(f, 'agent')
       const body = requireFlag(f, 'body')
-      const result = await api(`/api/rooms/${roomId}/mention`, {
+      const result = await api(`/api/controller/rooms/${roomId}/mentions`, {
         method: 'POST', body: { workspaceAgentId: agentId, body },
       })
       output(result, f)

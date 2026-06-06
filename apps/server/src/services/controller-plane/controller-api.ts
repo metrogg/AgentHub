@@ -277,6 +277,30 @@ export class ControllerApi {
     })
   }
 
+  async listRooms(input: { workspaceId?: string | null; ownerId?: string | null }) {
+    const predicates = []
+    if (input.workspaceId) predicates.push(eq(rooms.workspaceId, input.workspaceId))
+    if (input.ownerId) predicates.push(eq(rooms.ownerId, input.ownerId))
+    if (predicates.length === 0) return []
+    return db
+      .select()
+      .from(rooms)
+      .where(predicates.length === 1 ? predicates[0] : and(...predicates))
+  }
+
+  async getRoom(roomId: string) {
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
+    return room ?? null
+  }
+
+  listRoomEvents(input: { roomId: string; afterSequence?: number; limit?: number }) {
+    return roomService.listTimelineEvents({
+      roomId: input.roomId,
+      afterSequence: input.afterSequence ?? 0,
+      limit: input.limit ?? 100,
+    })
+  }
+
   async reconcileRoom(input: {
     roomId?: string | null
     sessionId?: string | null

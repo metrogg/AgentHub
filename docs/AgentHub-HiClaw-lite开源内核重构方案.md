@@ -1042,7 +1042,7 @@ created_at
 - Worker 卡死能被发现和回收。
 - 用户能停止、暂停、恢复任务。
 - Manager Runtime tool executor 不直接 import 底层 service，而是调用 ControllerApi。
-- 后续补 durable queue、`/api/controller/*`、Controller CLI 和 config generation/hot reload。
+- `/api/controller/*` 第一版和 `agenthub` CLI 已接入，后续补 durable queue、稳定 Controller schema、YAML apply、权限审计和 config generation/hot reload。
 
 ### Phase 7：Trace/Eval 产品化
 
