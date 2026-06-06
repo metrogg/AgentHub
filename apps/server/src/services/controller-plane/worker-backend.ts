@@ -13,7 +13,7 @@ import {
   type WorkerOpenClawRoomBinding,
 } from '../worker-runtime/worker-openclaw-config'
 import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-reporter'
-import { ensureWorkerAgentContract } from '../agent-contract'
+import { ensureWorkerAgentContractFromController } from '../agent-contract'
 
 export interface WorkerBackendInspectResult {
   workerInstanceId: string
@@ -138,15 +138,13 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         maxConcurrent: 4,
       })
       if (agent) {
-        await ensureWorkerAgentContract({
+        await ensureWorkerAgentContractFromController({
           workerInstanceId: latestWorker.id,
-          agent,
           runtimeBase: latestWorker.runtimeBase,
           matrixUserId: identity.userId,
           runtimeConfigPath: configPath,
           controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
           sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
-          currentRooms: workerRoomBindingsToContractRooms(roomBindings.rooms),
         })
       }
 
@@ -326,15 +324,13 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         maxConcurrent: 4,
       })
       if (agent) {
-        await ensureWorkerAgentContract({
+        await ensureWorkerAgentContractFromController({
           workerInstanceId: worker.id,
-          agent,
           runtimeBase: worker.runtimeBase,
           matrixUserId: identity.userId,
           runtimeConfigPath: configPath,
           controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
           sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
-          currentRooms: workerRoomBindingsToContractRooms(roomBindings.rooms),
         })
       }
       return {
@@ -444,16 +440,6 @@ export async function loadWorkerOpenClawRoomBindings(workerInstanceId: string): 
     rooms: roomBindings,
     allowFrom: Array.from(allowFrom),
   }
-}
-
-export function workerRoomBindingsToContractRooms(roomBindings: WorkerOpenClawRoomBinding[]) {
-  return roomBindings.map((room) => ({
-    roomId: room.roomId,
-    roomKind: room.kind,
-    providerRoomId: room.providerRoomId,
-    participantId: room.participantId ?? null,
-    title: room.title ?? null,
-  }))
 }
 
 async function rebindWorkerRoomParticipants(workspaceAgentId: string | null, workerInstanceId: string) {

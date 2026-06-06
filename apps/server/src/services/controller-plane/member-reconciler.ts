@@ -5,7 +5,7 @@ import { workerController } from '../orchestrator/worker-controller'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
 import { roomService } from '../rooms/room-service'
 import { ensureGroupSession } from '../workspace/session-manager'
-import { ensureWorkerAgentContract } from '../agent-contract'
+import { ensureWorkerAgentContractFromController } from '../agent-contract'
 import type { WorkerBackend } from './worker-backend'
 import {
   codeAgentTypeForRuntime,
@@ -370,24 +370,10 @@ export class MemberReconciler {
     workspaceAgentId: string,
     runtimeBase: WorkerRuntimeBase,
   ) {
-    const agent = await this.findAgentById(workspaceAgentId)
-    if (!agent) return
-    const currentRooms = await db
-      .select({
-        roomId: rooms.id,
-        roomKind: rooms.kind,
-        providerRoomId: rooms.providerRoomId,
-        participantId: roomParticipants.id,
-        title: rooms.title,
-      })
-      .from(roomParticipants)
-      .innerJoin(rooms, eq(roomParticipants.roomId, rooms.id))
-      .where(and(eq(roomParticipants.workerInstanceId, workerInstanceId), eq(roomParticipants.status, 'joined')))
-    await ensureWorkerAgentContract({
+    if (!workspaceAgentId) return
+    await ensureWorkerAgentContractFromController({
       workerInstanceId,
-      agent,
       runtimeBase,
-      currentRooms,
       controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
       sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
     })

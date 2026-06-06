@@ -1,6 +1,19 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { workspaceAgents } from '@agenthub/db'
+import {
+  and,
+  db,
+  eq,
+  matrixIdentities,
+  or,
+  roomParticipants,
+  rooms,
+  runtimeLeases,
+  taskThreads,
+  workspaceAgents,
+  workspaceTasks,
+  workerInstances,
+} from '@agenthub/db'
 import { globalSkillRegistry } from '../skill-registry'
 import { agentHubUserDataRoot, safePathSegment } from '../system-paths'
 
@@ -72,6 +85,16 @@ export interface EnsureWorkerAgentContractInput {
     sharedTaskSpecPath?: string | null
     runtimeLeaseId?: string | null
   }>
+}
+
+export interface EnsureWorkerAgentContractFromControllerInput {
+  workerInstanceId: string
+  runtimeBase?: string | null
+  runtimeConfigPath?: string | null
+  controllerUrl?: string | null
+  sharedStorageRoot?: string | null
+  matrixUserId?: string | null
+  participantId?: string | null
 }
 
 export function resolveWorkerAgentContractRoot(): string {
@@ -146,6 +169,107 @@ export async function ensureWorkerAgentContract(
   return ws
 }
 
+export async function ensureWorkerAgentContractFromController(
+  input: EnsureWorkerAgentContractFromControllerInput,
+): Promise<WorkerAgentContractWorkspace> {
+  const [worker] = await db
+    .select()
+    .from(workerInstances)
+    .where(eq(workerInstances.id, input.workerInstanceId))
+    .limit(1)
+  if (!worker) {
+    throw new Error(`WorkerInstance ${input.workerInstanceId} not found.`)
+  }
+  const [agent] = await db
+    .select()
+    .from(workspaceAgents)
+    .where(eq(workspaceAgents.id, worker.workspaceAgentId))
+    .limit(1)
+  if (!agent) {
+    throw new Error(`WorkspaceAgent ${worker.workspaceAgentId} not found for WorkerInstance ${worker.id}.`)
+  }
+
+  const identities = await db
+    .select()
+    .from(matrixIdentities)
+    .where(and(
+      eq(matrixIdentities.ownerType, 'worker'),
+      or(eq(matrixIdentities.ownerId, worker.id), eq(matrixIdentities.ownerId, agent.id)),
+    ))
+  const identity = identities.find((item) => item.ownerId === worker.id) ?? identities[0] ?? null
+
+  const participantRows = await db
+    .select({
+      participantId: roomParticipants.id,
+      participantWorkerInstanceId: roomParticipants.workerInstanceId,
+      roomId: rooms.id,
+      roomKind: rooms.kind,
+      providerRoomId: rooms.providerRoomId,
+      title: rooms.title,
+      taskId: rooms.taskId,
+      taskThreadId: rooms.taskThreadId,
+      runId: rooms.runId,
+      metadata: rooms.metadata,
+    })
+    .from(roomParticipants)
+    .innerJoin(rooms, eq(roomParticipants.roomId, rooms.id))
+    .where(and(
+      eq(roomParticipants.status, 'joined'),
+      or(
+        eq(roomParticipants.workerInstanceId, worker.id),
+        eq(roomParticipants.workspaceAgentId, agent.id),
+      ),
+    ))
+
+  const leases = await db
+    .select()
+    .from(runtimeLeases)
+    .where(eq(runtimeLeases.workerInstanceId, worker.id))
+  const threads = await db
+    .select()
+    .from(taskThreads)
+    .where(or(
+      eq(taskThreads.workerInstanceId, worker.id),
+      eq(taskThreads.workspaceAgentId, agent.id),
+    ))
+  const workspaceTaskRows = await db
+    .select()
+    .from(workspaceTasks)
+    .where(eq(workspaceTasks.workspaceId, worker.workspaceId))
+
+  const currentRooms = participantRows.map((row) => ({
+    roomId: row.roomId,
+    roomKind: row.roomKind,
+    providerRoomId: row.providerRoomId,
+    participantId: row.participantId,
+    title: row.title,
+  }))
+  const currentTasks = buildCurrentTaskMirrors({
+    agentId: agent.id,
+    tasks: workspaceTaskRows,
+    threads,
+    leases,
+    rooms: participantRows,
+  })
+  const primaryParticipant =
+    participantRows.find((row) => row.participantWorkerInstanceId === worker.id)
+    ?? participantRows[0]
+    ?? null
+
+  return ensureWorkerAgentContract({
+    workerInstanceId: worker.id,
+    agent,
+    runtimeBase: input.runtimeBase ?? worker.runtimeBase,
+    runtimeConfigPath: input.runtimeConfigPath ?? worker.runtimeConfigPath,
+    controllerUrl: input.controllerUrl ?? null,
+    sharedStorageRoot: input.sharedStorageRoot ?? null,
+    matrixUserId: input.matrixUserId ?? identity?.userId ?? null,
+    participantId: input.participantId ?? primaryParticipant?.participantId ?? null,
+    currentRooms,
+    currentTasks,
+  })
+}
+
 function buildWorkerState(
   input: EnsureWorkerAgentContractInput,
   runtimeBase: string | null,
@@ -193,6 +317,62 @@ function buildWorkerState(
       queueDepth: existingHeartbeat.queueDepth ?? 0,
     },
   }
+}
+
+function buildCurrentTaskMirrors(input: {
+  agentId: string
+  tasks: Array<typeof workspaceTasks.$inferSelect>
+  threads: Array<typeof taskThreads.$inferSelect>
+  leases: Array<typeof runtimeLeases.$inferSelect>
+  rooms: Array<{
+    roomId: string
+    taskId: string | null
+    taskThreadId: string | null
+    runId: string | null
+    metadata: Record<string, unknown>
+  }>
+}): NonNullable<EnsureWorkerAgentContractInput['currentTasks']> {
+  const threadsByTask = new Map(input.threads.map((thread) => [thread.taskId, thread]))
+  const leasesByTask = new Map(
+    input.leases
+      .filter((lease) => Boolean(lease.taskId))
+      .map((lease) => [lease.taskId!, lease]),
+  )
+  const taskRoomsByTask = new Map(
+    input.rooms
+      .filter((room) => Boolean(room.taskId))
+      .map((room) => [room.taskId!, room]),
+  )
+  const taskRoomsByThread = new Map(
+    input.rooms
+      .filter((room) => Boolean(room.taskThreadId))
+      .map((room) => [room.taskThreadId!, room]),
+  )
+
+  return input.tasks
+    .filter((task) => {
+      if (task.agentId === input.agentId) return true
+      if (threadsByTask.has(task.id)) return true
+      if (leasesByTask.has(task.id)) return true
+      if (taskRoomsByTask.has(task.id)) return true
+      return false
+    })
+    .map((task) => {
+      const thread = threadsByTask.get(task.id) ?? null
+      const lease = leasesByTask.get(task.id) ?? null
+      const room = (thread ? taskRoomsByThread.get(thread.id) : undefined) ?? taskRoomsByTask.get(task.id) ?? null
+      return {
+        taskId: task.id,
+        taskThreadId: thread?.id ?? room?.taskThreadId ?? null,
+        runId: task.runId ?? thread?.runId ?? lease?.runId ?? room?.runId ?? null,
+        roomId: room?.roomId ?? null,
+        status: thread?.status ?? task.status,
+        title: task.title,
+        sharedTaskRelativeRoot: readString(room?.metadata?.sharedTaskRelativeRoot) ?? `.agenthub/shared/tasks/${task.id}`,
+        sharedTaskSpecPath: readString(room?.metadata?.sharedTaskSpecPath),
+        runtimeLeaseId: lease?.id ?? null,
+      }
+    })
 }
 
 function buildProfile(input: EnsureWorkerAgentContractInput, runtimeBase: string | null) {
@@ -664,6 +844,10 @@ function readJsonIfExists(path: string): Record<string, any> | null {
   } catch {
     return null
   }
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
 function writeJsonIfMissing(path: string, value: unknown) {

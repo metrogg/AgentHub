@@ -13,14 +13,17 @@ const {
   rooms,
   runtimeLeases,
   sessions,
+  taskThreads,
   workerInstances,
   workspaceAgents,
+  workspaceTasks,
   workspaces,
 } = dbApi
 const {
   ensureManagerAgentContract,
   ensureManagerAgentContractFromController,
   ensureWorkerAgentContract,
+  ensureWorkerAgentContractFromController,
 } = await import('../apps/server/src/services/agent-contract')
 const { projectWorkerContractIntoBridgeCwd } = await import('../apps/server/src/services/worker-runtime/worker-bridge-contract')
 
@@ -583,6 +586,203 @@ describe('Agent contract generator', () => {
         expect(runtime.adapterContract.diagnosticContract.probes).toContain('capability-probe')
       }
     }
+  })
+
+  test('refreshes Worker contract mirrors from Controller resources', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Worker Contract Controller Sync Workspace',
+        goal: 'Verify Worker contract mirrors Controller rooms and tasks',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Controller Sync Worker',
+        role: 'Contract sync specialist',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        modelId: 'mimo-v2.5',
+        roleProfile: { workerRuntimeBase: 'opencode' },
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'opencode',
+        modelId: 'mimo-v2.5',
+        observedState: 'listening',
+        desiredState: 'running',
+      })
+      .returning()
+    const [groupSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Controller Sync Group',
+        type: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+      })
+      .returning()
+    const [taskSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Controller Sync Task',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        metadata: { kind: 'orchestrator-task' },
+      })
+      .returning()
+    const [run] = await db
+      .insert(orchestratorRuns)
+      .values({
+        workspaceId: workspace!.id,
+        groupSessionId: groupSession!.id,
+        status: 'running',
+      })
+      .returning()
+    const [task] = await db
+      .insert(workspaceTasks)
+      .values({
+        workspaceId: workspace!.id,
+        agentId: agent!.id,
+        runId: run!.id,
+        title: 'Refresh Worker contract',
+        description: 'Ensure worker local state mirrors Controller resources.',
+        status: 'running',
+      })
+      .returning()
+    const [thread] = await db
+      .insert(taskThreads)
+      .values({
+        workspaceId: workspace!.id,
+        runId: run!.id,
+        taskId: task!.id,
+        groupSessionId: groupSession!.id,
+        workspaceAgentId: agent!.id,
+        workerInstanceId: worker!.id,
+        sessionId: taskSession!.id,
+        status: 'active',
+      })
+      .returning()
+    const [groupRoom] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: `!worker-contract-group-${Date.now()}:agenthub.local`,
+        kind: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        sessionId: groupSession!.id,
+        title: 'Controller Sync Group',
+        status: 'active',
+      })
+      .returning()
+    const [taskRoom] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: `!worker-contract-task-${Date.now()}:agenthub.local`,
+        kind: 'task',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        sessionId: taskSession!.id,
+        runId: run!.id,
+        taskId: task!.id,
+        taskThreadId: thread!.id,
+        title: 'Controller Sync Task Room',
+        status: 'active',
+        metadata: {
+          sharedTaskRelativeRoot: '.agenthub/shared/tasks/controller-sync-task',
+          sharedTaskSpecPath: '/tmp/project/.agenthub/shared/tasks/controller-sync-task/spec.md',
+        },
+      })
+      .returning()
+    await db.insert(roomParticipants).values([
+      {
+        roomId: groupRoom!.id,
+        participantType: 'worker',
+        workspaceAgentId: agent!.id,
+        workerInstanceId: worker!.id,
+        providerUserId: '@controller-sync-worker:agenthub.local',
+        displayName: 'Controller Sync Worker',
+        role: 'member',
+      },
+      {
+        roomId: taskRoom!.id,
+        participantType: 'worker',
+        workspaceAgentId: agent!.id,
+        providerUserId: '@controller-sync-worker:agenthub.local',
+        displayName: 'Controller Sync Worker',
+        role: 'member',
+      },
+    ])
+    await db.insert(matrixIdentities).values({
+      ownerType: 'worker',
+      ownerId: worker!.id,
+      serverName: 'agenthub.local',
+      localpart: `worker-${worker!.id}`,
+      userId: '@controller-sync-worker:agenthub.local',
+      displayName: 'Controller Sync Worker',
+    })
+    const [lease] = await db
+      .insert(runtimeLeases)
+      .values({
+        workspaceId: workspace!.id,
+        runId: run!.id,
+        taskId: task!.id,
+        workerInstanceId: worker!.id,
+        provider: 'local-workdir',
+        status: 'running',
+        metadata: {},
+      })
+      .returning()
+
+    const ws = await ensureWorkerAgentContractFromController({
+      workerInstanceId: worker!.id,
+      controllerUrl: 'http://127.0.0.1:8000',
+      sharedStorageRoot: '.agenthub/shared',
+    })
+
+    const roomsMirror = JSON.parse(readFileSync(ws.roomsPath, 'utf8')) as {
+      rooms: Array<{ roomId: string; roomKind: string | null }>
+    }
+    expect(roomsMirror.rooms).toEqual(expect.arrayContaining([
+      expect.objectContaining({ roomId: groupRoom!.id, roomKind: 'group' }),
+      expect.objectContaining({ roomId: taskRoom!.id, roomKind: 'task' }),
+    ]))
+
+    const tasksMirror = JSON.parse(readFileSync(ws.tasksPath, 'utf8')) as {
+      tasks: Array<{ taskId: string; taskThreadId?: string | null; roomId?: string | null; runtimeLeaseId?: string | null }>
+    }
+    expect(tasksMirror.tasks).toEqual([
+      expect.objectContaining({
+        taskId: task!.id,
+        taskThreadId: thread!.id,
+        roomId: taskRoom!.id,
+        runtimeLeaseId: lease!.id,
+      }),
+    ])
+
+    const agentsText = readFileSync(ws.agentsPath, 'utf8')
+    expect(agentsText).toContain('Controller Sync Task Room')
+    const state = JSON.parse(readFileSync(ws.statePath, 'utf8')) as {
+      activeTasks: Array<{ taskId: string }>
+      identity: { matrixUserId: string | null }
+      rooms: { count: number | null }
+    }
+    expect(state.activeTasks).toEqual([expect.objectContaining({ taskId: task!.id })])
+    expect(state.identity.matrixUserId).toBe('@controller-sync-worker:agenthub.local')
+    expect(state.rooms.count).toBe(2)
   })
 
   test('projects Worker contract into bridge CLI execution cwd idempotently', async () => {

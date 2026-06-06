@@ -17,11 +17,10 @@ import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import { roomService } from '../rooms/room-service'
-import { ensureWorkerAgentContract } from '../agent-contract'
+import { ensureWorkerAgentContractFromController } from '../agent-contract'
 import {
   localCliWorkerBackend,
   loadWorkerOpenClawRoomBindings,
-  workerRoomBindingsToContractRooms,
   type WorkerBackend,
   type WorkerBackendEnsureInput,
   type WorkerBackendInspectResult,
@@ -158,15 +157,13 @@ export class DockerWorkerBackend implements WorkerBackend {
       maxConcurrent: 4,
     })
     if (agent) {
-      await ensureWorkerAgentContract({
+      await ensureWorkerAgentContractFromController({
         workerInstanceId: worker.id,
-        agent,
         runtimeBase: worker.runtimeBase,
         matrixUserId: identity.userId,
         runtimeConfigPath: configPath,
         controllerUrl: containerControllerUrl(),
         sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
-        currentRooms: workerRoomBindingsToContractRooms(roomBindings.rooms),
       })
     }
 
