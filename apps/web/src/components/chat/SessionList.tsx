@@ -63,7 +63,7 @@ import {
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
 import { VirtualList } from '../VirtualList'
-import { selectSessionListState, useChatStoreShallow } from '../../stores/chatSelectors'
+import { useChatStore } from '../../stores/chatStore'
 type SidebarTab = 'messages' | 'agents' | 'artifacts' | 'abilities' | 'me'
 
 function activeTabFromPath(pathname: string): SidebarTab {

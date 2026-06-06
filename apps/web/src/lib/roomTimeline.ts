@@ -40,6 +40,7 @@ export function projectRoomTimeline(input: {
   const messages = dedupeProjectedTimelineMessages(input.timeline
     .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
     .filter((event) => !isMessageControlEvent(event))
+    .filter((event) => !isDirectRuntimeInternalEvent(event, input.room, asRecord(event.metadata)))
     .filter((event) => !timelineEventIsRedacted(event, controls))
     .map((event) => timelineEventToMessage(event, input.room, input.sessionId, participantsById))
     .filter((message): message is Message => Boolean(message))
