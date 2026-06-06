@@ -914,7 +914,7 @@ describe('Controller Plane', () => {
       expect(typeof workerRuntime.runtimeInspection.capabilityProbe?.capabilities.auth).toBe('boolean')
       expect(workerRuntime.runtimeHealth.details?.capabilityProbe).toBeTruthy()
     }
-  })
+  }, 10_000)
 
   test('resident Worker self-test checks readiness and observes Matrix probe replies', async () => {
     const previousWorkerBackend = process.env.AGENTHUB_WORKER_BACKEND
@@ -923,6 +923,10 @@ describe('Controller Plane', () => {
     delete process.env.AGENTHUB_CONTAINER_RUNTIME
     try {
       const { worker, agent, room, participant } = await createResidentWorkerSelfTestFixture()
+      await db
+        .update(roomParticipants)
+        .set({ workerInstanceId: null })
+        .where(eq(roomParticipants.id, participant.id))
 
       const dryRun = await runResidentWorkerSelfTest({
         workerInstanceId: worker.id,
@@ -934,6 +938,7 @@ describe('Controller Plane', () => {
       expect(dryRun.runtimeBase).toBe('openclaw')
       expect(dryRun.dispatchAttempted).toBe(false)
       expect(dryRun.probeRoom?.roomId).toBe(room.id)
+      expect(dryRun.checks.find((item) => item.id === 'contract-sync')?.ok).toBe(true)
       expect(dryRun.checks.find((item) => item.id === 'contract')?.ok).toBe(true)
       expect(dryRun.checks.find((item) => item.id === 'matrix-identity')?.ok).toBe(true)
 

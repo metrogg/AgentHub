@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
-import { and, db, eq, matrixIdentities, roomParticipants, rooms, workerInstances, workspaceAgents } from '@agenthub/db'
-import { resolveWorkerAgentContractWorkspace } from '../agent-contract'
+import { and, db, eq, matrixIdentities, or, roomParticipants, rooms, workerInstances, workspaceAgents } from '@agenthub/db'
+import { ensureWorkerAgentContractFromController, resolveWorkerAgentContractWorkspace } from '../agent-contract'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { roomService } from '../rooms'
 import { dockerWorkerBackend } from './docker-worker-backend'
@@ -86,6 +86,25 @@ export async function runResidentWorkerSelfTest(
     .limit(1)
   checks.push(check('workspace-agent', 'WorkspaceAgent', Boolean(agent), agent ? agent.name : 'WorkspaceAgent not found.'))
 
+  let contractSyncError: string | null = null
+  if (agent) {
+    try {
+      await ensureWorkerAgentContractFromController({
+        workerInstanceId: worker.id,
+        controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+        sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+      })
+    } catch (error) {
+      contractSyncError = error instanceof Error ? error.message : String(error)
+    }
+  }
+  checks.push(check(
+    'contract-sync',
+    'Controller contract sync',
+    Boolean(agent) && !contractSyncError,
+    contractSyncError ?? (agent ? 'Worker contract synced from Controller resources.' : 'Skipped because WorkspaceAgent is missing.'),
+  ))
+
   const contract = resolveWorkerAgentContractWorkspace(worker.id)
   const contractFiles = {
     profile: existsSync(contract.profilePath),
@@ -118,7 +137,7 @@ export async function runResidentWorkerSelfTest(
       : 'Worker Matrix identity not found.',
   ))
 
-  const participantRows = await findWorkerParticipants(worker.id, input.ownerId)
+  const participantRows = await findWorkerParticipants(worker.id, worker.workspaceAgentId, input.ownerId)
   checks.push(check(
     'room-participant',
     'Room participant',
@@ -252,7 +271,7 @@ async function findWorkerMatrixIdentity(workerInstanceId: string, workspaceAgent
   return byAgent ?? null
 }
 
-async function findWorkerParticipants(workerInstanceId: string, ownerId: string) {
+async function findWorkerParticipants(workerInstanceId: string, workspaceAgentId: string, ownerId: string) {
   return db
     .select({
       participant: roomParticipants,
@@ -262,7 +281,10 @@ async function findWorkerParticipants(workerInstanceId: string, ownerId: string)
     .innerJoin(rooms, eq(roomParticipants.roomId, rooms.id))
     .where(
       and(
-        eq(roomParticipants.workerInstanceId, workerInstanceId),
+        or(
+          eq(roomParticipants.workerInstanceId, workerInstanceId),
+          eq(roomParticipants.workspaceAgentId, workspaceAgentId),
+        ),
         eq(roomParticipants.participantType, 'worker'),
         eq(roomParticipants.status, 'joined'),
         eq(rooms.ownerId, ownerId),
