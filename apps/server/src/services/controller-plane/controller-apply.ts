@@ -1,6 +1,11 @@
 import { AppError, AppErrorCodes } from '../../lib/error'
 import type { ControllerApi } from './controller-api'
-import { CONTROLLER_ROOM_KINDS, CONTROLLER_WORKER_RUNTIME_BASES } from './controller-api-schema'
+import {
+  CONTROLLER_ROOM_KINDS,
+  CONTROLLER_WORKER_RUNTIME_BASES,
+  getControllerApiSchema,
+  type ControllerApiOperationSchema,
+} from './controller-api-schema'
 import { normalizeWorkerRuntimeBase } from './worker-runtime-base'
 
 export interface ControllerApplyBody {
@@ -8,6 +13,12 @@ export interface ControllerApplyBody {
   json?: string
   resource?: unknown
   resources?: unknown[]
+  approval?: {
+    approved?: boolean
+    reason?: string
+    approvedBy?: string
+  }
+  approvalToken?: string
 }
 
 export interface ControllerApplyResult {
@@ -15,6 +26,21 @@ export interface ControllerApplyResult {
   applied: Array<{
     kind: string
     name?: string | null
+    approval: {
+      level: ControllerApiOperationSchema['approval']
+      required: boolean
+      provided: boolean
+      approvedBy: string | null
+      reason: string | null
+    }
+    audit: {
+      operationId: string
+      applyOperationId: 'apply.manifest'
+      danger: ControllerApiOperationSchema['danger']
+      manifestKind: string
+      manifestName: string | null
+      fields: Record<string, unknown>
+    }
     result: unknown
   }>
 }
@@ -27,9 +53,19 @@ export async function applyControllerManifest(
   const applied = []
   for (const resource of resources) {
     const manifest = normalizeManifest(resource)
+    const operation = operationForManifestKind(manifest.kind)
+    const approval = approvalSnapshot(operation, body)
+    if (approval.required && !approval.provided) {
+      throw AppError.fromCode(
+        AppErrorCodes.FORBIDDEN,
+        `Controller apply ${manifest.kind} requires approval for operation ${operation.id}.`,
+      )
+    }
     applied.push({
       kind: manifest.kind,
       name: manifest.metadata.name ?? null,
+      approval,
+      audit: auditSnapshot(operation, manifest),
       result: await applyOne(api, manifest),
     })
   }
@@ -95,6 +131,68 @@ async function applyOne(api: ControllerApi, manifest: NormalizedManifest) {
     default:
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Controller apply does not support kind ${manifest.kind} yet.`)
   }
+}
+
+function operationForManifestKind(kind: string): ControllerApiOperationSchema {
+  const operationId = ({
+    Worker: 'workers.create',
+    Manager: 'managers.reconcile',
+    Room: 'rooms.create',
+    Task: 'tasks.assign',
+    Team: 'teams.create',
+    Human: 'humans.create',
+  } as Record<string, string>)[kind] ?? 'apply.manifest'
+  const operation = getControllerApiSchema().operations.find((item) => item.id === operationId)
+    ?? getControllerApiSchema().operations.find((item) => item.id === 'apply.manifest')
+  if (!operation) {
+    throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, `Controller schema is missing operation ${operationId}.`)
+  }
+  return operation
+}
+
+function approvalSnapshot(operation: ControllerApiOperationSchema, body: ControllerApplyBody) {
+  const tokenProvided = Boolean(stringValue(body.approvalToken))
+  const approved = Boolean(body.approval?.approved) || tokenProvided
+  return {
+    level: operation.approval,
+    required: operation.approval === 'required',
+    provided: approved,
+    approvedBy: stringValue(body.approval?.approvedBy) ?? null,
+    reason: stringValue(body.approval?.reason) ?? null,
+  }
+}
+
+function auditSnapshot(operation: ControllerApiOperationSchema, manifest: NormalizedManifest) {
+  return {
+    operationId: operation.id,
+    applyOperationId: 'apply.manifest' as const,
+    danger: operation.danger,
+    manifestKind: manifest.kind,
+    manifestName: manifest.metadata.name ?? null,
+    fields: Object.fromEntries(operation.audit.map((path) => [
+      path,
+      readAuditField(path, manifest, operation.id === 'apply.manifest'),
+    ])),
+  }
+}
+
+function readAuditField(path: string, manifest: NormalizedManifest, manifestKindContext: boolean): unknown {
+  if (path === 'kind' && manifestKindContext) return manifest.kind
+  if (path === 'kind') return manifest.spec.kind ?? manifest.metadata.kind ?? null
+  const root = manifest as unknown as Record<string, unknown>
+  const direct = readObjectPath(root, path)
+  if (direct != null) return direct
+  const fromSpec = readObjectPath(manifest.spec, path)
+  if (fromSpec != null) return fromSpec
+  const fromMetadata = readObjectPath(manifest.metadata, path)
+  return fromMetadata ?? null
+}
+
+function readObjectPath(root: Record<string, unknown>, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, part) => {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return null
+    return (current as Record<string, unknown>)[part] ?? null
+  }, root)
 }
 
 function applyManagerManifest(api: ControllerApi, manifest: NormalizedManifest) {

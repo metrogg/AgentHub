@@ -222,6 +222,24 @@ describe('Controller Plane', () => {
     expect(result.success).toBe(true)
     expect(result.applied).toHaveLength(1)
     expect(result.applied[0]?.kind).toBe('Worker')
+    expect(result.applied[0]?.approval).toMatchObject({
+      level: 'recommended',
+      required: false,
+      provided: false,
+    })
+    expect(result.applied[0]?.audit).toMatchObject({
+      operationId: 'workers.create',
+      applyOperationId: 'apply.manifest',
+      danger: 'write',
+      manifestKind: 'Worker',
+      manifestName: 'Applied Worker',
+    })
+    expect(result.applied[0]?.audit.fields).toMatchObject({
+      workspaceId: workspace!.id,
+      name: 'Applied Worker',
+      runtimeBase: 'opencode',
+      modelId: 'test-model',
+    })
 
     const [agent] = await db
       .select()

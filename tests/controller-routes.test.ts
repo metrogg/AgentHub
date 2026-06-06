@@ -167,7 +167,20 @@ describe('Controller HTTP API', () => {
 
     const applied = await controllerJson<{
       success: boolean
-      applied: Array<{ kind: string; name: string | null; result: { id: string; title: string } }>
+      applied: Array<{
+        kind: string
+        name: string | null
+        approval: { level: string; required: boolean; provided: boolean }
+        audit: {
+          operationId: string
+          applyOperationId: string
+          danger: string
+          manifestKind: string
+          manifestName: string | null
+          fields: Record<string, unknown>
+        }
+        result: { id: string; title: string }
+      }>
     }>('/api/controller/apply', token, {
       method: 'POST',
       body: {
@@ -188,6 +201,24 @@ describe('Controller HTTP API', () => {
     expect(applied.success).toBe(true)
     expect(applied.applied[0]?.kind).toBe('Room')
     expect(applied.applied[0]?.name).toBe('Applied Room')
+    expect(applied.applied[0]?.approval).toMatchObject({
+      level: 'not_required',
+      required: false,
+      provided: false,
+    })
+    expect(applied.applied[0]?.audit).toMatchObject({
+      operationId: 'rooms.create',
+      applyOperationId: 'apply.manifest',
+      danger: 'write',
+      manifestKind: 'Room',
+      manifestName: 'Applied Room',
+    })
+    expect(applied.applied[0]?.audit.fields).toMatchObject({
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+      kind: 'group',
+      title: 'Applied Room',
+    })
 
     const [room] = await db
       .select()
