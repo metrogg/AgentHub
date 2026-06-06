@@ -125,7 +125,7 @@ try {
 const provider = getActiveManagerProvider()
 if (Bun.env.AGENTHUB_AUTO_START_MANAGER === 'true' && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
   const status = await provider.status()
-  if (!status.running && !status.endpoint) {
+  if ((!status.running || status.error) && !status.endpoint) {
     logger.info({ runtimeType: provider.runtimeType, controllerPort: runtimePort }, 'Starting resident Manager process...')
     if (!provider.ensureStarted) {
       logger.error('Provider does not support ensureStarted; Manager is unavailable.')

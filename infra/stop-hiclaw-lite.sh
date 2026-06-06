@@ -27,6 +27,23 @@ echo ""
 echo "=== AgentHub HiClaw-lite 停止 ==="
 echo ""
 
+# ─── Helper: Windows PowerShell kill ───────────────────────────────────
+win_kill_pid() {
+  local target_pid=$1
+  local reason=$2
+  if [ -z "$target_pid" ]; then return 1; fi
+  # Git Bash 下 taskkill /F 会解析失败，用 PowerShell 兜底
+  if command -v powershell.exe &>/dev/null; then
+    powershell.exe -NoProfile -Command "Stop-Process -Id $target_pid -Force -ErrorAction SilentlyContinue" 2>/dev/null
+    return 0
+  elif command -v taskkill &>/dev/null; then
+    # cmd //c 避免 Git Bash 把 /F 解析为路径
+    cmd //c "taskkill /F /PID $target_pid" 2>/dev/null
+    return 0
+  fi
+  return 1
+}
+
 # ─── 1. 按 PID 文件停止 ───────────────────────────────────────────────
 log_info "按 PID 文件停止 OpenClaw 进程..."
 
@@ -42,8 +59,13 @@ for pidfile in "$PID_DIR"/openclaw-*.pid; do
     if kill -0 "$pid" 2>/dev/null; then
       kill -9 "$pid" 2>/dev/null || true
     fi
-    log_ok "$name 已停止"
-    stopped=$((stopped + 1))
+    if ! kill -0 "$pid" 2>/dev/null; then
+      log_ok "$name 已停止"
+      stopped=$((stopped + 1))
+    else
+      log_warn "$name 仍在运行，尝试强制停止..."
+      win_kill_pid "$pid" "$name"
+    fi
   else
     log_warn "$name 不在运行"
   fi
@@ -54,56 +76,57 @@ if [ "$stopped" -eq 0 ]; then
   log_warn "PID 文件中没有运行中的 OpenClaw 进程"
 fi
 
-# ─── 2. 兜底：按名称查找停止 ──────────────────────────────────────────
+# ─── 2. 兜底：按名称/端口查找停止 ────────────────────────────────────
 echo ""
 log_info "兜底查找残留 OpenClaw 进程..."
 
-# 尝试多种方式查找并停止 openclaw 进程
 found_any=false
 
-# 方式 A: pkill (Linux/macOS/WSL)
-if command -v pkill &>/dev/null; then
-  openclaw_pids=$(pgrep -f "openclaw.*gateway" 2>/dev/null || true)
-  if [ -n "$openclaw_pids" ]; then
-    for p in $openclaw_pids; do
-      log_warn "发现残留 openclaw 进程 PID $p，正在停止..."
-      kill -9 "$p" 2>/dev/null || true
-      found_any=true
-    done
-  fi
+# 方式 A: pgrep 查找 (WSL/Linux/macOS)
+# OpenClaw 在 Windows 上实际进程名是 node.exe，所以同时查命令行
+if command -v pgrep &>/dev/null; then
+  # 尝试多种模式匹配
+  for pattern in "openclaw.*gateway" "node.*openclaw"; do
+    openclaw_pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+    if [ -n "$openclaw_pids" ]; then
+      for p in $openclaw_pids; do
+        # 避免重复 kill
+        if kill -0 "$p" 2>/dev/null; then
+          log_warn "发现残留 openclaw 进程 PID $p (pattern: $pattern)，正在停止..."
+          kill -9 "$p" 2>/dev/null || win_kill_pid "$p" "pgrep-fallback"
+          found_any=true
+        fi
+      done
+    fi
+  done
 fi
 
-# 方式 B: taskkill (Windows)
-if [ "$found_any" = false ] && command -v taskkill &>/dev/null; then
-  # 先尝试按窗口标题查找（如果进程有控制台窗口）
-  taskkill /F /FI "WINDOWTITLE eq openclaw*" 2>/dev/null || true
-  # 再尝试按命令行参数查找 node.exe 运行的 openclaw
-  # 注意：这会杀死所有 node.exe 运行的 openclaw，包括可能的其他实例
-  wmic process where "CommandLine like '%openclaw%gateway%'" get ProcessId 2>/dev/null | tail -n +2 | while read -r pid; do
-    pid=$(echo "$pid" | tr -d '[:space:]')
-    if [ -n "$pid" ] && [ "$pid" != "ProcessId" ]; then
-      log_warn "发现残留 openclaw 进程 PID $pid，正在停止..."
-      taskkill /F /PID "$pid" 2>/dev/null || true
+# 方式 B: wmic 按命令行查找 (Windows native)
+if command -v wmic &>/dev/null; then
+  wmic_pids=$(wmic process where "CommandLine like '%openclaw%gateway%'" get ProcessId 2>/dev/null | tail -n +2 | tr -d '[:space:]' | tr '\r\n' ' ')
+  for wpid in $wmic_pids; do
+    if [ -n "$wpid" ] && [ "$wpid" != "ProcessId" ] && [ "$wpid" -gt 0 ] 2>/dev/null; then
+      log_warn "发现残留 openclaw 进程 PID $wpid (wmic)，正在停止..."
+      win_kill_pid "$wpid" "wmic-fallback"
       found_any=true
     fi
   done
 fi
 
-# 方式 C: 按端口查找并停止（Windows netstat）
-if command -v netstat &>/dev/null; then
-  for port in 18799 18800; do
+# 方式 C: 按端口查找并停止（通用，最可靠）
+for port in 18799 18800; do
+  pid=""
+  if command -v netstat &>/dev/null; then
     pid=$(netstat -ano 2>/dev/null | grep ":$port " | grep LISTENING | awk '{print $5}' | head -1)
-    if [ -n "$pid" ]; then
-      log_warn "发现端口 $port 被 PID $pid 占用，正在停止..."
-      if command -v taskkill &>/dev/null; then
-        taskkill /F /PID "$pid" 2>/dev/null || true
-      else
-        kill -9 "$pid" 2>/dev/null || true
-      fi
-      found_any=true
-    fi
-  done
-fi
+  elif command -v ss &>/dev/null; then
+    pid=$(ss -tlnp 2>/dev/null | grep ":$port " | sed 's/.*pid=//;s/,.*//' | head -1)
+  fi
+  if [ -n "$pid" ]; then
+    log_warn "发现端口 $port 被 PID $pid 占用，正在停止..."
+    kill -9 "$pid" 2>/dev/null || win_kill_pid "$pid" "port-$port"
+    found_any=true
+  fi
+done
 
 if [ "$found_any" = false ]; then
   log_ok "没有残留的 OpenClaw 进程"

@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
+const roomBridgeApi = await import('../apps/server/src/services/rooms/room-chat-bridge')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const agentRunnerApi = await import('../apps/server/src/services/agent-runner')
 const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime/worker-runtime-service')
@@ -25,6 +26,7 @@ const {
   runtimeLeases,
   artifacts,
   taskClarifications,
+  and,
   eq,
 } = dbApi
 const { roomController, roomService } = roomsApi
@@ -35,6 +37,7 @@ const {
   MatrixClient,
   MatrixRoomEventDispatcher,
 } = roomsApi
+const { appendHumanMessageRoomFirst } = roomBridgeApi
 const { ensureTaskThread } = taskThreadApi
 const { cleanupWebSocket, joinRoom } = agentRunnerApi
 const { workerRuntimeService } = workerRuntimeApi
@@ -151,6 +154,53 @@ async function createTaskRoomWithPendingClarification(label: string) {
 }
 
 describe('RoomService Matrix room adapter contract', () => {
+  test('maps text @orchestrator mention to the real Manager room participant without frontend metadata', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Manager Mention Workspace',
+        goal: 'Verify Manager mentions',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Manager Mention Group',
+        type: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+      })
+      .returning()
+    await db.insert(workspaceAgents).values({
+      workspaceId: workspace!.id,
+      name: 'Orchestrator / Team Builder',
+      role: '群聊总指挥',
+      modelId: 'test-model',
+      runtimeType: 'code-agent',
+      codeAgentType: 'claude-code',
+      roleType: 'orchestrator',
+    })
+
+    const { room, event } = await appendHumanMessageRoomFirst({
+      session: session!,
+      userId: 'default-user',
+      userName: 'Tester',
+      content: '@Orchestrator / Team Builder 你在吗',
+      type: 'text',
+      metadata: {},
+      skipDispatch: true,
+    })
+
+    const [managerParticipant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(and(eq(roomParticipants.roomId, room.id), eq(roomParticipants.participantType, 'manager')))
+      .limit(1)
+    expect(managerParticipant).toBeDefined()
+    expect(event.metadata?.matrix?.mentionedParticipantIds).toEqual([managerParticipant!.id])
+  })
+
   test('creates a Matrix-compatible room and appends ordered timeline events', async () => {
     const [room] = await db
       .insert(rooms)

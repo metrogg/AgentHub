@@ -262,6 +262,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
         metadata: {
           ...(input.metadata ?? {}),
           matrix: {
+            ...readMatrixMetadata(input.metadata),
             eventId: matrixEvent.event_id,
             roomId: room.providerRoomId,
             senderUserId: senderIdentity?.userId ?? null,
@@ -509,4 +510,10 @@ function roomAliasName(input: CreateRoomInput) {
   if (input.sessionId) return `agenthub-session-${matrixLocalpart(input.sessionId)}`
   if (input.runId) return `agenthub-run-${matrixLocalpart(input.runId)}`
   return null
+}
+
+function readMatrixMetadata(metadata: Record<string, unknown> | null | undefined) {
+  const matrix = metadata?.matrix
+  if (!matrix || typeof matrix !== 'object' || Array.isArray(matrix)) return {}
+  return matrix as Record<string, unknown>
 }

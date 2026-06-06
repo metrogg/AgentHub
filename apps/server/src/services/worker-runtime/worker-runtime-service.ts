@@ -111,6 +111,15 @@ export interface RerunTaskRoomInput {
   heartbeatIntervalMs?: number
 }
 
+export interface RunGroupMentionRoomInput {
+  roomId: string
+  ownerId: string
+  workspaceAgentId: string
+  sourceEventId: string
+  prompt: string
+  signal?: AbortSignal
+}
+
 export class WorkerRuntimeService {
   private readonly runningControllers = new Map<string, AbortController>()
   private readonly roomRuntimeKind = new Map<string, import('./types').WorkerRuntimeKind>()
@@ -284,6 +293,198 @@ export class WorkerRuntimeService {
     } finally {
       this.runningControllers.delete(room.id)
       this.roomRuntimeKind.delete(room.id)
+    }
+
+    return { roomId: room.id, appendedEventIds }
+  }
+
+  /**
+   * Run a Worker from a group-room @mention.
+   *
+   * This is the bridge between AgentHub's current CLI Worker base and the
+   * HiClaw room model: the mention lives in the group room, the addressed
+   * Worker executes as itself, and the reply is written back to the same room.
+   * Resident OpenClaw/QwenPaw Workers can later replace this bridge by listening
+   * to the room directly.
+   */
+  async runGroupMentionRoom(input: RunGroupMentionRoomInput): Promise<{ roomId: string; appendedEventIds: string[] }> {
+    const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
+    if (room.kind !== 'group' && room.kind !== 'manager_dm') {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'WorkerRuntime 只能从 group room 处理 @mention')
+    }
+
+    const workerParticipant = await findWorkerParticipant(room.id, input.workspaceAgentId)
+    if (!workerParticipant?.workspaceAgentId) {
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, '群聊房间还没有该 Worker participant')
+    }
+
+    const controllerKey = `${room.id}:${workerParticipant.workspaceAgentId}`
+    if (this.runningControllers.has(controllerKey)) {
+      logger.info({ roomId: room.id, agentId: workerParticipant.workspaceAgentId }, 'Group mention worker is already running')
+      return { roomId: room.id, appendedEventIds: [] }
+    }
+
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.id, workerParticipant.workspaceAgentId))
+      .limit(1)
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Worker Agent 不存在')
+
+    const [workspace] = room.workspaceId
+      ? await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId)).limit(1)
+      : []
+    const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 100 })
+    const runtime = new EphemeralCodeAgentWorkerRuntime(agent)
+    this.roomRuntimeKind.set(controllerKey, runtime.kind)
+
+    const abortController = new AbortController()
+    if (input.signal) {
+      if (input.signal.aborted) {
+        abortController.abort()
+      } else {
+        input.signal.addEventListener('abort', () => abortController.abort(), { once: true })
+      }
+    }
+    this.runningControllers.set(controllerKey, abortController)
+
+    const appendedEventIds: string[] = []
+    await markWorkerInstanceState(workerParticipant.workerInstanceId, 'busy', {
+      message: `${agent.name} is answering a group mention.`,
+      health: {
+        roomId: room.id,
+        sourceEventId: input.sourceEventId,
+      },
+    })
+
+    try {
+      const startedEvent = await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: workerParticipant.id,
+        senderType: 'system',
+        type: 'task.progress',
+        body: `${agent.name} 正在处理这条 @。`,
+        metadata: {
+          kind: 'worker-runtime.group-mention-started',
+          sourceEventId: input.sourceEventId,
+          workspaceAgentId: agent.id,
+          workerInstanceId: workerParticipant.workerInstanceId ?? null,
+          runtimeType: runtime.runtimeType,
+          hiddenFromChat: true,
+          uiPresentation: 'agent-activity',
+        },
+      })
+      appendedEventIds.push(startedEvent.id)
+
+      const iterator = runtime.executeTask(
+        {
+          roomId: room.id,
+          sessionId: room.sessionId ?? room.id,
+          workspaceId: room.workspaceId ?? agent.workspaceId,
+          workspaceAgentId: agent.id,
+          workerInstanceId: workerParticipant.workerInstanceId ?? null,
+          taskId: null,
+          taskThreadId: null,
+          runId: null,
+          prompt: input.prompt,
+          history: timeline.map((event) => ({
+            senderType: event.senderType,
+            type: event.type,
+            body: event.body,
+          })),
+          workspacePath: workspace?.projectPath ?? null,
+        },
+        abortController.signal,
+      )
+
+      let next = await iterator.next()
+      while (!next.done) {
+        const runtimeEvent = next.value
+        if (runtimeEvent.type === 'message') {
+          next = await iterator.next()
+          continue
+        }
+        if (runtimeEvent.type === 'progress' || runtimeEvent.type === 'failed') {
+          await markWorkerInstanceState(workerParticipant.workerInstanceId, runtimeEvent.type === 'failed' ? 'failed' : 'busy', {
+            message: runtimeEvent.message,
+            health: {
+              roomId: room.id,
+              sourceEventId: input.sourceEventId,
+              runtimeType: runtime.runtimeType,
+              progressPercent: runtimeEvent.type === 'progress' ? runtimeEvent.progressPercent ?? null : null,
+            },
+          })
+          next = await iterator.next()
+          continue
+        }
+        const event = await appendWorkerRuntimeEvent({
+          roomId: room.id,
+          participantId: workerParticipant.id,
+          workspaceId: room.workspaceId ?? agent.workspaceId,
+          workspaceAgentId: agent.id,
+          workerInstanceId: workerParticipant.workerInstanceId ?? null,
+          runtimeType: runtime.runtimeType,
+          event: runtimeEvent,
+        })
+        appendedEventIds.push(event.id)
+        next = await iterator.next()
+      }
+
+      const result = next.value
+      const completedEvent = await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: workerParticipant.id,
+        senderType: 'worker',
+        type: 'worker.message',
+        body:
+          result.status === 'completed'
+            ? result.message || '处理完成。'
+            : '我这边还没启动成功，请检查这个 Worker 的 CLI 基底、模型绑定和认证状态。',
+        metadata: {
+          kind: result.status === 'completed' ? 'worker-runtime.group-mention-completed' : 'worker-runtime.group-mention-failed',
+          status: result.status,
+          sourceEventId: input.sourceEventId,
+          workspaceAgentId: agent.id,
+          workerInstanceId: workerParticipant.workerInstanceId ?? null,
+          runtimeType: runtime.runtimeType,
+          artifacts: result.artifacts ?? [],
+          sessionId: result.sessionId ?? null,
+          rawError: result.status === 'completed' ? null : result.message ?? null,
+        },
+      })
+      appendedEventIds.push(completedEvent.id)
+      await markWorkerInstanceState(workerParticipant.workerInstanceId, result.status === 'completed' ? 'idle' : 'failed', {
+        message: result.message ?? null,
+        health: {
+          roomId: room.id,
+          sourceEventId: input.sourceEventId,
+          status: result.status,
+        },
+      })
+    } catch (error: any) {
+      logger.error({ err: error?.message, roomId: room.id, agentId: agent.id }, 'Group mention worker execution failed')
+      const failEvent = await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: workerParticipant.id,
+        senderType: 'worker',
+        type: 'worker.message',
+        body: '我这边还没启动成功，请检查这个 Worker 的 CLI 基底、模型绑定和认证状态。',
+        metadata: {
+          kind: 'worker-runtime.group-mention-failed',
+          sourceEventId: input.sourceEventId,
+          workspaceAgentId: agent.id,
+          workerInstanceId: workerParticipant.workerInstanceId ?? null,
+          runtimeType: runtime.runtimeType,
+          rawError: error?.message || '执行失败',
+        },
+      })
+      appendedEventIds.push(failEvent.id)
+      await markWorkerInstanceState(workerParticipant.workerInstanceId, 'failed', {
+        message: error?.message || 'Group mention worker execution failed.',
+      })
+    } finally {
+      this.runningControllers.delete(controllerKey)
+      this.roomRuntimeKind.delete(controllerKey)
     }
 
     return { roomId: room.id, appendedEventIds }

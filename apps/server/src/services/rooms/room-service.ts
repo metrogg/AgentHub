@@ -1,4 +1,4 @@
-import { and, db, eq, roomParticipants, rooms, sessions, taskThreads, workerInstances, workspaceAgents, workspaces, workspaceTasks } from '@agenthub/db'
+import { and, db, eq, roomParticipants, rooms, sessions, taskThreads, workspaceAgents, workspaces, workspaceTasks } from '@agenthub/db'
 import { WsEvent } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { broadcastSessionEvent } from '../agent-runner'
@@ -37,6 +37,11 @@ export class RoomService {
     await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })
+    if (!shouldSkipAutoDispatch(event.metadata)) {
+      await this.dispatchPlatformTimelineEvent(event.id).catch(() => {
+        // Matrix /sync remains the source of truth for resident runtimes; platform dispatch is a local safety net.
+      })
+    }
     return event
   }
 
@@ -47,6 +52,11 @@ export class RoomService {
     await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })
+    if (!shouldSkipAutoDispatch(event.metadata)) {
+      await this.dispatchPlatformTimelineEvent(event.id).catch(() => {
+        // Matrix /sync remains the source of truth for resident runtimes; platform dispatch is a local safety net.
+      })
+    }
     return event
   }
 
@@ -86,7 +96,7 @@ export class RoomService {
     if (!session || session.ownerId !== ownerId) {
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
-    return this.adapter.ensureRoomForSession({
+    const room = await this.adapter.ensureRoomForSession({
       ownerId,
       sessionId: session.id,
       title: session.title,
@@ -95,12 +105,20 @@ export class RoomService {
       workspaceAgentId: session.workspaceAgentId,
       metadata: session.metadata,
     })
+    await this.startRoomRuntimeListeners(room.id, 'room-session-reconciled').catch(() => {
+      // Listener startup is supervised separately; room creation must remain available.
+    })
+    return room
   }
 
   async ensureRoomForTaskThread(input: EnsureRoomForTaskThreadInput) {
     const [thread] = await db.select().from(taskThreads).where(eq(taskThreads.id, input.taskThreadId)).limit(1)
     if (!thread) throw AppError.fromCode(AppErrorCodes.TASK_NOT_FOUND, '任务房间不存在')
-    return this.adapter.ensureRoomForTaskThread(input)
+    const room = await this.adapter.ensureRoomForTaskThread(input)
+    await this.startRoomRuntimeListeners(room.id, 'task-room-reconciled').catch(() => {
+      // Listener startup is supervised separately; task room creation must remain available.
+    })
+    return room
   }
 
   async buildTaskThreadRoomInput(taskThreadId: string, ownerId: string): Promise<EnsureRoomForTaskThreadInput> {
@@ -140,15 +158,17 @@ export class RoomService {
       displayName: agent.name,
       role: 'member',
     })
-    if (workerInstanceId) {
-      const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
-      if (worker && isActiveWorkerState(worker.observedState)) {
-        await this.appendWorkerSelfIntroduction(roomId, participant.id, {
-          sourceEventId: null,
-        })
-      }
-    }
     return participant
+  }
+
+  private async startRoomRuntimeListeners(roomId: string, reason: string) {
+    const { matrixRuntimeSupervisor } = await import('./matrix-runtime-supervisor')
+    await matrixRuntimeSupervisor.startRoomListeners(roomId, { reason })
+  }
+
+  private async dispatchPlatformTimelineEvent(eventId: string) {
+    const { matrixRoomEventDispatcher } = await import('./matrix-event-dispatcher')
+    await matrixRoomEventDispatcher.dispatchTimelineEvent(eventId)
   }
 
   async announceWorkerPresenceInJoinedRooms(
@@ -248,22 +268,24 @@ export class RoomService {
 
     const body =
       input.mode === 'ready'
-        ? `大家好，我是 ${row.agent.name}，我已经在线，随时待命。`
+        ? `${row.agent.name} 已在线。`
         : input.mode === 'listening'
-          ? `大家好，我是 ${row.agent.name}，我已经进入监听状态，随时可以接任务。`
-          : `大家好，我是 ${row.agent.name}，负责 ${row.agent.role}。我已经加入群聊，随时可以协作。`
+          ? `${row.agent.name} 已进入监听状态。`
+          : `${row.agent.name} 已加入房间。`
 
     const event = await this.appendTimelineEvent({
       roomId: row.room.id,
-      senderParticipantId: row.participant.id,
-      senderType: 'worker',
-      type: 'worker.message',
+      senderParticipantId: null,
+      senderType: 'system',
+      type: 'system',
       body,
       metadata: {
         kind: `worker-runtime.${input.mode}-announcement`,
         workspaceAgentId: row.agent.id,
         workerInstanceId: row.participant.workerInstanceId ?? null,
         sourceEventId: input.sourceEventId ?? null,
+        hiddenFromChat: true,
+        uiPresentation: 'presence',
       },
     })
 
@@ -302,6 +324,10 @@ function createDefaultRoomAdapter(): RoomAdapter {
   return new MatrixRoomAdapter()
 }
 
+function shouldSkipAutoDispatch(metadata: Record<string, unknown> | null | undefined) {
+  return metadata?.skipAutoDispatch === true
+}
+
 function timelineBroadcastSessionIds(room: Awaited<ReturnType<RoomAdapter['getRoom']>>) {
   if (!room) return []
   const ids = new Set<string>()
@@ -314,8 +340,4 @@ function timelineBroadcastSessionIds(room: Awaited<ReturnType<RoomAdapter['getRo
     }
   }
   return Array.from(ids)
-}
-
-function isActiveWorkerState(state: string) {
-  return ['ready', 'listening', 'assigned', 'busy', 'waiting_for_human', 'resuming', 'idle'].includes(state)
 }

@@ -19,6 +19,7 @@ import { ensureGroupSession } from '../services/workspace/session-manager'
 
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
+import { controllerReconcileQueue, resourceRef } from '../services/controller-plane'
 
 // ---------- Validation schemas ----------
 
@@ -409,7 +410,16 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   .post('/:id/group-session', async (c) => {
     const user = c.get('user')
     const body = await c.req.json().catch(() => ({}))
-    const session = await ensureGroupSession(c.req.param('id'), user.sub, body?.agentIds)
+    const workspaceId = c.req.param('id')
+    const session = await ensureGroupSession(workspaceId, user.sub, body?.agentIds)
+    controllerReconcileQueue.enqueue({
+      ref: resourceRef('Room', session.id, workspaceId),
+      reason: 'group-session-created',
+      payload: {
+        sessionId: session.id,
+        ownerId: user.sub,
+      },
+    })
     return c.json({ session })
   })
 
@@ -613,4 +623,3 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     await touchWorkspace(id)
     return c.body(null, 204)
   })
-

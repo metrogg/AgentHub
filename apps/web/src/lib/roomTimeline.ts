@@ -312,6 +312,9 @@ function timelineEventToMessage(
   sessionId: string,
   participantsById: Map<string, RoomParticipant>,
 ): Message | null {
+  const eventMetadata = asRecord(event.metadata)
+  if (eventMetadata?.hiddenFromChat === true) return null
+
   if (
     event.type !== 'human.message' &&
     event.type !== 'manager.message' &&
