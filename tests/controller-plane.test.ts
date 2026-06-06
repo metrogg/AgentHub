@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 const dbApi = await import('../packages/db/src/index')
 const {
+  controllerAuditEvents,
   db,
   eq,
   matrixIdentities,
@@ -227,6 +228,7 @@ describe('Controller Plane', () => {
       required: false,
       provided: false,
     })
+    expect(result.applied[0]?.auditEventId).toBeTruthy()
     expect(result.applied[0]?.audit).toMatchObject({
       operationId: 'workers.create',
       applyOperationId: 'apply.manifest',
@@ -240,6 +242,30 @@ describe('Controller Plane', () => {
       runtimeBase: 'opencode',
       modelId: 'test-model',
     })
+
+    const [auditRow] = await db
+      .select()
+      .from(controllerAuditEvents)
+      .where(eq(controllerAuditEvents.id, result.applied[0]!.auditEventId!))
+      .limit(1)
+    expect(auditRow).toMatchObject({
+      operationId: 'workers.create',
+      applyOperationId: 'apply.manifest',
+      danger: 'write',
+      approvalLevel: 'recommended',
+      approvalRequired: false,
+      approvalProvided: false,
+      manifestKind: 'Worker',
+      manifestName: 'Applied Worker',
+      workspaceId: workspace!.id,
+      resourceKind: 'Worker',
+    })
+    expect(auditRow?.auditFields).toMatchObject({
+      workspaceId: workspace!.id,
+      runtimeBase: 'opencode',
+      modelId: 'test-model',
+    })
+    expect(auditRow?.resultSummary?.workerInstanceId).toBeTruthy()
 
     const [agent] = await db
       .select()

@@ -1,3 +1,4 @@
+import { controllerAuditEvents, db } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import type { ControllerApi } from './controller-api'
 import {
@@ -33,6 +34,7 @@ export interface ControllerApplyResult {
       approvedBy: string | null
       reason: string | null
     }
+    auditEventId: string | null
     audit: {
       operationId: string
       applyOperationId: 'apply.manifest'
@@ -61,12 +63,20 @@ export async function applyControllerManifest(
         `Controller apply ${manifest.kind} requires approval for operation ${operation.id}.`,
       )
     }
+    const result = await applyOne(api, manifest)
+    const audit = auditSnapshot(operation, manifest)
+    const auditEventId = await persistControllerAuditEvent({
+      audit,
+      approval,
+      result,
+    })
     applied.push({
       kind: manifest.kind,
       name: manifest.metadata.name ?? null,
       approval,
-      audit: auditSnapshot(operation, manifest),
-      result: await applyOne(api, manifest),
+      auditEventId,
+      audit,
+      result,
     })
   }
   return { success: true, applied }
@@ -173,6 +183,60 @@ function auditSnapshot(operation: ControllerApiOperationSchema, manifest: Normal
       path,
       readAuditField(path, manifest, operation.id === 'apply.manifest'),
     ])),
+  }
+}
+
+async function persistControllerAuditEvent(input: {
+  audit: ControllerApplyResult['applied'][number]['audit']
+  approval: ControllerApplyResult['applied'][number]['approval']
+  result: unknown
+}): Promise<string | null> {
+  const summary = summarizeApplyResult(input.result, input.audit.manifestKind)
+  const workspaceId = stringValue(input.audit.fields.workspaceId)
+  const [row] = await db
+    .insert(controllerAuditEvents)
+    .values({
+      operationId: input.audit.operationId,
+      applyOperationId: input.audit.applyOperationId,
+      danger: input.audit.danger,
+      approvalLevel: input.approval.level,
+      approvalRequired: input.approval.required,
+      approvalProvided: input.approval.provided,
+      approvedBy: input.approval.approvedBy,
+      approvalReason: input.approval.reason,
+      manifestKind: input.audit.manifestKind,
+      manifestName: input.audit.manifestName,
+      workspaceId,
+      resourceId: stringValue(summary.resourceId),
+      resourceKind: input.audit.manifestKind,
+      auditFields: input.audit.fields,
+      resultSummary: summary,
+    })
+    .returning({ id: controllerAuditEvents.id })
+  return row?.id ?? null
+}
+
+function summarizeApplyResult(result: unknown, manifestKind: string): Record<string, unknown> {
+  const record = objectValue(result)
+  const room = objectValue(record.room)
+  const human = objectValue(record.human)
+  const resourceId =
+    stringValue(record.id) ??
+    stringValue(record.workerInstanceId) ??
+    stringValue(record.agentId) ??
+    stringValue(record.teamId) ??
+    stringValue(room.id) ??
+    stringValue(human.id)
+  return {
+    resourceId,
+    resourceKind: manifestKind,
+    id: stringValue(record.id),
+    status: stringValue(record.status),
+    phase: stringValue(record.phase),
+    workerInstanceId: stringValue(record.workerInstanceId),
+    agentId: stringValue(record.agentId),
+    roomId: stringValue(room.id),
+    humanId: stringValue(human.id),
   }
 }
 

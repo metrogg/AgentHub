@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test'
 const { app } = await import('../apps/server/src/app')
 const dbApi = await import('../packages/db/src/index')
 const {
+  controllerAuditEvents,
   db,
   eq,
   matrixIdentities,
@@ -171,6 +172,7 @@ describe('Controller HTTP API', () => {
         kind: string
         name: string | null
         approval: { level: string; required: boolean; provided: boolean }
+        auditEventId: string | null
         audit: {
           operationId: string
           applyOperationId: string
@@ -206,6 +208,7 @@ describe('Controller HTTP API', () => {
       required: false,
       provided: false,
     })
+    expect(applied.applied[0]?.auditEventId).toBeTruthy()
     expect(applied.applied[0]?.audit).toMatchObject({
       operationId: 'rooms.create',
       applyOperationId: 'apply.manifest',
@@ -218,6 +221,28 @@ describe('Controller HTTP API', () => {
       workspaceId: workspace!.id,
       kind: 'group',
       title: 'Applied Room',
+    })
+
+    const [auditRow] = await db
+      .select()
+      .from(controllerAuditEvents)
+      .where(eq(controllerAuditEvents.id, applied.applied[0]!.auditEventId!))
+      .limit(1)
+    expect(auditRow).toMatchObject({
+      operationId: 'rooms.create',
+      applyOperationId: 'apply.manifest',
+      danger: 'write',
+      approvalLevel: 'not_required',
+      manifestKind: 'Room',
+      manifestName: 'Applied Room',
+      workspaceId: workspace!.id,
+      resourceKind: 'Room',
+      resourceId: applied.applied[0]!.result.id,
+    })
+    expect(auditRow?.auditFields).toMatchObject({
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+      kind: 'group',
     })
 
     const [room] = await db
