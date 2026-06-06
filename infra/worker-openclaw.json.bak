@@ -22,7 +22,7 @@
       "enabled": true,
       "homeserver": "http://localhost:6167",
       "userId": "@worker:agenthub.local",
-      "accessToken": "h6LoqGrBTtIWPxM6yuZQwsYGOHEbVt1a",
+      "accessToken": "MX8oH52WmCNLpaRALOMXPSjl0nsrlMuo",
       "encryption": false,
       "network": {
         "dangerouslyAllowPrivateNetwork": true
@@ -74,7 +74,7 @@
   "agents": {
     "defaults": {
       "timeoutSeconds": 600,
-      "workspace": "~",
+      "workspace": "/mnt/c/Users/wzd/Desktop/速通ing/字节ai全栈挑战赛(agenthub)/AgentHub/infra",
       "model": {
         "primary": "agenthub-llm/default"
       },

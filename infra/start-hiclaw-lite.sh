@@ -18,11 +18,14 @@ MANAGER_USER="manager"
 MANAGER_PASS="manager-dev-password-2026"
 WORKER_USER="worker"
 WORKER_PASS="worker-dev-password-2026"
+ADMIN_USER="admin"
+ADMIN_PASS="admin-dev-password-2026"
 MANAGER_PORT=18799
 WORKER_PORT=18800
 MANAGER_CONFIG="$SCRIPT_DIR/manager-openclaw.json"
 WORKER_CONFIG="$SCRIPT_DIR/worker-openclaw.json"
 PID_DIR="$PROJECT_ROOT/.pids"
+REG_TOKEN="${AGENTHUB_REGISTRATION_TOKEN:-agenthub-dev-registration-token}"
 
 mkdir -p "$PID_DIR"
 
@@ -115,13 +118,12 @@ register_or_login() {
   local user=$1
   local pass=$2
   local user_id="@$user:$MATRIX_DOMAIN"
-  local reg_token="${AGENTHUB_REGISTRATION_TOKEN:-agenthub-dev-registration-token}"
 
   # 尝试注册（带 registration token）
   local reg_resp
   reg_resp=$(curl -s -X POST "$TUWUNEL_URL/_matrix/client/v3/register" \
     -H "Content-Type: application/json" \
-    -d "{\"username\":\"$user\",\"password\":\"$pass\",\"auth\":{\"type\":\"m.login.registration_token\",\"token\":\"$reg_token\"}}" 2>/dev/null)
+    -d "{\"username\":\"$user\",\"password\":\"$pass\",\"auth\":{\"type\":\"m.login.registration_token\",\"token\":\"$REG_TOKEN\"}}" 2>/dev/null)
 
   local access_token
   access_token=$(echo "$reg_resp" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
@@ -157,6 +159,49 @@ log_ok "Manager 账号: @$MANAGER_USER:$MATRIX_DOMAIN"
 WORKER_TOKEN=$(register_or_login "$WORKER_USER" "$WORKER_PASS")
 if [ $? -ne 0 ]; then exit 1; fi
 log_ok "Worker 账号: @$WORKER_USER:$MATRIX_DOMAIN"
+
+# ─── Step 3.5: 注册 Admin 账号（AgentHub Server 需要）───────────────────
+echo ""
+log_info "[3.5/6] 注册 AgentHub Admin Matrix 账号..."
+
+ADMIN_USER="admin"
+ADMIN_PASS="admin-dev-password-2026"
+ADMIN_TOKEN=$(register_or_login "$ADMIN_USER" "$ADMIN_PASS")
+if [ $? -ne 0 ]; then exit 1; fi
+log_ok "Admin 账号: @$ADMIN_USER:$MATRIX_DOMAIN"
+
+# 更新 .env 文件中的 Matrix 配置
+update_env_var() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  if [ ! -f "$file" ]; then
+    echo "$key=$value" >> "$file"
+    return
+  fi
+  if grep -q "^$key=" "$file" 2>/dev/null; then
+    sed -i.bak "s|^$key=.*|$key=$value|" "$file"
+  else
+    echo "$key=$value" >> "$file"
+  fi
+}
+
+ENV_FILE="$PROJECT_ROOT/.env"
+if [ -f "$ENV_FILE" ]; then
+  update_env_var "$ENV_FILE" "AGENTHUB_MATRIX_HOMESERVER_URL" "$TUWUNEL_URL"
+  update_env_var "$ENV_FILE" "AGENTHUB_MATRIX_SERVER_NAME" "$MATRIX_DOMAIN"
+  update_env_var "$ENV_FILE" "AGENTHUB_MATRIX_REGISTRATION_TOKEN" "$REG_TOKEN"
+  update_env_var "$ENV_FILE" "AGENTHUB_MATRIX_ACCESS_TOKEN" "$ADMIN_TOKEN"
+  update_env_var "$ENV_FILE" "AGENTHUB_ROOM_PROVIDER" "matrix"
+  log_ok "已更新 $ENV_FILE 中的 Matrix 配置"
+else
+  log_warn "未找到 $ENV_FILE，请手动添加以下配置："
+  echo "  AGENTHUB_MATRIX_HOMESERVER_URL=$TUWUNEL_URL"
+  echo "  AGENTHUB_MATRIX_SERVER_NAME=$MATRIX_DOMAIN"
+  echo "  AGENTHUB_MATRIX_REGISTRATION_TOKEN=$REG_TOKEN"
+  echo "  AGENTHUB_MATRIX_ACCESS_TOKEN=$ADMIN_TOKEN"
+  echo "  AGENTHUB_ROOM_PROVIDER=matrix"
+fi
 
 # ─── Step 4: 生成 OpenClaw 配置 ───────────────────────────────────────
 echo ""

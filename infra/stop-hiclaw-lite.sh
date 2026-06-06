@@ -27,8 +27,8 @@ echo ""
 echo "=== AgentHub HiClaw-lite 停止 ==="
 echo ""
 
-# 停止 OpenClaw 进程
-log_info "停止 OpenClaw 进程..."
+# ─── 1. 按 PID 文件停止 ───────────────────────────────────────────────
+log_info "按 PID 文件停止 OpenClaw 进程..."
 
 stopped=0
 for pidfile in "$PID_DIR"/openclaw-*.pid; do
@@ -51,10 +51,68 @@ for pidfile in "$PID_DIR"/openclaw-*.pid; do
 done
 
 if [ "$stopped" -eq 0 ]; then
-  log_warn "没有找到运行中的 OpenClaw 进程"
+  log_warn "PID 文件中没有运行中的 OpenClaw 进程"
 fi
 
-# 停止 Docker（如果传了 --all）
+# ─── 2. 兜底：按名称查找停止 ──────────────────────────────────────────
+echo ""
+log_info "兜底查找残留 OpenClaw 进程..."
+
+# 尝试多种方式查找并停止 openclaw 进程
+found_any=false
+
+# 方式 A: pkill (Linux/macOS/WSL)
+if command -v pkill &>/dev/null; then
+  openclaw_pids=$(pgrep -f "openclaw.*gateway" 2>/dev/null || true)
+  if [ -n "$openclaw_pids" ]; then
+    for p in $openclaw_pids; do
+      log_warn "发现残留 openclaw 进程 PID $p，正在停止..."
+      kill -9 "$p" 2>/dev/null || true
+      found_any=true
+    done
+  fi
+fi
+
+# 方式 B: taskkill (Windows)
+if [ "$found_any" = false ] && command -v taskkill &>/dev/null; then
+  # 先尝试按窗口标题查找（如果进程有控制台窗口）
+  taskkill /F /FI "WINDOWTITLE eq openclaw*" 2>/dev/null || true
+  # 再尝试按命令行参数查找 node.exe 运行的 openclaw
+  # 注意：这会杀死所有 node.exe 运行的 openclaw，包括可能的其他实例
+  wmic process where "CommandLine like '%openclaw%gateway%'" get ProcessId 2>/dev/null | tail -n +2 | while read -r pid; do
+    pid=$(echo "$pid" | tr -d '[:space:]')
+    if [ -n "$pid" ] && [ "$pid" != "ProcessId" ]; then
+      log_warn "发现残留 openclaw 进程 PID $pid，正在停止..."
+      taskkill /F /PID "$pid" 2>/dev/null || true
+      found_any=true
+    fi
+  done
+fi
+
+# 方式 C: 按端口查找并停止（Windows netstat）
+if command -v netstat &>/dev/null; then
+  for port in 18799 18800; do
+    pid=$(netstat -ano 2>/dev/null | grep ":$port " | grep LISTENING | awk '{print $5}' | head -1)
+    if [ -n "$pid" ]; then
+      log_warn "发现端口 $port 被 PID $pid 占用，正在停止..."
+      if command -v taskkill &>/dev/null; then
+        taskkill /F /PID "$pid" 2>/dev/null || true
+      else
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+      found_any=true
+    fi
+  done
+fi
+
+if [ "$found_any" = false ]; then
+  log_ok "没有残留的 OpenClaw 进程"
+fi
+
+# 清理 PID 目录
+rm -rf "$PID_DIR"
+
+# ─── 3. 停止 Docker（如果传了 --all）───────────────────────────────────
 if [ "$STOP_ALL" = "--all" ]; then
   echo ""
   log_info "停止 Docker 容器..."

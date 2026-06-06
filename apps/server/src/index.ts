@@ -31,36 +31,6 @@ await seedDefaultUser()
 controllerReconcileQueue.start()
 logger.info({ queue: controllerReconcileQueue.describe() }, 'Started AgentHub Controller Plane reconcile queue')
 
-// ─── Start resident Manager (OpenClaw / QwenPaw) ─────────────────────
-// Resident Managers observe rooms via Matrix /sync autonomously.
-// AgentHub does not invoke their step() directly.
-//
-// HiClaw design: Manager is the brain. If it cannot start, the system
-// cannot function. We block server startup until the Manager is ready.
-const provider = getActiveManagerProvider()
-if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
-  const status = await provider.status()
-  if (!status.running && !status.endpoint) {
-    logger.info({ runtimeType: provider.runtimeType }, 'Starting resident Manager process...')
-    if (!provider.ensureStarted) {
-      logger.error('Provider does not support ensureStarted; Manager is unavailable.')
-      process.exit(1)
-    }
-    const result = await provider.ensureStarted()
-    if (result.error) {
-      logger.error(
-        { error: result.error, runtimeType: provider.runtimeType },
-        'FATAL: Resident Manager failed to start. AgentHub cannot coordinate without a Manager. ' +
-          'Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_MANAGER_RUNTIME correctly.',
-      )
-      process.exit(1)
-    }
-    logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
-  } else {
-    logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
-  }
-}
-
 function resolvePortFile() {
   const configured = Bun.env.AGENTHUB_PORT_FILE?.trim()
   if (configured) return resolve(configured)
@@ -142,6 +112,42 @@ try {
   // Best-effort; non-critical
 }
 
+// ─── Start resident Manager (OpenClaw / QwenPaw) ─────────────────────
+// Resident Managers observe rooms via Matrix /sync autonomously.
+// AgentHub does not invoke their step() directly.
+//
+// Controlled by AGENTHUB_AUTO_START_MANAGER env var. When false (default),
+// use infra/start-hiclaw-lite.sh to start Manager/Worker externally.
+// When true, Server will launch Manager as a child process on startup.
+//
+// Start after Bun.serve binds so OpenClaw receives the actual controller
+// URL even when the dev server had to move from 8000 to 8001+.
+const provider = getActiveManagerProvider()
+if (Bun.env.AGENTHUB_AUTO_START_MANAGER === 'true' && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
+  const status = await provider.status()
+  if (!status.running && !status.endpoint) {
+    logger.info({ runtimeType: provider.runtimeType, controllerPort: runtimePort }, 'Starting resident Manager process...')
+    if (!provider.ensureStarted) {
+      logger.error('Provider does not support ensureStarted; Manager is unavailable.')
+      process.exit(1)
+    }
+    const result = await provider.ensureStarted()
+    if (result.error) {
+      logger.error(
+        { error: result.error, runtimeType: provider.runtimeType },
+        'FATAL: Resident Manager failed to start. AgentHub cannot coordinate without a Manager. ' +
+          'Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_MANAGER_RUNTIME correctly.',
+      )
+      process.exit(1)
+    }
+    logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
+  } else {
+    logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
+  }
+} else if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
+  logger.info({ runtimeType: provider.runtimeType, autoStart: Bun.env.AGENTHUB_AUTO_START_MANAGER === 'true' }, 'Resident Manager auto-start is disabled. Use `bash infra/start-hiclaw-lite.sh` to start Manager/Worker externally.')
+}
+
 let shuttingDown = false
 
 // Ensure clean shutdown on Ctrl+C / SIGTERM / parent process exit.
@@ -204,6 +210,10 @@ async function shutdown(reason: string) {
 
   // Let AbortSignal handlers taskkill spawned Code Agent process trees.
   await new Promise((resolve) => setTimeout(resolve, 500))
+
+  if (provider.stop) {
+    await provider.stop().catch((err) => logger.warn({ err }, 'Failed to stop resident Manager during shutdown'))
+  }
 
   try { unlinkSync(portFile) } catch {}
   try { server.stop() } catch {}
