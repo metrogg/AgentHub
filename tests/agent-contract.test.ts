@@ -98,6 +98,44 @@ describe('Agent contract generator', () => {
     const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as Record<string, unknown>
     expect(runtime.runtimeFamily).toBe('manager')
     expect(runtime.runtimeType).toBe('qwenpaw')
+    const managerRuntimeContract = runtime.runtimeContract as {
+      profile: { label: string; language: string; architectureMode: string }
+      parityCapabilities: string[]
+      reconcileContracts: { manager: string[]; member: string[]; worker: string[] }
+      controllerSkillSurface: string[]
+    }
+    expect(managerRuntimeContract.profile.label).toBe('QwenPaw Manager')
+    expect(managerRuntimeContract.profile.language).toContain('Python')
+    expect(managerRuntimeContract.profile.architectureMode).toBe('workspace')
+    expect(managerRuntimeContract.parityCapabilities).toEqual(expect.arrayContaining([
+      'SOUL.md',
+      'AGENTS.md',
+      'skills',
+      'worker_registry',
+      'controller_api_skills',
+      'reconcile',
+    ]))
+    expect(managerRuntimeContract.reconcileContracts.manager).toEqual([
+      'EnsureManagerIdentity',
+      'EnsureManagerWorkspace',
+      'SyncSkillsAndRegistries',
+      'EnsureRuntimeProcess',
+      'ObserveRoomBindingsAndHeartbeat',
+    ])
+    expect(managerRuntimeContract.reconcileContracts.member).toEqual([
+      'ResolveMemberSpec',
+      'ApplyWorkspaceAgent',
+      'ApplyWorkerInstance',
+      'JoinRooms',
+      'AnnounceAndObserve',
+    ])
+    expect(managerRuntimeContract.reconcileContracts.worker).toContain('RecoverOrRetire')
+    expect(managerRuntimeContract.controllerSkillSurface).toEqual(expect.arrayContaining([
+      'create_worker',
+      'mention_worker',
+      'assign_task',
+      'reconcile_resource',
+    ]))
   })
 
   test('refreshes Manager registries from Controller resources', async () => {
@@ -319,6 +357,7 @@ describe('Agent contract generator', () => {
     expect(agentsText).toContain('Matrix user id: @contract-worker:agenthub.local')
     expect(agentsText).toContain('Controller API: http://127.0.0.1:8000')
     expect(agentsText).toContain('Contract Group')
+    expect(agentsText).toContain('Worker reconcile stages: EnsureIdentityAndWorkspace -> EnsureRuntimeConfig -> EnsureRuntimeReady')
 
     const soulText = readFileSync(ws.soulPath, 'utf8')
     expect(soulText).toContain('Runtime Adapter Identity')
@@ -356,6 +395,18 @@ describe('Agent contract generator', () => {
     expect(baseProfile.label).toBe('OpenCode Worker')
     expect(baseProfile.implementation.architectureMode).toBe('bridge')
     expect(baseProfile.matrixIntegration.owner).toBe('agenthub-supervisor')
+
+    const state = JSON.parse(readFileSync(ws.statePath, 'utf8')) as {
+      reconcile: { contract: string; stages: Array<{ name: string; status: string }> }
+    }
+    expect(state.reconcile.contract).toBe('Worker Reconcile 5 stages')
+    expect(state.reconcile.stages.map((stage) => stage.name)).toEqual([
+      'EnsureIdentityAndWorkspace',
+      'EnsureRuntimeConfig',
+      'EnsureRuntimeReady',
+      'ObserveHealthAndHeartbeat',
+      'RecoverOrRetire',
+    ])
   })
 
   test('Worker runtime adapter contract records base-specific parity profiles', async () => {
@@ -436,6 +487,13 @@ describe('Agent contract generator', () => {
       expect(runtime.adapterContract.baseProfile.roleEligibility.worker).toBe(true)
       expect(runtime.adapterContract.baseProfile.implementation.architectureMode).toBe(item.architectureMode)
       expect(runtime.adapterContract.baseProfile.matrixIntegration.owner).toBe(item.listenerOwner)
+      expect((runtime.adapterContract as any).reconcileContract).toEqual([
+        'EnsureIdentityAndWorkspace',
+        'EnsureRuntimeConfig',
+        'EnsureRuntimeReady',
+        'ObserveHealthAndHeartbeat',
+        'RecoverOrRetire',
+      ])
       if (item.base === 'qwenpaw') {
         expect(runtime.adapterContract.baseProfile.currentLimits.join(' ')).toContain('WorkerBackend is not implemented')
         expect(runtime.adapterContract.diagnosticContract.expectedNativeCapabilities).toContain('runtime-native-matrix-listener')

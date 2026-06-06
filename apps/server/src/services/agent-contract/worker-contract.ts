@@ -25,6 +25,14 @@ const RUNTIME_PARITY_CAPABILITIES = [
   'transparent_blockers',
 ]
 
+const WORKER_RECONCILE_STAGES = [
+  'EnsureIdentityAndWorkspace',
+  'EnsureRuntimeConfig',
+  'EnsureRuntimeReady',
+  'ObserveHealthAndHeartbeat',
+  'RecoverOrRetire',
+]
+
 export interface WorkerAgentContractWorkspace {
   root: string
   profilePath: string
@@ -90,6 +98,11 @@ export async function ensureWorkerAgentContract(
     schemaVersion: 1,
     status: 'created',
     activeTasks: [],
+    reconcile: {
+      stages: WORKER_RECONCILE_STAGES.map((name) => ({ name, status: 'pending' })),
+      currentStage: 'EnsureIdentityAndWorkspace',
+      contract: 'Worker Reconcile 5 stages',
+    },
     heartbeat: {
       lastHeartbeatAt: null,
       lastMatrixSyncAt: null,
@@ -268,6 +281,7 @@ export function runtimeAdapterContract(runtimeBase: string | null) {
     listensToMatrix: baseProfile.matrixIntegration.owner,
     workspaceContract: ['profile.json', 'runtime.json', 'SOUL.md', 'AGENTS.md', 'skills/', 'state.json', 'rooms.json', 'tasks.json'],
     taskContract: ['shared/tasks/{taskId}/spec.md', 'plan.md', 'result.md', 'artifacts/'],
+    reconcileContract: WORKER_RECONCILE_STAGES,
     parityCapabilities: RUNTIME_PARITY_CAPABILITIES,
     heartbeat: ['lastHeartbeatAt', 'lastMatrixSyncAt', 'lastRuntimeReadyAt', 'lastTaskStartedAt', 'lastTaskCompletedAt', 'lastError', 'queueDepth'],
   }
@@ -542,6 +556,7 @@ function runtimeContextLines(runtimeBase: string | null): string[] {
     `- Diagnostic probes: ${diagnostics.probes.join(', ')}`,
     `- Expected native capabilities: ${diagnostics.expectedNativeCapabilities.length ? diagnostics.expectedNativeCapabilities.join(', ') : 'none'}`,
     profile.currentLimits.length ? `- Current limits: ${profile.currentLimits.join(' ')}` : '- Current limits: none recorded.',
+    `- Worker reconcile stages: ${WORKER_RECONCILE_STAGES.join(' -> ')}`,
   ]
 }
 

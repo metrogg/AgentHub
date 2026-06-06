@@ -16,6 +16,49 @@ import { runtimeAdapterContract } from './worker-contract'
 const CONTEXT_START = '<!-- AGENTHUB:MANAGER-CONTEXT:START -->'
 const CONTEXT_END = '<!-- AGENTHUB:MANAGER-CONTEXT:END -->'
 
+const MANAGER_RUNTIME_PARITY_CAPABILITIES = [
+  'matrix_identity',
+  'room_timeline_io',
+  'mention_coordination',
+  'SOUL.md',
+  'AGENTS.md',
+  'TOOLS.md',
+  'HEARTBEAT.md',
+  'skills',
+  'worker_registry',
+  'team_registry',
+  'human_registry',
+  'state_mirror',
+  'controller_api_skills',
+  'heartbeat',
+  'reconcile',
+  'transparent_blockers',
+]
+
+const MANAGER_RECONCILE_STAGES = [
+  'EnsureManagerIdentity',
+  'EnsureManagerWorkspace',
+  'SyncSkillsAndRegistries',
+  'EnsureRuntimeProcess',
+  'ObserveRoomBindingsAndHeartbeat',
+]
+
+const MEMBER_RECONCILE_STAGES = [
+  'ResolveMemberSpec',
+  'ApplyWorkspaceAgent',
+  'ApplyWorkerInstance',
+  'JoinRooms',
+  'AnnounceAndObserve',
+]
+
+const WORKER_RECONCILE_STAGES = [
+  'EnsureIdentityAndWorkspace',
+  'EnsureRuntimeConfig',
+  'EnsureRuntimeReady',
+  'ObserveHealthAndHeartbeat',
+  'RecoverOrRetire',
+]
+
 export interface ManagerAgentContractWorkspace {
   root: string
   runtimePath: string
@@ -217,10 +260,12 @@ export function readManagerPromptContract(managerId?: string | null) {
 }
 
 function buildRuntime(input: EnsureManagerAgentContractInput) {
+  const runtimeType = normalizeManagerRuntimeType(input.runtimeType)
   return {
     schemaVersion: 1,
     runtimeFamily: 'manager',
-    runtimeType: input.runtimeType ?? 'openclaw',
+    runtimeType,
+    runtimeContract: managerRuntimeContract(runtimeType),
     matrixUserId: input.matrixUserId ?? null,
     participantId: input.participantId ?? null,
     runtimeConfigPath: input.runtimeConfigPath ?? null,
@@ -229,6 +274,80 @@ function buildRuntime(input: EnsureManagerAgentContractInput) {
     matrixHomeserverUrl: input.matrixHomeserverUrl ?? null,
     matrixServerName: input.matrixServerName ?? null,
     skillSchema: 'agenthub-controller-v1',
+  }
+}
+
+export function managerRuntimeContract(runtimeType?: string | null) {
+  const normalized = normalizeManagerRuntimeType(runtimeType)
+  const profile = managerRuntimeProfile(normalized)
+  return {
+    runtimeType: normalized,
+    profile,
+    workspaceContract: [
+      'runtime.json',
+      'SOUL.md',
+      'AGENTS.md',
+      'TOOLS.md',
+      'HEARTBEAT.md',
+      'skills/',
+      'workers-registry.json',
+      'teams-registry.json',
+      'humans-registry.json',
+      'state.json',
+      'rooms.json',
+      'logs/',
+    ],
+    parityCapabilities: MANAGER_RUNTIME_PARITY_CAPABILITIES,
+    reconcileContracts: {
+      manager: MANAGER_RECONCILE_STAGES,
+      member: MEMBER_RECONCILE_STAGES,
+      worker: WORKER_RECONCILE_STAGES,
+    },
+    heartbeat: ['lastHeartbeatAt', 'lastMatrixSyncAt', 'lastRuntimeReadyAt', 'lastError', 'queueDepth'],
+    controllerSkillSurface: [
+      'list_workers',
+      'create_worker',
+      'invite_worker_to_room',
+      'send_room_message',
+      'mention_worker',
+      'assign_task',
+      'register_artifact',
+      'request_approval',
+      'reconcile_resource',
+    ],
+  }
+}
+
+function normalizeManagerRuntimeType(runtimeType?: string | null): 'openclaw' | 'qwenpaw' {
+  return runtimeType === 'qwenpaw' || runtimeType === 'copaw' ? 'qwenpaw' : 'openclaw'
+}
+
+function managerRuntimeProfile(runtimeType: 'openclaw' | 'qwenpaw') {
+  if (runtimeType === 'qwenpaw') {
+    return {
+      label: 'QwenPaw Manager',
+      language: 'Python 3.11',
+      architectureMode: 'workspace',
+      processModel: 'lightweight resident workspace loop',
+      matrixIntegration: 'QwenPaw/CoPaw Matrix channel sends and receives room timeline events',
+      toolIntegration: 'Controller skills plus MCP-compatible tools through gateway adapters',
+      configStrategy: 'qwenpaw workspace files plus shared SOUL/AGENTS/skills contract',
+      healthSource: 'workspace loop health, Matrix sync, heartbeat, Controller state mirror',
+      resourceProfile: 'lighter memory footprint, faster startup, good for resource constrained coordination',
+      roleContract: 'Manager only unless explicitly provisioned as a Worker runtime base',
+    }
+  }
+  return {
+    label: 'OpenClaw Manager',
+    language: 'Node.js 22',
+    architectureMode: 'gateway',
+    processModel: 'resident gateway process or Docker container',
+    matrixIntegration: 'OpenClaw Matrix channel listens to joined rooms and sends room timeline replies',
+    toolIntegration: 'OpenClaw tools, MCP-compatible tools, and Controller skills',
+    configStrategy: 'openclaw.json plus shared SOUL/AGENTS/skills contract',
+    healthSource: 'gateway health, Matrix sync, heartbeat, Controller state mirror',
+    resourceProfile: 'higher startup and memory cost, better for complex interaction and frequent tool calls',
+    roleContract: 'Manager only unless explicitly provisioned as an OpenClaw Worker with the Worker contract',
   }
 }
 
@@ -400,6 +519,11 @@ function buildManagerState(input: EnsureManagerAgentContractInput) {
       lastError: null,
       queueDepth: 0,
     },
+    reconcile: {
+      manager: MANAGER_RECONCILE_STAGES.map((name) => ({ name, status: 'pending' })),
+      member: MEMBER_RECONCILE_STAGES,
+      worker: WORKER_RECONCILE_STAGES,
+    },
     ...(input.managerState ?? {}),
   }
 }
@@ -446,8 +570,8 @@ function buildManagerSoul(): string {
     '- Delegation is your default for execution work. You should not quietly become the coder, designer, researcher, or operator when a Worker should own that work.',
     '',
     '## Runtime Architecture',
-    '- OpenClaw Manager runs in gateway mode and is preferred for complex interaction, frequent tool calls, and resident Matrix coordination.',
-    '- QwenPaw/CoPaw Manager runs in workspace mode and is preferred when a lighter resident process is enough.',
+    '- OpenClaw Manager runs in Node.js gateway mode and is preferred for complex interaction, frequent tool calls, and resident Matrix coordination.',
+    '- QwenPaw/CoPaw Manager runs in Python workspace mode and is preferred when a lighter resident process is enough.',
     '- Both Manager runtimes must consume the same SOUL.md, AGENTS.md, TOOLS.md, HEARTBEAT.md, skills/, registries, state.json, and rooms.json contract.',
     '- Worker bases can be OpenClaw, QwenPaw, Claude Code, OpenCode, Codex, or Gemini. Treat them as Agent runtime bases, not as interchangeable model names.',
     '',
@@ -613,8 +737,30 @@ function buildManagerContext(input: EnsureManagerAgentContractInput): string {
     '- Manager runtime type is openclaw or qwenpaw.',
     '- Worker runtime bases are openclaw, qwenpaw, claude-code, opencode, codex, and gemini.',
     '- Runtime adapters differ internally, but all must expose identity, workspace, SOUL/AGENTS/skills, state, heartbeat, room listener, and shared task contracts.',
+    '',
+    '### Manager Runtime Contract',
+    ...managerRuntimeContextLines(input.runtimeType),
     CONTEXT_END,
   ].join('\n')
+}
+
+function managerRuntimeContextLines(runtimeType?: string | null): string[] {
+  const contract = managerRuntimeContract(runtimeType)
+  return [
+    `- Profile: ${contract.profile.label}`,
+    `- Language: ${contract.profile.language}`,
+    `- Architecture mode: ${contract.profile.architectureMode}`,
+    `- Process model: ${contract.profile.processModel}`,
+    `- Matrix integration: ${contract.profile.matrixIntegration}`,
+    `- Tool integration: ${contract.profile.toolIntegration}`,
+    `- Config strategy: ${contract.profile.configStrategy}`,
+    `- Health source: ${contract.profile.healthSource}`,
+    `- Resource profile: ${contract.profile.resourceProfile}`,
+    `- Parity capabilities: ${contract.parityCapabilities.join(', ')}`,
+    `- Manager reconcile stages: ${contract.reconcileContracts.manager.join(' -> ')}`,
+    `- Member reconcile stages: ${contract.reconcileContracts.member.join(' -> ')}`,
+    `- Worker reconcile stages: ${contract.reconcileContracts.worker.join(' -> ')}`,
+  ]
 }
 
 function seedManagerFile(path: string, fileName: string, fallback: string) {
