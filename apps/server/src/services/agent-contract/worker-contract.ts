@@ -68,9 +68,22 @@ export async function ensureWorkerAgentContract(
   const runtimeBase = input.runtimeBase ?? readWorkerRuntimeBase(input.agent.roleProfile) ?? input.agent.codeAgentType ?? null
   writeJson(ws.profilePath, buildProfile(input, runtimeBase))
   writeJson(ws.runtimePath, buildRuntime(input, runtimeBase))
-  writeIfMissing(ws.soulPath, buildWorkerSoul(input.agent))
+  writeIfMissing(ws.soulPath, buildWorkerSoul(input.agent, runtimeBase))
   upsertCollaborationContext(ws.agentsPath, buildWorkerAgents(input.agent), buildCollaborationContext(input, runtimeBase))
-  writeJsonIfMissing(ws.statePath, { schemaVersion: 1, status: 'created', activeTasks: [] })
+  writeJsonIfMissing(ws.statePath, {
+    schemaVersion: 1,
+    status: 'created',
+    activeTasks: [],
+    heartbeat: {
+      lastHeartbeatAt: null,
+      lastMatrixSyncAt: null,
+      lastRuntimeReadyAt: null,
+      lastTaskStartedAt: null,
+      lastTaskCompletedAt: null,
+      lastError: null,
+      queueDepth: 0,
+    },
+  })
   writeJsonIfMissing(ws.roomsPath, {
     schemaVersion: 1,
     rooms: input.currentRooms ?? [],
@@ -109,6 +122,8 @@ function buildRuntime(input: EnsureWorkerAgentContractInput, runtimeBase: string
     schemaVersion: 1,
     runtimeFamily: 'worker',
     runtimeBase,
+    runtimeMode: runtimeModeForBase(runtimeBase),
+    adapterContract: runtimeAdapterContract(runtimeBase),
     modelId: input.agent.modelId,
     matrixUserId: input.matrixUserId ?? null,
     participantId: input.participantId ?? null,
@@ -119,7 +134,7 @@ function buildRuntime(input: EnsureWorkerAgentContractInput, runtimeBase: string
   }
 }
 
-function buildWorkerSoul(agent: WorkspaceAgentRow): string {
+function buildWorkerSoul(agent: WorkspaceAgentRow, runtimeBase: string | null): string {
   return [
     `# ${agent.name} SOUL`,
     '',
@@ -129,9 +144,13 @@ function buildWorkerSoul(agent: WorkspaceAgentRow): string {
     `- Name: ${agent.name}`,
     `- Role: ${agent.role || 'Worker'}`,
     `- Role type: ${agent.roleType || 'custom'}`,
+    `- Runtime base: ${runtimeBase || 'unconfigured'}`,
     '',
     '## Responsibilities',
     agent.description || 'Complete assigned work through Matrix rooms, shared task contracts, and ArtifactStore outputs.',
+    '',
+    '## Runtime Adapter Identity',
+    ...runtimeSoulLines(runtimeBase),
     '',
     '## Operating Principles',
     '- Communicate naturally in the room, like a real teammate.',
@@ -141,6 +160,14 @@ function buildWorkerSoul(agent: WorkspaceAgentRow): string {
     '- Write progress, blockers, failures, and artifact refs back to the Room timeline.',
     '- Use shared task contracts: spec.md, plan.md, result.md, and artifacts/.',
     '- Do not invent invisible side channels or claim work completed before evidence exists.',
+    '- Keep your runtime state explainable through state.json, rooms.json, tasks.json, and heartbeat fields.',
+    '- If a required model, auth, tool, sandbox, or Matrix binding is missing, report the blocker instead of guessing.',
+    '',
+    '## Delivery Contract',
+    '- Read spec.md before execution when present.',
+    '- Update result.md or the visible room result with STATUS, SUMMARY, DELIVERABLES, RISKS, and NEXT STEPS.',
+    '- Register file outputs as artifacts or put them under the shared task artifacts directory.',
+    '- Preserve partial outputs and explain what is reliable when a run fails.',
     '',
     '## Local Role Prompt',
     agent.systemPrompt || 'No extra role prompt.',
@@ -159,6 +186,8 @@ function buildWorkerAgents(agent: WorkspaceAgentRow): string {
     '- ArtifactStore and shared task directory are the delivery source of truth.',
     '- Never bypass Room timeline for task assignment, clarification, progress, or completion.',
     '- Preserve user work and report partial outputs when execution fails.',
+    '- Controller-injected context is authoritative for current rooms, runtime base, sandbox, and task contracts.',
+    '- Skills in skills/*/SKILL.md are executable operating instructions, not decoration.',
   ].join('\n')
 }
 
@@ -173,6 +202,7 @@ function buildCollaborationContext(input: EnsureWorkerAgentContractInput, runtim
     `- Worker instance: ${input.workerInstanceId}`,
     `- Workspace agent: ${input.agent.id}`,
     `- Runtime base: ${runtimeBase || 'unconfigured'}`,
+    `- Runtime mode: ${runtimeModeForBase(runtimeBase)}`,
     `- Model binding: ${input.agent.modelId || 'unconfigured'}`,
     `- Matrix user id: ${input.matrixUserId || 'unbound'}`,
     `- Participant id: ${input.participantId || 'unbound'}`,
@@ -182,6 +212,16 @@ function buildCollaborationContext(input: EnsureWorkerAgentContractInput, runtim
     '',
     '### Current Rooms',
     rooms,
+    '',
+    '### Runtime Adapter Contract',
+    ...runtimeContextLines(runtimeBase),
+    '',
+    '### Worker Reconcile Contract',
+    '- EnsureIdentityAndWorkspace: Matrix identity, participant binding, SOUL/AGENTS/skills/state are present.',
+    '- EnsureRuntimeConfig: runtime-specific config points at Controller, Matrix, SharedStorage, model, and sandbox.',
+    '- EnsureRuntimeReady: resident runtime listens; bridge runtime proves CLI/auth/model readiness.',
+    '- ObserveHealthAndHeartbeat: last sync, last task, queue depth, and error state are explainable.',
+    '- RecoverOrRetire: stale leases, stop/sleep/failure, and human-visible diagnostics are handled by Controller.',
     '',
     '### Room Protocol',
     '- Treat explicit @mentions as directed work or clarification requests.',
@@ -194,6 +234,78 @@ function buildCollaborationContext(input: EnsureWorkerAgentContractInput, runtim
     '- Put deliverables under artifacts/ or register them with ArtifactStore.',
     CONTEXT_END,
   ].join('\n')
+}
+
+function runtimeModeForBase(runtimeBase: string | null): 'resident' | 'bridge' | 'unconfigured' {
+  if (!runtimeBase) return 'unconfigured'
+  return runtimeBase === 'openclaw' || runtimeBase === 'qwenpaw' ? 'resident' : 'bridge'
+}
+
+function runtimeAdapterContract(runtimeBase: string | null) {
+  const mode = runtimeModeForBase(runtimeBase)
+  return {
+    mode,
+    listensToMatrix: mode === 'resident' ? 'runtime-native' : mode === 'bridge' ? 'agenthub-supervisor' : 'unconfigured',
+    workspaceContract: ['profile.json', 'runtime.json', 'SOUL.md', 'AGENTS.md', 'skills/', 'state.json', 'rooms.json', 'tasks.json'],
+    taskContract: ['shared/tasks/{taskId}/spec.md', 'plan.md', 'result.md', 'artifacts/'],
+    heartbeat: ['lastHeartbeatAt', 'lastMatrixSyncAt', 'lastRuntimeReadyAt', 'lastTaskStartedAt', 'lastTaskCompletedAt', 'lastError', 'queueDepth'],
+  }
+}
+
+function runtimeSoulLines(runtimeBase: string | null): string[] {
+  switch (runtimeBase) {
+    case 'openclaw':
+      return [
+        '- You run as an OpenClaw Worker when resident mode is enabled.',
+        '- Prefer native Matrix channel listening and OpenClaw tools/MCP for long-running collaboration.',
+        '- Keep gateway/session behavior aligned with the same SOUL/AGENTS/skills contract used by other Worker bases.',
+      ]
+    case 'qwenpaw':
+      return [
+        '- You run as a QwenPaw/CoPaw-style Worker when resident mode is enabled.',
+        '- Prefer lightweight workspace-mode behavior with the same Matrix, skills, and shared storage contract.',
+        '- Keep memory and resource use small while preserving room-visible progress.',
+      ]
+    case 'claude-code':
+      return [
+        '- You run through the Claude Code Worker base.',
+        '- Follow Claude Code native project instructions, but AgentHub AGENTS.md and SOUL.md remain the collaboration contract.',
+        '- Keep CLI sessions resumable when the runtime provides a session id.',
+      ]
+    case 'opencode':
+      return [
+        '- You run through the OpenCode Worker base.',
+        '- Use OpenCode native auth/config, while AgentHub supplies Matrix room context, task contract, and artifact rules.',
+        '- Treat local bridge execution as a compatibility layer until resident Worker mode is available.',
+      ]
+    case 'codex':
+      return [
+        '- You run through the Codex Worker base.',
+        '- Use Codex native auth/config; AgentHub must not invent a hidden default model for you.',
+        '- Respect sandbox and project safety rules before editing files.',
+      ]
+    case 'gemini':
+      return [
+        '- You run through the Gemini CLI Worker base.',
+        '- Use Gemini native auth/config, while AgentHub supplies Matrix room context and shared task contracts.',
+        '- Report configuration or tool blockers visibly instead of falling back to another base.',
+      ]
+    default:
+      return [
+        '- Runtime base is not configured yet.',
+        '- Do not start execution until Controller or the human supplies an explicit Worker runtime base and compatible model.',
+      ]
+  }
+}
+
+function runtimeContextLines(runtimeBase: string | null): string[] {
+  const mode = runtimeModeForBase(runtimeBase)
+  return [
+    `- Mode: ${mode}`,
+    `- Matrix listener owner: ${mode === 'resident' ? 'runtime-native when available; AgentHub supervisor verifies health' : mode === 'bridge' ? 'AgentHub supervisor imports room events and invokes the CLI bridge' : 'none'}`,
+    `- Runtime readiness: ${mode === 'resident' ? 'gateway/process health + Matrix sync + heartbeat' : mode === 'bridge' ? 'CLI installed + native probe + model/auth/config + cwd validity' : 'blocked until configured'}`,
+    '- The upper-layer Manager should see the same worker capabilities regardless of runtime base: identity, skills, workspace, heartbeat, room listener, and task contract.',
+  ]
 }
 
 function upsertCollaborationContext(path: string, baseContent: string, context: string) {

@@ -12,10 +12,10 @@ Use the `agenthub` CLI to interact with the AgentHub Controller. It wraps the Co
 Your Manager token is set in the environment:
 ```
 AGENTHUB_MANAGER_TOKEN=<your-matrix-access-token>
-AGENTHUB_CONTROLLER_URL=http://localhost:3001
+AGENTHUB_CONTROLLER_URL=<injected-controller-url>
 ```
 
-The CLI reads these automatically. No manual header injection needed.
+The CLI reads these automatically. No manual header injection needed. Do not hard-code localhost ports; local, Docker, and future remote modes differ.
 
 ## Commands
 
@@ -26,7 +26,7 @@ The CLI reads these automatically. No manual header injection needed.
 agenthub worker list --workspace <workspace-id>
 
 # Create a new worker with an explicit Worker runtime base
-agenthub worker create --workspace <workspace-id> --name builder --runtime-base <openclaw|opencode|claude-code|codex|gemini> --model <model-id> --join-group-room true
+agenthub worker create --workspace <workspace-id> --name builder --runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> --model <model-id> --join-group-room true
 
 # Check worker status
 agenthub worker status --id <worker-id>
@@ -128,3 +128,23 @@ agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 - `Error: HTTP 404` — Resource not found. Check IDs.
 - `Error: HTTP 422` — Validation failed. Read error message and fix params.
 - Network errors — Retry up to 3 times with 2s delay.
+- Missing runtime base/model/auth/Matrix binding — report the exact blocker in the room; do not choose a default Worker base.
+
+## Runtime Base Rules
+
+- Manager runtime choices: `openclaw`, `qwenpaw`.
+- Worker runtime bases: `openclaw`, `qwenpaw`, `claude-code`, `opencode`, `codex`, `gemini`.
+- `openclaw` as Manager and `openclaw` as Worker are different role contracts.
+- Bridge-managed CLI Workers still use Matrix room timeline, WorkerInstance, RuntimeLease, SOUL/AGENTS, skills, shared task contract, and ArtifactStore.
+
+## Member Reconcile Result
+
+Worker create/apply should be understood as five stages:
+
+1. ResolveMemberSpec
+2. ApplyWorkspaceAgent
+3. ApplyWorkerInstance
+4. JoinRooms
+5. AnnounceAndObserve
+
+If any stage fails, report the failed stage and exact blocker.

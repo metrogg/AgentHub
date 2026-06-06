@@ -46,9 +46,20 @@ describe('Agent contract generator', () => {
     }
 
     expect(existsSync(`${ws.skillsDir}/worker-management/SKILL.md`)).toBe(true)
+    expect(existsSync(`${ws.skillsDir}/review-and-synthesis/SKILL.md`)).toBe(true)
+    expect(existsSync(`${ws.skillsDir}/error-recovery/SKILL.md`)).toBe(true)
+    expect(existsSync(`${ws.skillsDir}/capacity-management/SKILL.md`)).toBe(true)
+    expect(existsSync(`${ws.skillsDir}/artifact-management/SKILL.md`)).toBe(true)
+    expect(existsSync(`${ws.skillsDir}/heartbeat/SKILL.md`)).toBe(true)
+    expect(existsSync(`${ws.skillsDir}/memory-management/SKILL.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/SOUL.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/AGENTS.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/skills/agenthub-controller/SKILL.md`)).toBe(true)
+
+    const soulText = readFileSync(ws.soulPath, 'utf8')
+    expect(soulText).toContain('Runtime Architecture')
+    expect(soulText).toContain('OpenClaw Manager')
+    expect(soulText).toContain('Worker Reconcile')
 
     const agentsText = readFileSync(ws.agentsPath, 'utf8')
     expect(agentsText).toContain('AGENTHUB:MANAGER-CONTEXT:START')
@@ -56,6 +67,7 @@ describe('Agent contract generator', () => {
     expect(agentsText).toContain('Matrix user id: @manager:agenthub.local')
     expect(agentsText).toContain('Controller API: http://127.0.0.1:8000')
     expect(agentsText).toContain('Manager Contract Group')
+    expect(agentsText).toContain('Runtime Base Contract')
 
     const updated = ensureManagerAgentContract({
       managerId: ws.root.split(/[\\/]/).pop()!,
@@ -130,9 +142,15 @@ describe('Agent contract generator', () => {
     const agentsText = readFileSync(ws.agentsPath, 'utf8')
     expect(agentsText).toContain('AGENTHUB:COLLABORATION-CONTEXT:START')
     expect(agentsText).toContain('Runtime base: opencode')
+    expect(agentsText).toContain('Runtime mode: bridge')
+    expect(agentsText).toContain('Worker Reconcile Contract')
     expect(agentsText).toContain('Matrix user id: @contract-worker:agenthub.local')
     expect(agentsText).toContain('Controller API: http://127.0.0.1:8000')
     expect(agentsText).toContain('Contract Group')
+
+    const soulText = readFileSync(ws.soulPath, 'utf8')
+    expect(soulText).toContain('Runtime Adapter Identity')
+    expect(soulText).toContain('OpenCode Worker base')
 
     const updated = await ensureWorkerAgentContract({
       workerInstanceId: ws.root.split(/[\\/]/).pop()!,
@@ -147,6 +165,7 @@ describe('Agent contract generator', () => {
 
     const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as Record<string, unknown>
     expect(runtime.runtimeBase).toBe('opencode')
+    expect(runtime.runtimeMode).toBe('bridge')
     expect(runtime.modelId).toBe('mimo-v2.5')
   })
 

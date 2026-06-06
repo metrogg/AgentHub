@@ -113,6 +113,7 @@ Shared task workspace：
 - `skills/` 由 Controller 同步，不能靠 Worker 自己随意生成系统内置 skill。
 - `state.json` 是 runtime 本地状态镜像，DB/Controller 仍是控制面事实源。
 - `rooms.json` 记录该 Agent 加入的 Matrix room、room kind、participant id、最近同步位置。
+- `runtime.json` 必须写清 runtime family、runtime base/type、resident/bridge mode、监听所有者、Controller/Matrix/SharedStorage 注入点、模型绑定和 sandbox。
 
 ## SOUL / AGENTS / Skills 规范
 
@@ -289,11 +290,14 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
 ## 下一步实施切片
 
 1. **Agent contract generator**
-   - 状态：第一刀已落地。
+   - 状态：第二刀已落地。
    - Worker contract 已统一生成 `profile.json`、`runtime.json`、`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`、`tasks.json`，并在 `AGENTS.md` 中幂等注入协作上下文。
+   - Worker `SOUL.md` 已写入 runtime adapter identity：OpenClaw/QwenPaw resident、Claude Code/OpenCode/Codex/Gemini bridge 的运行差异会被描述清楚，但都遵守同一 Room/Task/Artifact/Heartbeat contract。
+   - Worker `runtime.json` 已写入 `runtimeMode` 和 `adapterContract`，包括 listener owner、workspace contract、task contract 和 heartbeat 字段，便于诊断页和后续 runtime adapter 统一消费。
    - Manager contract 已统一生成 `runtime.json`、`SOUL.md`、`AGENTS.md`、`TOOLS.md`、`HEARTBEAT.md`、`skills/`、`workers-registry.json`、`teams-registry.json`、`humans-registry.json`、`state.json`、`rooms.json`、`logs/`，并镜像到 OpenClaw `agentDir`。
    - `manager-runtime/manager-config.ts` 已降级为兼容外壳，正式生成逻辑归口到 `apps/server/src/services/agent-contract/manager-contract.ts`。
-   - Manager skills 目录已补齐统一 `Decision Pattern`，示例不再默认使用 Codex，缺 runtime/model 必须请求确认或报错。
+   - `infra/manager-agent` 模板已补强 Runtime Architecture、Manager/Member/Worker 五阶段 reconcile、Bridge 规则、heartbeat patrol、显式 runtime/model 约束。
+   - Manager skills 目录已补齐统一 `Decision Pattern`，示例不再默认使用 Codex，缺 runtime/model 必须请求确认或报错；新增轻量 `review-and-synthesis`、`error-recovery`、`capacity-management`、`artifact-management`、`heartbeat`、`memory-management` skill 作为 HiClaw skill 面的 AgentHub 版本。
 2. **Runtime adapter parity**
    - 为 OpenClaw、OpenCode、Claude Code、Codex、Gemini 建立同一组 `inspect / prepare / start / stop / syncConfig / health` 能力。
    - Bridge Worker 执行前已开始投影标准 contract：`EphemeralCodeAgentWorkerRuntime` 会确保 Worker contract 最新，并把 `AGENTS.md`、`SOUL.md`、`profile.json`、`runtime.json`、`state.json`、`rooms.json`、`tasks.json` 和 `skills/` 投影到本次 CLI cwd 的 `.agenthub/worker-contract/`，同时在 cwd 根 `AGENTS.md` 注入 `AGENTHUB:BRIDGE-RUNTIME-CONTEXT`。
@@ -304,7 +308,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 新增 `apps/server/src/services/controller-plane/member-reconciler.ts`，`ControllerApi.createWorker()` 已委托它执行 `ResolveMemberSpec -> ApplyWorkspaceAgent -> ApplyWorkerInstance -> JoinRooms -> AnnounceAndObserve`。
    - `POST /api/workspaces/:id/workers` 现在把 `ownerId / createDirectSession / joinGroupRoom / announce` 传给 Controller API，由 MemberReconciler 创建/更新 direct room、group room participant，并返回 `stages / runtimeBase / groupRoom / directRoom / participants / announcements`。
    - Manager Runtime 的 `create_worker` action 已接入同一条 Controller API / MemberReconcile 路径：从 action metadata / `memberProposal` 规范化 member spec，创建 Worker、加入当前 group room、创建 direct room，并写入 `manager.action.create_worker.applied` 阶段结果。
-   - OpenClaw Manager workspace 内的 `agenthub` CLI 已修正：`worker create/apply` 必须显式 `--runtime-base <openclaw|opencode|claude-code|codex|gemini>`，不再隐式 `codex`。
+   - OpenClaw Manager workspace 内的 `agenthub` CLI 已修正：`worker create/apply` 必须显式 `--runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini>`，不再隐式 `codex`。
    - Manager 补员确认卡已接入同一条 Member Reconcile 路径：确认卡会把 Manager proposal / 专家预设中的 `description`、`systemPrompt`、`roleProfile`、`capabilityTags`、`skillIds`、`toolPermissions`、`sandboxPolicy`、`contextPolicy` 带入 `ControllerApi.createWorker()`，并在卡片 metadata 中记录 `workerInstanceIds`、`runtimeBases` 和各阶段结果。
    - 缺 runtime base 或 model 仍 fail-loudly，不默认 Codex，不创建注定 failed 的 Worker。
 4. **Manager skill migration**

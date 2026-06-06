@@ -15,7 +15,7 @@ Workers can run web servers or APIs as part of their tasks. The Manager can expo
 
 ```bash
 # Create a worker that exposes ports
-agenthub worker create --workspace <id> --name web-builder --runtime-base <openclaw|opencode|claude-code|codex|gemini> --model <model-id>
+agenthub worker create --workspace <id> --name web-builder --runtime-base <openclaw|qwenpaw|opencode|claude-code|codex|gemini> --model <model-id>
 
 # The Worker specifies exposed ports in its task result
 # The Manager coordinates port allocation and gateway routing
