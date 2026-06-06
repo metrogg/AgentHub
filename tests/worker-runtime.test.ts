@@ -7,6 +7,7 @@ const roomBridgeApi = await import('../apps/server/src/services/rooms/room-chat-
 const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const workerRuntimeResourcesApi = await import('../apps/server/src/services/orchestrator/worker-runtime-resources')
+const workerProtocolApi = await import('../apps/server/src/services/worker-runtime/worker-result-listener')
 
 const {
   artifacts,
@@ -20,8 +21,10 @@ const {
   workspaceTasks,
   workspaces,
   runtimeLeases,
+  roomParticipants,
   workerInstances,
   taskThreads,
+  and,
   eq,
 } = dbApi
 const { roomService } = roomsApi
@@ -29,6 +32,7 @@ const { appendHumanMessageRoomFirst } = roomBridgeApi
 const { WorkerRuntimeService } = workerRuntimeApi
 const { ensureTaskThread } = taskThreadApi
 const { ensureWorkerInstance } = workerRuntimeResourcesApi
+const { handleWorkerProtocolMessage } = workerProtocolApi
 type WorkerRuntime = workerRuntimeApi.WorkerRuntime
 type WorkerRuntimeContext = workerRuntimeApi.WorkerRuntimeContext
 type WorkerRuntimeEvent = workerRuntimeApi.WorkerRuntimeEvent
@@ -483,6 +487,68 @@ describe('WorkerRuntime task room integration', () => {
     expect(events.some((event) => event.metadata?.kind === 'worker-runtime.completed')).toBe(true)
     const artifactRows = await db.select().from(artifacts).where(eq(artifacts.roomId, room.id))
     expect(artifactRows.some((artifact) => artifact.title === 'report.html')).toBe(true)
+  })
+
+  test('resident Worker TASK_COMPLETED protocol reconciles task room resources by room id', async () => {
+    const { room, task, thread } = await createTaskRoomFixture()
+    expect(room.id).not.toBe(thread.sessionId)
+    const [workerParticipant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(and(eq(roomParticipants.roomId, room.id), eq(roomParticipants.participantType, 'worker')))
+      .limit(1)
+
+    const handled = await handleWorkerProtocolMessage({
+      roomId: room.id,
+      roomKind: 'task',
+      body: 'TASK_COMPLETED: 已完成页面和说明。',
+      senderParticipantId: workerParticipant?.id ?? null,
+      senderType: 'worker',
+      eventId: 'matrix-event-completed',
+    })
+
+    expect(handled).toBe(true)
+    const [updatedTask] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, task.id)).limit(1)
+    expect(updatedTask?.status).toBe('done')
+    const [updatedThread] = await db.select().from(taskThreads).where(eq(taskThreads.id, thread.id)).limit(1)
+    expect(updatedThread?.status).toBe('completed')
+    const [lease] = await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, task.id)).limit(1)
+    expect(lease?.status).toBe('released')
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, thread.workerInstanceId!)).limit(1)
+    expect(worker?.observedState).toBe('idle')
+  })
+
+  test('resident Worker QUESTION protocol creates clarification and waiting resources', async () => {
+    const { room, task, thread } = await createTaskRoomFixture()
+    const [workerParticipant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(and(eq(roomParticipants.roomId, room.id), eq(roomParticipants.participantType, 'worker')))
+      .limit(1)
+
+    const handled = await handleWorkerProtocolMessage({
+      roomId: room.id,
+      roomKind: 'task',
+      body: 'QUESTION: 需要中文还是英文？',
+      senderParticipantId: workerParticipant?.id ?? null,
+      senderType: 'worker',
+      eventId: 'matrix-event-question',
+    })
+
+    expect(handled).toBe(true)
+    const [updatedTask] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, task.id)).limit(1)
+    expect(updatedTask?.status).toBe('blocked')
+    expect(updatedTask?.progressStatus).toBe('awaiting_human_clarification')
+    const [updatedThread] = await db.select().from(taskThreads).where(eq(taskThreads.id, thread.id)).limit(1)
+    expect(updatedThread?.status).toBe('waiting_for_human')
+    const [lease] = await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, task.id)).limit(1)
+    expect(lease?.status).toBe('waiting_for_human')
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, thread.workerInstanceId!)).limit(1)
+    expect(worker?.observedState).toBe('waiting_for_human')
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    expect(events.some((event) => event.metadata?.kind === 'worker-runtime.clarification-requested')).toBe(true)
+    const clarificationRows = await db.select().from(taskClarifications).where(eq(taskClarifications.taskId, task.id))
+    expect(clarificationRows.some((row) => row.question === '需要中文还是英文？')).toBe(true)
   })
 })
 
