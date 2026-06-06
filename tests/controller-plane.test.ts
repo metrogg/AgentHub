@@ -122,6 +122,25 @@ describe('Controller Plane', () => {
     expect(worker?.runtimeBase).toBe('codex')
   })
 
+  test('controller API does not default a newly created Worker to Codex when runtime base is missing', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller Missing Runtime Workspace',
+        goal: 'Validate worker runtime base is explicit',
+      })
+      .returning()
+    const api = new ControllerApi()
+
+    await expect(api.createWorker({
+      workspaceId: workspace!.id,
+      name: 'Runtime Missing Worker',
+      modelId: 'test-model',
+      role: 'Worker',
+    })).rejects.toThrow(/explicit worker runtime base/)
+  })
+
   test('default controller reconcile queue dispatches Worker requests to ControllerApi', async () => {
     const [workspace] = await db
       .insert(workspaces)

@@ -730,7 +730,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
           metadata: {
             kind: 'agent-direct',
             createdFrom: 'workspace-worker-apply',
-            workerRuntimeBase: agent.roleProfile?.workerRuntimeBase ?? agent.codeAgentType ?? 'codex',
+            workerRuntimeBase: agent.roleProfile?.workerRuntimeBase ?? agent.codeAgentType ?? null,
           },
         })
         .returning()
@@ -755,7 +755,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
             ...(session.metadata ?? {}),
             kind: 'agent-direct',
             createdFrom: 'workspace-worker-apply',
-            workerRuntimeBase: agent.roleProfile?.workerRuntimeBase ?? agent.codeAgentType ?? 'codex',
+            workerRuntimeBase: agent.roleProfile?.workerRuntimeBase ?? agent.codeAgentType ?? null,
           },
           updatedAt: new Date(),
         })
@@ -822,7 +822,7 @@ function readWorkerRuntimeBase(
   ) {
     return value
   }
-  return input.codeAgentType ?? 'codex'
+  return input.codeAgentType ?? undefined
 }
 
 async function findDirectWorkerSession(workspaceId: string, workspaceAgentId: string) {

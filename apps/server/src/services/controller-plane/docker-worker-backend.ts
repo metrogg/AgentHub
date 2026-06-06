@@ -1,5 +1,6 @@
 import { and, db, eq, matrixIdentities, roomParticipants, workerInstances, workspaceAgents } from '@agenthub/db'
 import {
+  containerControllerUrl,
   containerLlmBaseUrl,
   containerMatrixUrl,
   ensureOpenClawRuntimeImage,
@@ -16,6 +17,7 @@ import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import { roomService } from '../rooms/room-service'
+import { ensureWorkerAgentContract } from '../agent-contract'
 import {
   localCliWorkerBackend,
   type WorkerBackend,
@@ -134,7 +136,7 @@ export class DockerWorkerBackend implements WorkerBackend {
     const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const gatewayPort = workerGatewayPort(worker.id)
     const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
-    deployWorkerConfig({
+    const configPath = deployWorkerConfig({
       workerInstanceId: worker.id,
       workerName,
       matrixUrl: containerMatrixUrl(),
@@ -151,6 +153,17 @@ export class DockerWorkerBackend implements WorkerBackend {
       timeoutSeconds: 600,
       maxConcurrent: 4,
     })
+    if (agent) {
+      await ensureWorkerAgentContract({
+        workerInstanceId: worker.id,
+        agent,
+        runtimeBase: worker.runtimeBase,
+        matrixUserId: identity.userId,
+        runtimeConfigPath: configPath,
+        controllerUrl: containerControllerUrl(),
+        sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+      })
+    }
 
     const image = await ensureOpenClawRuntimeImage()
     if (!image.present) {

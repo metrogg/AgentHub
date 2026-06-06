@@ -9,6 +9,7 @@ import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import { roomService } from '../rooms/room-service'
 import { deployWorkerConfig, getWorkerWorkspaceDir } from '../worker-runtime/worker-openclaw-config'
 import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-reporter'
+import { ensureWorkerAgentContract } from '../agent-contract'
 
 export interface WorkerBackendInspectResult {
   workerInstanceId: string
@@ -130,6 +131,17 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         timeoutSeconds: 600,
         maxConcurrent: 4,
       })
+      if (agent) {
+        await ensureWorkerAgentContract({
+          workerInstanceId: latestWorker.id,
+          agent,
+          runtimeBase: latestWorker.runtimeBase,
+          matrixUserId: identity.userId,
+          runtimeConfigPath: configPath,
+          controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+          sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+        })
+      }
 
       const started = openclawLauncher.launchWorker(latestWorker.id, {
         workspaceKey: latestWorker.id,
@@ -304,6 +316,17 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         timeoutSeconds: 600,
         maxConcurrent: 4,
       })
+      if (agent) {
+        await ensureWorkerAgentContract({
+          workerInstanceId: worker.id,
+          agent,
+          runtimeBase: worker.runtimeBase,
+          matrixUserId: identity.userId,
+          runtimeConfigPath: configPath,
+          controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+          sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+        })
+      }
       return {
         synced: true,
         details: {

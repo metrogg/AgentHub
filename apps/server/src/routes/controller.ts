@@ -38,7 +38,7 @@ controllerRoutes.post('/workers', async (c) => {
     name: requireP(body, 'name'),
     runtimeType: body.runtimeType || 'code-agent',
     runtimeBase: body.runtimeBase || body.workerRuntimeBase,
-    codeAgentType: body.codeAgentType || body['code-agent'] || 'codex',
+    codeAgentType: body.codeAgentType || body['code-agent'],
     modelId: body.modelId || body.model || null,
     skillIds: body.skillIds || body.skills || undefined,
     role: body.role,

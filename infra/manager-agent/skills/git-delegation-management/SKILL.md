@@ -25,3 +25,11 @@ Delegate git operations to Workers. The Manager coordinates; Workers execute.
 - Never execute git commands directly — always delegate to a Worker.
 - Include clear commit messages and branch names in the task spec.
 - Workers should set their git user.name to their worker name for traceability.
+
+## Decision Pattern
+
+1. Identify whether git work is really needed and which Worker owns the workspace.
+2. Create a task contract with branch, commit, PR, or review instructions.
+3. @mention the Worker in the task room.
+4. Wait for the Worker to report command output, changed files, and errors.
+5. Summarize the git result to the human without pretending the Manager ran the commands.

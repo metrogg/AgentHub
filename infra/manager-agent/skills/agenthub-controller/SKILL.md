@@ -25,8 +25,8 @@ The CLI reads these automatically. No manual header injection needed.
 # List all workers in a workspace
 agenthub worker list --workspace <workspace-id>
 
-# Create a new worker
-agenthub worker create --workspace <workspace-id> --name builder --code-agent codex
+# Create a new worker with an explicit Worker runtime base
+agenthub worker create --workspace <workspace-id> --name builder --code-agent <openclaw|opencode|claude-code|codex|gemini>
 
 # Check worker status
 agenthub worker status --id <worker-id>
@@ -111,7 +111,7 @@ agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 
 ### Simple goal (1 task, 1 Worker)
 1. `agenthub worker list --workspace <id>` — check existing workers
-2. If no suitable worker: `agenthub worker create --workspace <id> --name <name> --code-agent codex`
+2. If no suitable worker: ask for or use the explicitly requested runtime base, then `agenthub worker create --workspace <id> --name <name> --code-agent <runtime-base>`
 3. `agenthub task create --workspace <id> --title "..." --assign-to <agent-id> --spec "..."`
 4. `agenthub room mention --room <task-room> --agent <agent-id> --body "Please start task <id>"`
 

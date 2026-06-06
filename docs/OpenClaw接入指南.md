@@ -1,6 +1,6 @@
 # OpenClaw 接入指南
 
-最后更新：2026-06-04
+最后更新：2026-06-07
 
 ## 什么是 OpenClaw
 
@@ -37,6 +37,13 @@ HiClaw 的 Manager 和 Worker 都是 OpenClaw 实例，只是配置不同。
 │  exec → curl    │   │  exec → CLI │
 └─────────────────┘   └─────────────┘
 ```
+
+当前接入口径：
+
+- OpenClaw 可以是 `OpenClaw Manager`，也可以是 `OpenClaw Worker`，但两者必须使用不同配置、不同 Matrix identity、不同 workspace 和不同 UI 诊断口径。
+- Manager workspace 默认位于 `%LOCALAPPDATA%/AgentHub/manager/global`，核心配置是 `openclaw.json`，其中必须显式声明 `agents.list` 默认身份为 `manager`，避免 OpenClaw 落到默认 `main` agent。
+- OpenClaw Worker 必须使用稳定的 `worker-*` identity，并通过自己的 Matrix account / room membership / listener 或 gateway 常驻监听房间。
+- OpenCode / Claude Code / Codex / Gemini 当前仍是 AgentHub-managed Worker bridge：它们通过 Room timeline 输入输出，但 CLI 子进程由 AgentHub 服务托管；不要把它们误写成已经完全 HiClaw resident Worker。
 
 ## 三种接入方式
 
@@ -181,11 +188,17 @@ Worker 运行时选择：
 
 ## 当前验收状态
 
-截至 2026-06-04：
+截至 2026-06-07：
 
 - AgentHub 侧 OpenClaw provider / bridge contract 已有自动化端到端测试：`tests/openclaw-bridge-e2e.test.ts`。
 - 该测试通过 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT` 激活 `OpenClawManagerRuntimeProvider`，调用 `POST /step`，并验证返回 `assign` 后能创建 run / task / TaskThread / task room / RuntimeLease；task room assignment 必须是 Matrix mention-first，能回查 Worker participant / WorkerInstance，再继续驱动 WorkerRuntime 写入进度、产物和完成事件。
 - 这证明 AgentHub 侧链路已经贯通，但测试里的 OpenClaw endpoint 是 fake bridge。它不能替代真实 OpenClaw 进程现场验收。
+- 本机 resident Manager 已进入现场可测阶段：设置页可以准备本地 HiClaw-lite runtime，启动 Tuwunel / MinIO，检查 OpenClaw Manager provider、room bindings、Controller skill、Controller API 可达性和最近错误。
+- `openclaw.json` 必须通过 OpenClaw 自己的 schema 校验。若日志出现 `agents.list.0.identity: Invalid input`，说明生成的 OpenClaw identity 不符合 OpenClaw 配置 schema，应先修配置生成，不要把它当成 Matrix 问题。
+- Worker 创建现在必须带显式模型绑定，或存在 `AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL`。如果 Worker 日志或状态显示 `No model configured for this worker`，要修 Agent 配置 / 添加 Worker 表单 / Manager 补员参数，而不是让 Worker 继续监听。
+- Worker 创建现在也必须能解析出 Worker runtime base。缺失时不会默认 Codex；Controller 会优先使用 `AGENTHUB_WORKER_RUNTIME_BASE` 或当前 workspace 已有 Worker 基座，仍无法确定时要求用户/Manager 明确选择。
+- Matrix mention 的协议 ID 和显示名已分离：`m.mentions.user_ids` 保留真实 Matrix user id，聊天 body 使用 participant displayName，避免 UI 中出现长串 `@worker-uuid:agenthub.local`。
+- 旧 room 的 Manager binding 可能显示 `unbound`，通常是历史 Manager participant 与当前 resident Manager identity 不一致；应通过 room reconcile、重建 binding 或新建 room 收口。
 
 真实验收要额外完成：
 
@@ -206,3 +219,13 @@ group room human.message
 ```
 
 设置页“控制台”里的 Manager Runtime 卡片只能说明当前 provider、endpoint 和健康检查状态；最终仍要以群聊任务端到端跑通为准。当前 AgentHub 侧是 Matrix mention-first + service dispatch 过渡态，真实 OpenClaw 进程和 resident Worker 通过 Matrix listener 自主接单仍需要现场验收。
+
+## 当前推荐手动验收
+
+1. 启动 `bun run infra:up` 或在设置页准备本地 HiClaw-lite runtime。
+2. 启动 `bun run dev`，打开设置页确认 Matrix、Manager Runtime、Controller Plane、Worker runtime 均为可用或有明确错误。
+3. 创建一个新群聊，邀请 Manager；旧群聊如果绑定混乱，优先新建。
+4. 发送 `@Manager 你在吗`，确认 1 秒内至少有 Manager status / timeline event，随后有真实 OpenClaw/Matrix 回复。
+5. 添加一个带模型绑定的 OpenCode / Claude / Codex / Gemini Worker，确认它作为 bridge 能通过 Room timeline 回复。
+6. 添加一个 OpenClaw Worker，确认它有独立 Matrix identity、room participant、openclaw config 和长期 gateway/listener。
+7. 发送 `@Manager 创建两个 Worker 并让大家自我介绍`，目标链路是 Manager 调 Controller API 创建/邀请 Worker，再由 Manager 在 room 中 @Worker，Worker 各自通过 Matrix 回复。

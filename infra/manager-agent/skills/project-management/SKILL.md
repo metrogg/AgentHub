@@ -44,3 +44,11 @@ agenthub run status --id <run-id>
 - Each phase should produce concrete artifacts.
 - Workers in later phases should read artifacts from earlier phases via shared storage.
 - Report project completion to the human admin with a synthesis of all deliverables.
+
+## Decision Pattern
+
+1. Read the Matrix room timeline and current workers-registry.json.
+2. Decide whether this is truly a multi-worker project or a simple reply/task.
+3. Create a visible run and task rooms through Controller APIs.
+4. Assign workers with explicit @mentions and shared task contract refs.
+5. Monitor artifacts and synthesize only after deliverables exist.

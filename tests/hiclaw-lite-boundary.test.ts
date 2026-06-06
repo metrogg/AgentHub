@@ -136,17 +136,12 @@ describe('HiClaw-lite kernel boundary', () => {
     expect(violations).toEqual([])
   })
 
-  test('Manager HiClaw skill surface includes the 4 new Phase-1 builtin skills', () => {
-    // Skill 补齐 Phase 1: extend the HiClaw-lite Manager skill surface from 5
-    // to 9 builtin skills. The 4 new entries are documented per HiClaw's
-    // SKILL.md template (Purpose / Controller API Surface / Rules / Gotchas /
-    // Operation Reference / Best Practices / Coordination Protocol). They
-    // must appear in BUILTIN_MANAGER_SKILLS so ensureManagerConfig() writes
-    // them into the OpenClaw Manager workspace on first boot.
-    const config = readFileSync(
-      join(process.cwd(), 'apps/server/src/services/manager-runtime/manager-config.ts'),
-      'utf8',
-    )
+  test('Manager HiClaw skill surface is sourced from the normalized manager-agent bundle', () => {
+    // The Manager skill surface is now generated through agent-contract and
+    // seeded from infra/manager-agent/skills, not from a private source-code
+    // constant. This keeps OpenClaw/QwenPaw and future Manager runtimes on
+    // the same file contract.
+    const skillRoot = join(process.cwd(), 'infra/manager-agent/skills')
     const newSkillNames = [
       'team-management',
       'project-management',
@@ -154,24 +149,32 @@ describe('HiClaw-lite kernel boundary', () => {
       'task-coordination',
     ]
     for (const name of newSkillNames) {
-      expect(config).toMatch(new RegExp(`name:\\s*'${name}'`))
+      const skill = readFileSync(join(skillRoot, name, 'SKILL.md'), 'utf8')
+      expect(skill).toContain(`#`)
+      expect(skill).toContain('Decision Pattern')
     }
   })
 
-  test('Manager skillDoc helper renders HiClaw-style sections when provided', () => {
-    // The skillDoc() helper in manager-config.ts must support the optional
-    // HiClaw sections (gotchas / operationReference / coordinationProtocol /
-    // bestPractices) without breaking the original 5 builtin skills. A
-    // sample-render check via a small one-off invocation is the cheapest
-    // regression guard.
-    const config = readFileSync(
-      join(process.cwd(), 'apps/server/src/services/manager-runtime/manager-config.ts'),
+  test('Manager contract generator owns SOUL AGENTS registries and runtime context', () => {
+    const contract = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/agent-contract/manager-contract.ts'),
       'utf8',
     )
-    expect(config).toMatch(/gotchas\?:\s*string\[\]/)
-    expect(config).toMatch(/operationReference\?:\s*Array<\{\s*situation:\s*string;\s*action:\s*string\s*\}>/)
-    expect(config).toMatch(/coordinationProtocol\?:\s*string\[\]/)
-    expect(config).toMatch(/bestPractices\?:\s*string\[\]/)
+    for (const expected of [
+      'SOUL.md',
+      'AGENTS.md',
+      'TOOLS.md',
+      'HEARTBEAT.md',
+      'workers-registry.json',
+      'teams-registry.json',
+      'humans-registry.json',
+      'rooms.json',
+      'EnsureManagerIdentity',
+      'EnsureRuntimeProcess',
+      'ObserveRoomBindingsAndHeartbeat',
+    ]) {
+      expect(contract).toContain(expected)
+    }
   })
 
   test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {

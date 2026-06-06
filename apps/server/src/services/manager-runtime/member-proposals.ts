@@ -88,6 +88,14 @@ export function normalizeMemberProposal(value: unknown): MemberProposal | null {
   const workerRuntimeBase = stringValue(record.workerRuntimeBase)
   const sandboxPolicy = stringValue(record.sandboxPolicy)
   const contextPolicy = stringValue(record.contextPolicy)
+  const normalizedCodeAgentType =
+    codeAgentType && CODE_AGENT_TYPES.has(codeAgentType) ? (codeAgentType as MemberProposal['codeAgentType']) : null
+  const normalizedWorkerRuntimeBase =
+    workerRuntimeBase && WORKER_RUNTIME_BASES.has(workerRuntimeBase)
+      ? (workerRuntimeBase as MemberProposal['workerRuntimeBase'])
+      : normalizedCodeAgentType && WORKER_RUNTIME_BASES.has(normalizedCodeAgentType)
+        ? (normalizedCodeAgentType as MemberProposal['workerRuntimeBase'])
+        : null
   return {
     expertProfileId: id,
     name,
@@ -100,13 +108,8 @@ export function normalizeMemberProposal(value: unknown): MemberProposal | null {
       stringValue(record.systemPrompt) ??
       `你是 ${name}，角色是 ${role}。请根据任务目标、Room timeline 和共享产物完成被 @ 分配的工作。`,
     runtimeType: 'code-agent',
-    codeAgentType: codeAgentType && CODE_AGENT_TYPES.has(codeAgentType) ? (codeAgentType as MemberProposal['codeAgentType']) : 'codex',
-    workerRuntimeBase:
-      workerRuntimeBase && WORKER_RUNTIME_BASES.has(workerRuntimeBase)
-        ? (workerRuntimeBase as MemberProposal['workerRuntimeBase'])
-        : codeAgentType && WORKER_RUNTIME_BASES.has(codeAgentType)
-          ? (codeAgentType as MemberProposal['workerRuntimeBase'])
-          : 'codex',
+    codeAgentType: normalizedCodeAgentType,
+    workerRuntimeBase: normalizedWorkerRuntimeBase,
     color: stringValue(record.color) ?? '#0f766e',
     modelId: stringValue(record.modelId) ?? null,
     capabilityTags: stringArray(record.capabilityTags) ?? [],

@@ -1,6 +1,6 @@
 # Controller Plane 轻量控制面重构
 
-最后更新：2026-06-05
+最后更新：2026-06-07
 
 这份文档记录 AgentHub Controller 层向 HiClaw-lite 控制面收敛的当前事实、边界和下一步。它不是完整 Kubernetes CRD 方案，也不是照搬 HiClaw Controller；当前目标是用单进程 AgentHub 服务、SQLite 资源表和本地 Worker backend，先把 Manager / Worker / Room / Run / RuntimeLease / Artifact 的生命周期入口收束起来。
 
@@ -32,8 +32,10 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
   - 当前是开发期轻量队列，不是 durable queue。
 - `apps/server/src/services/controller-plane/worker-backend.ts`
   - 定义 `WorkerBackend` 接口：`ensureRuntime / start / stop / inspect / syncConfig`。
-  - 第一版 `LocalCliWorkerBackend` 适配现有 `WorkerController` 和 `WorkerRuntimeService`。
-  - 后续可加 `OpenClawWorkerBackend`、`QwenPawWorkerBackend`、`DockerSandboxWorkerBackend`。
+  - `LocalCliWorkerBackend` 适配现有 `WorkerController` 和 `WorkerRuntimeService`；遇到 `runtimeBase=openclaw` 时会创建或复用 Worker / Manager Matrix identity，生成带真实 token 的 `openclaw.json`，启动本地 OpenClaw gateway 并等待 health，成功后把 WorkerInstance 标记为 `listening`。
+  - `DockerWorkerBackend` 已作为 resident OpenClaw Worker 路径接入：设置 `AGENTHUB_WORKER_BACKEND=docker` 或 `AGENTHUB_CONTAINER_RUNTIME=docker` 后，会启动 `agenthub-worker-*` 容器，并复用同一套 identity/config/room membership 语义。
+  - Worker runtime 准备现在会刷新统一 Agent contract：`profile.json / runtime.json / SOUL.md / AGENTS.md / skills / state.json / rooms.json / tasks.json`，OpenClaw、OpenCode、Claude Code、Codex、Gemini 后续都应通过这套 contract 对齐能力。
+  - 后续仍可补 `QwenPawWorkerBackend`、更完整的 Docker sandbox backend 和 durable backend health reconcile。
 - `apps/server/src/services/controller-plane/controller-api.ts`
   - 提供 Manager skill 应该调用的统一门面。
   - 当前封装 Worker apply/reconcile/wake/stop/idle-stop、Run create/list/reconcile/cancel、Task list/status/complete/fail、Room create/reconcile/event/mention/participant、RuntimeLease summary、Artifact register/list。
@@ -50,6 +52,15 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - 服务启动时 `apps/server/src/index.ts` 会启动 `controllerReconcileQueue`，并记录队列状态。
 - 后端暴露 `GET /api/settings/controller-plane/status`，返回 `describeControllerPlane()`。
 - 设置页已经展示 `Controller Plane` 诊断卡，显示队列是否运行、注册的 resource kinds、Worker/Room/Run/RuntimeLease/Artifact 等资源计数。
+
+2026-06-07 现场补充：
+
+- `ControllerApi.createWorker()` 现在要求 Worker 必须有显式模型绑定，或存在 `AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL` 作为 Worker 模型来源；否则直接失败，不创建必然进入 failed 的 WorkerInstance。
+- `ControllerApi.createWorker()` 不再把缺失的 Worker runtime base 静默默认成 Codex。解析顺序是：显式 `runtimeBase / workerRuntimeBase / codeAgentType` → `AGENTHUB_WORKER_RUNTIME_BASE` → 当前 workspace 已有 Worker 基座 → 报错要求补齐。
+- OpenClaw Worker 的 `roleProfile.workerRuntimeBase=openclaw` 会保持为 resident Worker 语义，`workspace_agents.codeAgentType` 不再写成 `codex`。
+- `WorkerRuntimeService.runGroupMentionRoom()` 会把真实 runtime result status 返回给 dispatcher；Worker 执行失败时保持 `failed`，不再被旧 group mention bridge 覆盖成 `idle`。
+- OpenCode / Claude Code / Codex / Gemini 当前仍是 AgentHub-managed Worker bridge；OpenClaw Worker 是 resident Worker 目标形态，需要独立 Matrix identity、room membership、openclaw config 和长期 gateway/listener。
+- 新增 `apps/server/src/services/agent-contract/`：Manager 和 Worker 的 SOUL/AGENTS/Skills/registry/state 生成逻辑归口到这里。Manager contract 会生成 `runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / state.json / rooms.json / logs`，并镜像到 OpenClaw `agentDir`；`manager-runtime/manager-config.ts` 只保留兼容外壳。
 
 Manager Runtime 已调整：
 
@@ -76,7 +87,7 @@ Manager Runtime 已调整：
 - durable reconcile queue：当前队列是内存队列，服务重启不会保留未处理 request。
 - Controller API HTTP/CLI：HiClaw 有 `hiclaw` CLI 调 controller API；AgentHub 目前只有 service facade，尚未提供完整 `/api/controller/*` 或 CLI。
 - ConfigVersionManager / hot reload：Worker 配置更新后还没有统一的 generation bump 和自动 rolling reconcile。
-- Backend 抽象完整实现：当前只有 `LocalCliWorkerBackend`，OpenClaw/QwenPaw/Docker sandbox backend 还没接。
+- Backend 抽象完整实现：当前已有 Local CLI bridge、本地 OpenClaw resident process 和 Docker OpenClaw resident Worker 的第一版；QwenPaw、Docker sandbox、runtime reconfigure、restart/backoff 和 durable health reconcile 还没完整接。
 - Team/Human/Manager 资源 controller：kind 已预留，但第一版只真正接了 Worker/Run/Room/RuntimeLease。
 - 权限和审计策略：Manager tool 调 Controller API 还缺更细的权限校验、dangerous action approval、审计字段。
 

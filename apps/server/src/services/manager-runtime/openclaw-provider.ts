@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
@@ -9,6 +9,7 @@ import { getRuntimeServerPort } from '../../lib/runtime-server'
 import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv, matrixLocalpart } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
+import { ensureManagerAgentContract } from '../agent-contract'
 import {
   containerControllerUrl,
   containerLlmBaseUrl,
@@ -428,38 +429,17 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 
   private copyAgentFiles(): void {
-    const sourceDir = join(process.cwd(), 'infra', 'manager-agent')
-    if (!existsSync(sourceDir)) return
-    mkdirSync(this.managerWorkspace, { recursive: true })
-    for (const file of ['SOUL.md', 'AGENTS.md', 'HEARTBEAT.md', 'TOOLS.md']) {
-      const src = join(sourceDir, file)
-      const dst = join(this.managerWorkspace, file)
-      if (existsSync(src) && !existsSync(dst)) {
-        writeFileSync(dst, readFileSync(src, 'utf8'), 'utf8')
-      }
-    }
-    const skillsSource = join(sourceDir, 'skills')
-    const skillsTarget = join(this.managerWorkspace, 'skills')
-    if (existsSync(skillsSource)) {
-      mkdirSync(skillsTarget, { recursive: true })
-      this.copyDirSync(skillsSource, skillsTarget)
-    }
-    // Copy agenthub CLI to Manager workspace so skills can use it
-    const cliSource = join(process.cwd(), 'infra', 'agenthub-cli', 'agenthub.ts')
-    if (existsSync(cliSource)) {
-      const cliDst = join(this.managerWorkspace, 'agenthub')
-      writeFileSync(cliDst, readFileSync(cliSource, 'utf8'), 'utf8')
-      chmodSync(cliDst, 0o755)
-    }
-    // Ensure state files exist
-    const statePath = join(this.managerWorkspace, 'state.json')
-    if (!existsSync(statePath)) {
-      writeFileSync(statePath, JSON.stringify({ schemaVersion: 1, status: 'ready', activeTasks: [] }, null, 2), 'utf8')
-    }
-    const registryPath = join(this.managerWorkspace, 'workers-registry.json')
-    if (!existsSync(registryPath)) {
-      writeFileSync(registryPath, JSON.stringify({ schemaVersion: 1, workers: [] }, null, 2), 'utf8')
-    }
+    const serverPort = getRuntimeServerPort() ?? Number(process.env.PORT || 3000)
+    ensureManagerAgentContract({
+      managerId: 'global',
+      runtimeType: this.runtimeType,
+      matrixUserId: this.config.matrixUserId ?? null,
+      controllerUrl: `http://localhost:${serverPort}`,
+      sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+      matrixHomeserverUrl: this.config.matrixUrl ?? null,
+      matrixServerName: this.config.matrixDomain ?? null,
+      runtimeConfigPath: this.getConfigPath(),
+    })
   }
 
   private launch(binaryPath: string): void {
@@ -537,19 +517,6 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     this.containerStartedAt = new Date().toISOString()
   }
 
-  private copyDirSync(src: string, dst: string): void {
-    const { readdirSync, statSync, copyFileSync } = require('node:fs')
-    for (const entry of readdirSync(src, { withFileTypes: true })) {
-      const s = join(src, entry.name)
-      const d = join(dst, entry.name)
-      if (entry.isDirectory()) {
-        mkdirSync(d, { recursive: true })
-        this.copyDirSync(s, d)
-      } else {
-        copyFileSync(s, d)
-      }
-    }
-  }
 }
 
 // ─── QwenPaw Provider ────────────────────────────────────────────────

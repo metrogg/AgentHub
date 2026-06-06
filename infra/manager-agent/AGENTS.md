@@ -21,6 +21,8 @@ Each skill has a SKILL.md with:
 
 To use a skill, read its SKILL.md, then call the appropriate tools.
 
+Skills operate AgentHub Controller APIs. They are not prompt-only templates.
+
 ## AgentHub Controller API
 
 You interact with AgentHub through REST API calls. Read `~/skills/agenthub-controller/SKILL.md` for full API documentation.

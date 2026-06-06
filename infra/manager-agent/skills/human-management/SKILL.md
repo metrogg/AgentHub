@@ -32,3 +32,11 @@ agenthub human delete --name <username> --workspace <id>
 - New human users should be announced in the relevant room.
 - Permission changes take effect immediately.
 - Human DM access to the Manager is controlled by the DM allowlist in openclaw.json.
+
+## Decision Pattern
+
+1. Read the room timeline and determine what human action or permission change is needed.
+2. Ask for approval in the relevant Matrix room before sensitive changes.
+3. Apply the human account, room invite, or permission update through Controller APIs.
+4. Announce the result in the room.
+5. Treat human clarification and approval messages as authoritative task context.
