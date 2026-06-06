@@ -31,6 +31,7 @@ import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import type { SandboxContainerSpec } from './execution/sandbox-provider'
+import { previewDirectoryUrl } from './artifact-preview'
 import { buildSharedTaskDirectoryProtocolBlock } from './orchestrator/shared-task-directory'
 import {
   DEFAULT_ENV_ALLOWLIST,
@@ -93,6 +94,7 @@ interface CodeAgentRuntimeOptions {
   sandboxConfigDir?: string
   sandboxTempDir?: string
   sandboxContainer?: SandboxContainerSpec
+  workspaceId?: string
 }
 
 const activeDockerSandboxes = new Map<number, string>()
@@ -310,6 +312,7 @@ export const __codeAgentAdapterTestHooks = {
   formatModelTargetLabel,
   createNativeOpenCodeModelTarget,
   buildCodeAgentPrompt,
+  staticPreviewUrl,
   friendlyCodeAgentError: (output: string, displayName = 'Worker 基座') =>
     friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
@@ -405,7 +408,7 @@ export async function* streamCodeAgentReply(
   signal?: AbortSignal,
   envelope?: AgentExecutionEnvelope,
   continueSession?: boolean,
-  options?: { rawFinalOutput?: boolean },
+  options?: { rawFinalOutput?: boolean; workspaceId?: string },
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   let type = profile.codeAgentType
   if (!type) {
@@ -542,6 +545,7 @@ export async function* streamCodeAgentReply(
       sandboxConfigDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_CONFIG,
       sandboxTempDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_TMP,
       sandboxContainer: envelope?.sandboxContainer,
+      workspaceId: options?.workspaceId ?? envelope?.a2a?.workspaceId,
     },
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
@@ -1378,6 +1382,7 @@ async function runCodeAgentCommand(
     timedOut,
     beforeFiles,
     cwd,
+    workspaceId: runtimeOptions.workspaceId,
     liveCommands,
     liveFiles,
     liveToolCalls,
@@ -1513,6 +1518,7 @@ async function buildCodeAgentRunMetadata(input: {
   code: number
   cwd?: string
   durationMs: number
+  workspaceId?: string
   liveCommands?: CodeAgentRunMetadata['commands']
   liveFiles?: CodeAgentRunMetadata['files']
   liveToolCalls?: NonNullable<CodeAgentRunMetadata['toolCalls']>
@@ -1532,7 +1538,12 @@ async function buildCodeAgentRunMetadata(input: {
       ...(await diffWorkspaceFiles(input.cwd, input.beforeFiles)),
     ]),
   )
-  const artifacts = buildArtifactsFromMetadata({ cwd: input.cwd, files, output: input.output })
+  const artifacts = buildArtifactsFromMetadata({
+    cwd: input.cwd,
+    files,
+    output: input.output,
+    workspaceId: input.workspaceId,
+  })
   const status: CodeAgentRunMetadata['status'] = input.timedOut
     ? 'timed-out'
     : input.code === 0
@@ -2437,6 +2448,7 @@ function buildArtifactsFromMetadata(input: {
   cwd?: string
   files: CodeAgentRunMetadata['files']
   output: string
+  workspaceId?: string
 }): AgentArtifact[] {
   const artifacts: AgentArtifact[] = []
   const createdAt = new Date().toISOString()
@@ -2464,7 +2476,7 @@ function buildArtifactsFromMetadata(input: {
       })
     }
     if (isHtmlFile(file.path)) {
-      const url = staticPreviewUrl(input.cwd, file.path)
+      const url = staticPreviewUrl(input.cwd, file.path, input.workspaceId)
       if (url) {
         artifacts.push({
           id: `preview:${file.path}`,
@@ -2521,10 +2533,13 @@ function isHtmlFile(path: string) {
   return /\.html?$/i.test(path)
 }
 
-function staticPreviewUrl(cwd: string | undefined, path: string) {
+function staticPreviewUrl(cwd: string | undefined, path: string, workspaceId?: string) {
   if (!cwd) return null
   const absolutePath = isAbsolute(path) ? path : resolve(cwd, path)
-  return `/api/artifacts/preview-file?path=${encodeURIComponent(absolutePath)}`
+  if (workspaceId) {
+    return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(absolutePath)}`
+  }
+  return previewDirectoryUrl(absolutePath)
 }
 
 function detectPreviewUrls(output: string) {

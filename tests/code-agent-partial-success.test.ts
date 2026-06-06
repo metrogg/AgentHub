@@ -90,6 +90,29 @@ describe('code agent partial success handling', () => {
     expect(args[4]).not.toContain('Read the attached prompt file')
   })
 
+  test('adds workspaceId to static HTML preview artifact URLs', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    const url = __codeAgentAdapterTestHooks.staticPreviewUrl(
+      'F:\\Learning\\AgentHub',
+      'dist/index.html',
+      'workspace-1',
+    )
+
+    expect(url).toContain('/api/artifacts/preview-file?')
+    expect(url).toContain('workspaceId=workspace-1')
+    expect(url).toContain(`path=${encodeURIComponent('F:\\Learning\\AgentHub\\dist\\index.html')}`)
+
+    const fallbackUrl = __codeAgentAdapterTestHooks.staticPreviewUrl(
+      'F:\\Learning\\AgentHub',
+      'dist/index.html',
+    )
+    expect(fallbackUrl).toContain('/api/artifacts/preview-dir/')
+    expect(fallbackUrl).not.toContain('/api/artifacts/preview-file?path=')
+  })
+
   test('extracts OpenClaw JSON result messages', async () => {
     const { __codeAgentAdapterTestHooks } = await import(
       '../apps/server/src/services/code-agent-adapter'

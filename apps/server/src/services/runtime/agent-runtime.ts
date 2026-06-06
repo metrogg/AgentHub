@@ -31,6 +31,7 @@ export interface ExecutionContext {
   history: Array<{ senderType: string; content: string }>
   profile: AgentProfile
   signal: AbortSignal
+  workspaceId?: string | null
   workspacePath?: string | null
   envelope?: AgentExecutionEnvelope
   continueSession?: boolean

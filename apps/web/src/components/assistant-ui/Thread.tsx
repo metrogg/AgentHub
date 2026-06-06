@@ -5869,7 +5869,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
           预览
         </button>
         <a
-          href={artifact.url}
+          href={item.url ?? artifact.url}
           target="_blank"
           rel="noreferrer"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
@@ -5910,7 +5910,7 @@ const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy'
               预览
             </button>
             <a
-              href={artifact.url}
+              href={item.url ?? artifact.url}
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"

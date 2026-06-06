@@ -62,6 +62,7 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
         })),
         profile,
         signal: signal ?? new AbortController().signal,
+        workspaceId: context.workspaceId,
         workspacePath: context.workspacePath ?? undefined,
         envelope,
         continueSession: context.continueSession,

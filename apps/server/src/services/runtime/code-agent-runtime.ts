@@ -35,7 +35,10 @@ export class CodeAgentRuntime implements AgentRuntime {
         signal,
         ctx.envelope,
         ctx.continueSession,
-        { rawFinalOutput: ctx.rawFinalOutput === true },
+        {
+          rawFinalOutput: ctx.rawFinalOutput === true,
+          workspaceId: ctx.workspaceId ?? ctx.envelope?.a2a?.workspaceId,
+        },
       )) {
         if (signal?.aborted) break
         // 捕获 session ID 从 metadata chunk
