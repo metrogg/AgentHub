@@ -68,20 +68,22 @@ export function projectTimelineMessages(input: {
 }): MessageRow[] {
   const participantsById = new Map(input.participants.map((participant) => [participant.id, participant]))
   const controls = timelineProjectionControls(input.timeline)
-  const projectedMessages = input.timeline
-    .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
-    .filter((event) => !isMessageControlEvent(event))
-    .filter((event) => !timelineEventIsRedacted(event, controls))
-    .map((event) =>
-      timelineEventToMessage({
-        event,
-        room: input.room,
-        participant: event.senderParticipantId ? participantsById.get(event.senderParticipantId) : undefined,
-        sessionId: input.sessionId,
-      }),
-    )
-    .filter((message): message is MessageRow => Boolean(message))
-    .map((message) => applyTimelineEdit(message, controls))
+  const projectedMessages = collapseTimelineStreamMessages(
+    input.timeline
+      .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
+      .filter((event) => !isMessageControlEvent(event))
+      .filter((event) => !timelineEventIsRedacted(event, controls))
+      .map((event) =>
+        timelineEventToMessage({
+          event,
+          room: input.room,
+          participant: event.senderParticipantId ? participantsById.get(event.senderParticipantId) : undefined,
+          sessionId: input.sessionId,
+        }),
+      )
+      .filter((message): message is MessageRow => Boolean(message))
+      .map((message) => applyTimelineEdit(message, controls)),
+  )
 
   return projectedMessages.sort((a, b) => {
     const byTime = a.createdAt.getTime() - b.createdAt.getTime()
@@ -257,6 +259,101 @@ function applyTimelineEdit(message: MessageRow, controls: TimelineProjectionCont
         : {}),
     },
   }
+}
+
+function collapseTimelineStreamMessages(messages: MessageRow[]) {
+  const output: MessageRow[] = []
+  for (const message of messages) {
+    const previous = output.at(-1)
+    const streamKey = roomTimelineStreamKey(message)
+    if (previous && streamKey && roomTimelineStreamKey(previous) === streamKey) {
+      output[output.length - 1] = mergeTimelineStreamMessage(previous, message)
+      continue
+    }
+    output.push(message)
+  }
+  return output
+}
+
+function roomTimelineStreamKey(message: MessageRow) {
+  const metadata = asRecord(message.metadata)
+  const roomTimeline = asRecord(metadata.roomTimeline)
+  const eventType = asString(roomTimeline.eventType)
+  if (eventType !== 'manager.message' && eventType !== 'worker.message') return null
+  if (asString(metadata.actionType)) return null
+
+  const messageType = asString(metadata.messageType)
+  if (
+    messageType &&
+    messageType !== 'text' &&
+    messageType !== 'markdown' &&
+    messageType !== 'reply' &&
+    messageType !== 'clarify'
+  ) {
+    return null
+  }
+
+  const traceId = asString(metadata.traceId)
+  const senderParticipantId =
+    asString(metadata.senderParticipantId) ??
+    asString(metadata.senderWorkerInstanceId) ??
+    asString(metadata.senderWorkspaceAgentId) ??
+    message.senderId
+  if (!traceId || !senderParticipantId) return null
+  return `${traceId}:${senderParticipantId}`
+}
+
+function mergeTimelineStreamMessage(base: MessageRow, next: MessageRow): MessageRow {
+  const baseMetadata = asRecord(base.metadata)
+  const nextMetadata = asRecord(next.metadata)
+  const baseRoomTimeline = asRecord(baseMetadata.roomTimeline)
+  const nextRoomTimeline = asRecord(nextMetadata.roomTimeline)
+  const baseStream = asRecord(baseMetadata.roomTimelineStream)
+  const nextStream = asRecord(nextMetadata.roomTimelineStream)
+  const eventIds = uniqueStrings([
+    ...asStringArray(baseStream.eventIds),
+    ...asStringArray(nextStream.eventIds),
+    asString(baseRoomTimeline.eventId),
+    asString(nextRoomTimeline.eventId),
+  ])
+  const providerEventIds = uniqueStrings([
+    ...asStringArray(baseStream.providerEventIds),
+    ...asStringArray(nextStream.providerEventIds),
+    asString(baseRoomTimeline.providerEventId),
+    asString(nextRoomTimeline.providerEventId),
+  ])
+  const content = mergeTimelineStreamContent(base.content, next.content)
+  const traceId = asString(nextMetadata.traceId) ?? asString(baseMetadata.traceId)
+  const senderParticipantId =
+    asString(nextMetadata.senderParticipantId) ?? asString(baseMetadata.senderParticipantId)
+
+  return {
+    ...base,
+    type: next.type,
+    content,
+    metadata: {
+      ...baseMetadata,
+      ...nextMetadata,
+      displayContent: content,
+      roomTimeline: nextMetadata.roomTimeline ?? baseMetadata.roomTimeline,
+      roomTimelineStream: {
+        traceId,
+        senderParticipantId,
+        eventIds,
+        providerEventIds,
+        latestEventId: asString(nextRoomTimeline.eventId) ?? eventIds.at(-1) ?? null,
+        latestProviderEventId: asString(nextRoomTimeline.providerEventId) ?? providerEventIds.at(-1) ?? null,
+      },
+    },
+  }
+}
+
+function mergeTimelineStreamContent(base: string, next: string) {
+  if (!base) return next
+  if (!next) return base
+  if (next.startsWith(base)) return next
+  if (base.startsWith(next)) return base
+  return `${base}${next}`
 }
 
 function timelineEventToMessage(input: {
@@ -539,4 +636,8 @@ function asNumber(value: unknown) {
 
 function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+}
+
+function uniqueStrings(values: Array<string | null>) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))))
 }

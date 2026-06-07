@@ -19,6 +19,7 @@ import {
 import {
   applyRoomTimelineMessageControl,
   codeAgentRunFromWorkerRuntimeEvent,
+  mergeRoomTimelineStreamMessages,
   projectRoomTimeline,
   type RoomTimelineProjection,
 } from '../lib/roomTimeline'
@@ -138,7 +139,7 @@ function upsertMessage(messages: Message[], message: Message): Message[] {
 }
 
 function mergeMessages(messages: Message[], incoming: Message[]): Message[] {
-  return incoming.reduce((items, message) => upsertMessage(items, message), messages)
+  return sortMessages(mergeRoomTimelineStreamMessages(messages, incoming))
 }
 
 function createQuotedMessagePreview(
