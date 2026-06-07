@@ -176,6 +176,10 @@ export class ControllerApi {
     return workerController.wakeWorker(workerInstanceId)
   }
 
+  syncWorkerConfig(workerInstanceId: string) {
+    return this.workerBackend.syncConfig(workerInstanceId)
+  }
+
   async stopWorker(input: { workerInstanceId?: string | null; roomId?: string | null; reason?: string | null }) {
     return this.workerBackend.stop(input)
   }

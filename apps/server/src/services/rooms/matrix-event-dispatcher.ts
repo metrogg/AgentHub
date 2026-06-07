@@ -47,6 +47,7 @@ export interface MatrixRoomEventDispatcherHandlers {
     ownerId: string
     afterSequence: number
     source: string
+    sourceEventId?: string | null
   }): Promise<unknown>
   cancelTaskRoom?(input: {
     roomId: string
@@ -330,6 +331,24 @@ export class MatrixRoomEventDispatcher {
       if (isConsumedResult(resumeResult)) return true
     }
 
+    if (event.senderType === 'human' && room.kind === 'direct') {
+      const [session] = room.sessionId
+        ? await db.select().from(sessions).where(eq(sessions.id, room.sessionId)).limit(1)
+        : []
+      const workspaceAgentId = room.workspaceId && session?.workspaceAgentId ? session.workspaceAgentId : null
+      if (!workspaceAgentId) {
+        logger.warn({ roomId: room.id, eventId: event.id }, 'Direct room human message has no workspaceAgentId binding')
+        return false
+      }
+      await workerRuntimeService.runDirectRoom({
+        roomId: room.id,
+        ownerId: room.ownerId,
+        workspaceAgentId,
+        prompt: event.body,
+      })
+      return true
+    }
+
     for (const participantId of mentionedParticipantIds) {
       const [participant] = await db
         .select()
@@ -454,6 +473,7 @@ export class MatrixRoomEventDispatcher {
           ownerId: room.ownerId,
           afterSequence: Math.max(0, event.sequence - 1),
           source: 'matrix-manager-mention',
+          sourceEventId: event.id,
         })
         this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
         await this.appendManagerDispatchDiagnostic(room, event, managerResult)
@@ -483,6 +503,7 @@ export class MatrixRoomEventDispatcher {
         ownerId: room.ownerId,
         afterSequence: Math.max(0, event.sequence - 1),
         source: event.metadata?.kind === 'matrix.sync.imported' ? 'matrix-sync' : 'platform-timeline',
+        sourceEventId: event.id,
       })
       this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
       await this.appendManagerDispatchDiagnostic(room, event, managerResult)
@@ -514,6 +535,7 @@ export class MatrixRoomEventDispatcher {
       metadata: {
         kind: 'manager.status.pending',
         source,
+        traceId: sourceEvent.id,
         sourceEventId: sourceEvent.id,
         sourceEventSequence: sourceEvent.sequence,
         uiPresentation: 'room-status',
@@ -577,6 +599,7 @@ export class MatrixRoomEventDispatcher {
       metadata: {
         kind: 'manager.dispatch.diagnostic',
         reason,
+        traceId: sourceEvent.id,
         sourceEventId: sourceEvent.id,
         sourceEventSequence: sourceEvent.sequence,
         result: payload,
@@ -831,6 +854,7 @@ async function appendManagerSlowOrTimeoutStatus(input: {
     body: input.body,
     metadata: {
       kind: input.statusKind,
+      traceId: input.sourceEventId,
       sourceEventId: input.sourceEventId,
       sourceEventSequence: sourceEvent.sequence,
       uiPresentation: 'room-status',

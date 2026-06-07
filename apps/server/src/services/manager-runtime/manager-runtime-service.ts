@@ -22,6 +22,7 @@ export interface StepManagerRoomInput {
   afterSequence?: number
   limit?: number
   source: string
+  sourceEventId?: string | null
   allowedActionTypes?: ManagerActionType[]
   appendActions?: boolean
   runState?: import('./types').ManagerRunState
@@ -70,6 +71,7 @@ export class ManagerRuntimeService {
     const workers = await listRoomWorkerCandidates(room.id)
     const appendedEventIds: string[] = []
     let sawVisibleRoomMessage = false
+    const traceId = input.sourceEventId ?? `manager-${room.id}-${Date.now()}`
 
     let step: ManagerStepResult
     try {
@@ -100,10 +102,13 @@ export class ManagerRuntimeService {
           input.signal,
         ),
         async (event) => {
+          const isFirstVisibleRoomMessage = event.type === 'room_message' && event.messageType !== 'status' && !sawVisibleRoomMessage
           if (event.type === 'room_message' && event.messageType !== 'status') {
             sawVisibleRoomMessage = true
           }
-          const appended = await appendManagerRuntimeEvent(room.id, event, activeRuntime.runtimeType, input.source)
+          const appended = await appendManagerRuntimeEvent(room.id, event, activeRuntime.runtimeType, input.source, traceId, {
+            firstVisibleRoomMessage: isFirstVisibleRoomMessage,
+          })
           if (appended) appendedEventIds.push(appended.id)
         },
       )
@@ -177,12 +182,16 @@ async function appendManagerRuntimeEvent(
   event: ManagerRuntimeEvent,
   runtimeType: ManagerRuntimeType,
   source: string,
+  traceId: string,
+  flags: { firstVisibleRoomMessage?: boolean } = {},
 ) {
   const managerParticipant = await ensureManagerParticipantForRoom(roomId)
   const metadataBase = {
     kind: `manager-runtime.${event.type}`,
     runtimeType,
     source,
+    traceId,
+    firstVisibleRoomMessage: flags.firstVisibleRoomMessage === true,
     hiddenFromChat: true,
     skipAutoDispatch: true,
   }

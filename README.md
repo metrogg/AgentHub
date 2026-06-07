@@ -138,7 +138,7 @@ bun run dev
 
 **默认轻量开发模式**
 
-适合先打开 UI、调前端、检查基础群聊和设置页。需要 Docker Desktop，因为当前通信层默认连接真实 Tuwunel：
+这是现在最短的可用路径，适合先把 UI 和真实通信链路跑起来。需要 Docker Desktop，因为当前通信层默认连接真实 Tuwunel：
 
 ```bash
 bun install
@@ -146,11 +146,15 @@ bun run infra:up
 bun run dev
 ```
 
-打开 `http://localhost:5173` 后，进入“设置 -> 控制台”，检查 Matrix、Controller Plane、Manager Runtime、容器运行时和执行隔离状态。
+打开 `http://localhost:5173` 后，先进入“设置 -> 控制台”，按顺序看三步：
 
-当前操作流程不应该比普通本地开发更复杂：先启动 `bun run infra:up`，再启动 `bun run dev`，随后在 AgentHub UI 里创建群聊、加入 Manager / Worker，并在房间里直接 @ 他们。后端会负责确保 Matrix 身份、Room membership、OpenClaw 配置、listener 或 resident 进程。所谓 resident runtime 指 Manager / Worker 各自有长期运行的 OpenClaw gateway 进程或容器，用自己的 Matrix account 监听房间；不是每次收到消息才临时启动一次 CLI。OpenClaw Manager / Worker 生成的 `openclaw.json` 会显式声明 `agents.list` 默认身份，避免 OpenClaw 落到默认 `main` agent 导致头像、名字和责任串台。
+1. Matrix / Tuwunel
+2. 容器 / OpenClaw runtime
+3. Manager Runtime
 
-创建 Worker 时必须显式绑定模型，或在环境变量中提供 `AGENTHUB_WORKER_LLM_MODEL` / `LLM_MODEL`。`runtimeBase=opencode`、`runtimeBase=claude-code`、`runtimeBase=codex`、`runtimeBase=gemini` 这类 Worker 当前仍是 AgentHub-managed bridge；`runtimeBase=openclaw` 才是 resident Worker 方向。设置页“控制台”里的 Manager Runtime、Matrix、Controller Plane、Worker runtime 和容器诊断是当前排查入口。
+三步都绿，再去创建群聊、邀请 Manager / Worker、在房间里直接 @ 他们。所谓 resident runtime，指的是 Manager / Worker 由长期运行的 OpenClaw 进程或容器接管，而不是每次来消息才临时启动一次 CLI。OpenClaw Manager / Worker 生成的 `openclaw.json` 会显式声明 `agents.list` 默认身份，避免头像、名字和责任串台。
+
+创建 Worker 时必须显式绑定模型，或在环境变量中提供 `AGENTHUB_WORKER_LLM_MODEL` / `LLM_MODEL`。`runtimeBase=opencode`、`runtimeBase=claude-code`、`runtimeBase=codex`、`runtimeBase=gemini` 这类 Worker 当前仍是 AgentHub-managed bridge；`runtimeBase=openclaw` 才是 resident Worker 方向。设置页“控制台”里的 Matrix、Controller Plane、Manager Runtime、Worker runtime 和容器诊断是当前排查入口。
 
 **HiClaw-lite 容器 resident runtime 模式**
 
@@ -176,7 +180,7 @@ AGENTHUB_OPENCLAW_RUNTIME_IMAGE=agenthub/openclaw-runtime:local
 
 `AGENTHUB_CONTAINER_CONTROLLER_URL` 和 `AGENTHUB_CONTAINER_LLM_BASE_URL` 可以留空；AgentHub 会按当前实际 Server 端口生成 `host.docker.internal` URL。如果你固定了端口或反向代理，再显式填写。重启 `bun run dev`。环境变量不会在已启动的 Server 进程里自动生效。
 
-也可以在设置页“控制台 -> 容器运行时控制面”点击“准备本地容器运行时”，它会启动 Tuwunel / MinIO 并确保 OpenClaw runtime 镜像可用；随后复制页面给出的环境变量，写入 `.env` 后重启 Server。
+也可以在设置页“控制台 -> 容器运行时控制面”点击“准备本地容器运行时”，它会启动 Tuwunel / MinIO 并确保 OpenClaw runtime 镜像可用；随后复制页面给出的环境变量，写入 `.env` 后重启 Server。若只想先跑 UI，就至少完成 `bun run infra:up` 和 `bun run dev`。
 
 单独启动：
 

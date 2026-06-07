@@ -47,6 +47,7 @@ export const WsEvent = {
   MessageCompleted: 'message:completed',
   MessageMetadata: 'message:metadata',
   MessageCancelled: 'message:cancelled',
+  TimelineRendered: 'timeline:rendered',
   AgUiEvent: 'ag-ui:event',
   RoomTimelineEvent: 'room:timeline',
   AgentTyping: 'agent:typing',

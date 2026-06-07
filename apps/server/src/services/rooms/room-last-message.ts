@@ -12,6 +12,21 @@ const PREVIEW_EVENT_TYPES: Array<typeof timelineEvents.$inferSelect.type> = [
   'system',
 ]
 
+const INTERNAL_RUNTIME_PREVIEW_KINDS = new Set([
+  'worker-runtime.message',
+  'worker-runtime.started',
+  'worker-runtime.progress',
+  'worker-runtime.heartbeat',
+  'worker-runtime.busy',
+  'worker-runtime.claimed',
+  'worker-runtime.resident-assignment',
+  'worker-runtime.group-mention-started',
+  'worker-runtime.group-mention-dispatched',
+  'worker-runtime.waiting-for-human',
+  'worker-runtime.waiting-on-human-dependency',
+  'worker-runtime.failed',
+])
+
 export async function listRoomLastMessagePreviews(sessionIds: string[]) {
   if (!sessionIds.length) return {}
   const rankedTimeline = db
@@ -54,6 +69,7 @@ export async function listRoomLastMessagePreviews(sessionIds: string[]) {
     if (metadata.hiddenFromChat === true) continue
     const kind = typeof metadata.kind === 'string' ? metadata.kind : ''
     if (kind.startsWith('manager.status.') || kind === 'manager.dispatch.diagnostic') continue
+    if (INTERNAL_RUNTIME_PREVIEW_KINDS.has(kind)) continue
     previews[row.sessionId] = {
       content: row.content.slice(0, 120),
       senderType: timelineSenderTypeToMessageSenderType(row.senderType),

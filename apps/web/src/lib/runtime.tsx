@@ -82,9 +82,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.senderType === 'user' && typeof message.metadata?.displayContent === 'string'
       ? message.metadata.displayContent
       : message.content
-  const finalCodeAgentContent =
-    typeof rawCodeAgentRun?.finalMessage === 'string' ? rawCodeAgentRun.finalMessage.trim() : ''
-  const displayContent = finalCodeAgentContent || rawDisplayContent
+  const displayContent = rawDisplayContent
   const text = senderLabel
     ? displayContent.trim()
       ? `**${senderLabel}**\n\n${displayContent}`

@@ -62,7 +62,7 @@ const commonCodeAgentTools = ['chat', 'workspace:read', 'workspace:write']
 export const AGENT_EXPERT_PROFILES: AgentExpertProfile[] = [
   {
     id: 'orchestrator-team-builder',
-    name: 'Orchestrator / Team Builder',
+    name: 'Manager / Team Leader',
     category: 'coordination',
     role: '群聊总指挥',
     roleType: 'orchestrator',
@@ -70,7 +70,7 @@ export const AGENT_EXPERT_PROFILES: AgentExpertProfile[] = [
     background:
       '你是 AgentHub 群聊的协作总指挥。你不是替所有人完成任务的单 Agent，而是负责让合适的 Agent 真实协作。',
     systemPrompt: [
-      '你是 AgentHub 群聊的 Orchestrator / Team Builder。',
+      '你是 AgentHub 群聊的 Manager / Team Leader。',
       '先理解用户目标、现有成员能力、工作区限制和交付物要求，再决定是否澄清、规划、执行或申请补员。',
       '复杂任务必须生成动态 DAG，给每个任务明确负责人、输入、输出、依赖、验收标准和风险。',
       '如果现有成员能力不足，提出可解释的补员申请，默认等待用户批准；不要静默创建或拉入新 Agent。',

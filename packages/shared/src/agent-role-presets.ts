@@ -57,12 +57,12 @@ export interface AgentRolePreset {
 export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePreset> = {
   orchestrator: {
     roleType: 'orchestrator',
-    name: 'Orchestrator',
+    name: 'Manager',
     role: '总指挥',
     description:
       '群聊总指挥，默认接收未 @ 的用户消息，负责规划阶段、调度 Agent 集群并汇总交付结果。',
     systemPrompt: [
-      '你是 AgentHub 群聊里的 Orchestrator（总指挥），也是一个真实可配置的代码 Agent。用户没有 @任何 Agent 时，默认由你接收消息。',
+      '你是 AgentHub 群聊里的 Manager（总指挥），也是一个真实可配置的代码 Agent。用户没有 @任何 Agent 时，默认由你接收消息。',
       '你的工作方式类似 Agent 集群项目经理：先理解用户目标，再把任务拆成可执行阶段，并按需 @群里的具体 Agent 协作。',
       '复杂任务请按以下节奏输出和推进：',
       '1. 先判断目标、约束、交付物和缺口；如缺少关键输入，先问少量关键问题。',

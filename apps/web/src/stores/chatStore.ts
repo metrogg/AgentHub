@@ -36,7 +36,9 @@ let pendingStreamTimer: number | null = null
 let pendingSessionRefreshTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const messageCache = new Map<string, Message[]>()
-const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
+type WorkspaceDetailsCacheEntry = Pick<WorkspaceFull, 'workspace' | 'agents' | 'workerInstances'>
+
+const workspaceDetailsCache = new Map<string, WorkspaceDetailsCacheEntry>()
 
 function updateCachedMessages(sessionId: string, updater: (messages: Message[]) => Message[]) {
   const cached = messageCache.get(sessionId)
@@ -146,11 +148,7 @@ function createQuotedMessagePreview(
   const displayContent =
     typeof metadata.displayContent === 'string' && metadata.displayContent.trim()
       ? metadata.displayContent
-      : typeof metadata.codeAgentRun === 'object' &&
-          metadata.codeAgentRun !== null &&
-          typeof (metadata.codeAgentRun as { finalMessage?: unknown }).finalMessage === 'string'
-        ? ((metadata.codeAgentRun as { finalMessage: string }).finalMessage || message.content)
-        : message.content
+      : message.content
   const content = displayContent
     .replace(/```[\s\S]*?```/g, '[代码块]')
     .replace(/\s+/g, ' ')
@@ -1137,14 +1135,14 @@ function deriveRuntimeActivityFromTaskBoard(
 
   if (taskBoard.status === 'planning') {
     return buildRuntimeActivity(taskBoard.sessionId, {
-      agentName: 'Orchestrator',
+      agentName: 'Manager',
       phase: 'planning',
     })
   }
 
   if (taskBoard.status === 'synthesizing') {
     return buildRuntimeActivity(taskBoard.sessionId, {
-      agentName: 'Orchestrator',
+      agentName: 'Manager',
       phase: 'synthesizing',
     })
   }
@@ -1318,7 +1316,7 @@ function reduceRuntimeActivityProjection(
     return buildRuntimeActivity(sessionId, {
       agentId: asString(value.agentId) ?? asString(value.actorAgentId) ?? undefined,
       agentName:
-        asString(value.agentName) ?? asString(value.actorName) ?? 'Orchestrator',
+        asString(value.agentName) ?? asString(value.actorName) ?? 'Manager',
       phase: asString(value.phase) ?? asString(value.action) ?? status ?? 'thinking',
     })
   }
@@ -1327,7 +1325,7 @@ function reduceRuntimeActivityProjection(
     const status = asString(value.status)
     if (status === 'running') {
       return buildRuntimeActivity(sessionId, {
-        agentName: 'Orchestrator',
+        agentName: 'Manager',
         phase: 'planning',
       })
     }
@@ -1409,7 +1407,7 @@ export function buildHeaderAgentStatusProjection(input: {
     if (phase === 'thinking' || phase === 'planning') {
       return {
         label: phase === 'planning' ? '规划中' : '思考中',
-        detail: agentActivity?.agentName ?? 'Orchestrator',
+        detail: agentActivity?.agentName ?? 'Manager',
         tone: 'thinking',
         live: true,
       }
@@ -1460,7 +1458,7 @@ export function buildHeaderAgentStatusProjection(input: {
 
   if (taskBoard && sessionId === taskBoard.sessionId) {
     if (taskBoard.status === 'planning') {
-      return { label: '规划中', detail: 'Orchestrator', tone: 'thinking', live: true }
+      return { label: '规划中', detail: 'Manager', tone: 'thinking', live: true }
     }
     if (taskBoard.status === 'synthesizing') {
       return { label: '汇总中', detail: 'Synthesizer', tone: 'synthesizing', live: true }
@@ -1722,119 +1720,6 @@ function readTaskBoardArtifacts(value: unknown): TaskBoardArtifact[] {
       childSessionId: asString(item.childSessionId) ?? null,
       workerInstanceId: asString(item.workerInstanceId) ?? null,
     }))
-}
-
-function artifactDisplayPath(artifact: TaskBoardArtifact) {
-  return (
-    artifact.filePath ??
-    artifact.handoffRelativePath ??
-    artifact.handoffPath ??
-    artifact.sourcePath ??
-    artifact.storagePath ??
-    artifact.objectKey ??
-    artifact.path ??
-    null
-  )
-}
-
-function basename(value: string) {
-  const parts = value.split(/[\\/]/).filter(Boolean)
-  return parts[parts.length - 1] ?? value
-}
-
-function artifactTitleForDisplay(artifact: TaskBoardArtifact, fallbackPath: string) {
-  return artifact.title || basename(fallbackPath)
-}
-
-function artifactTypeLabel(artifact: TaskBoardArtifact, fileName: string) {
-  const ext = fileName.split('.').pop()?.toLowerCase()
-  return ext || artifact.artifactKind || artifact.kind || artifact.type || 'file'
-}
-
-function canonicalArtifactsFromRun(run: OrchestratorRunListItem): TaskBoardArtifact[] {
-  const resourceSnapshot = asRecord(run.resourceSnapshot)
-  return readTaskBoardArtifacts(resourceSnapshot?.artifacts)
-}
-
-function buildFileCardEntriesFromArtifacts(
-  artifacts: TaskBoardArtifact[],
-  runId: string,
-): Array<{ fileName: string; filePath: string; fileSize?: number; runId: string }> {
-  const files: Array<{ fileName: string; filePath: string; fileSize?: number; runId: string }> = []
-  const seen = new Set<string>()
-  for (const artifact of artifacts) {
-    const filePath = artifactDisplayPath(artifact)
-    if (!filePath) continue
-    const fileName = artifactTitleForDisplay(artifact, filePath)
-    const key = `${filePath}::${fileName}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    files.push({
-      fileName,
-      filePath,
-      fileSize: artifact.size,
-      runId,
-    })
-  }
-  return files
-}
-
-function buildDeliveryFilesFromArtifacts(
-  artifacts: TaskBoardArtifact[],
-): Array<{ name: string; size?: number; type: string }> {
-  const files: Array<{ name: string; size?: number; type: string }> = []
-  const seen = new Set<string>()
-  for (const artifact of artifacts) {
-    const filePath = artifactDisplayPath(artifact)
-    if (!filePath) continue
-    const name = artifactTitleForDisplay(artifact, filePath)
-    const key = `${filePath}::${name}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    files.push({
-      name,
-      size: artifact.size,
-      type: artifactTypeLabel(artifact, name),
-    })
-  }
-  return files
-}
-
-function applyCanonicalArtifactsToSummaryMessages(
-  messages: Message[],
-  run: OrchestratorRunListItem,
-): Message[] {
-  if (!run.summaryMessageId) return messages
-  const canonicalArtifacts = canonicalArtifactsFromRun(run)
-  if (!canonicalArtifacts.length) return messages
-  const fileCardFiles = buildFileCardEntriesFromArtifacts(canonicalArtifacts, run.id)
-  const deliveryFiles = buildDeliveryFilesFromArtifacts(canonicalArtifacts)
-  let changed = false
-  const nextMessages = messages.map((message) => {
-    if (message.id !== run.summaryMessageId) return message
-    const metadata = message.metadata ?? {}
-    const nextMetadata: Record<string, unknown> = {
-      ...metadata,
-      artifacts: canonicalArtifacts,
-    }
-    if (fileCardFiles.length > 0) {
-      nextMetadata.file_card = { files: fileCardFiles }
-    }
-    const deliveryReport = asRecord(metadata.delivery_report)
-    if (deliveryReport || deliveryFiles.length > 0) {
-      nextMetadata.delivery_report = {
-        ...(deliveryReport ?? {}),
-        runId: run.id,
-        files: deliveryFiles,
-      }
-    }
-    changed = true
-    return {
-      ...message,
-      metadata: nextMetadata,
-    }
-  })
-  return changed ? nextMessages : messages
 }
 
 function mergeTaskArtifacts(
@@ -2354,7 +2239,6 @@ function applyResourceSnapshotToTaskBoard(
 }
 
 export const __chatStoreTestHooks = {
-  applyCanonicalArtifactsToSummaryMessages,
   applyAgUiEventToState,
   applyAgUiRunStatus,
   applyTaskBoardRunStatus,
@@ -2829,6 +2713,7 @@ interface ChatState {
   currentSession: Session | null
   currentWorkspace: Workspace | null
   currentWorkspaceAgents: WorkspaceAgent[]
+  currentWorkspaceWorkers: WorkspaceFull['workerInstances']
   currentSessionId: string | null
   messages: Message[]
   streamingMessage: { id: string; content: string; agentId?: string; agentName?: string } | null
@@ -2939,6 +2824,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentSession: null,
   currentWorkspace: null,
   currentWorkspaceAgents: [],
+  currentWorkspaceWorkers: [],
   currentSessionId: null,
   messages: [],
   streamingMessage: null,
@@ -3021,6 +2907,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             cachedWorkspace?.agents ?? (canReuseWorkspace ? state.currentWorkspaceAgents : []),
           )
         : [],
+      currentWorkspaceWorkers: optimisticSession?.workspaceId
+        ? (cachedWorkspace?.workerInstances ?? (canReuseWorkspace ? state.currentWorkspaceWorkers : []))
+        : [],
       loadingMessages: true,
       messages: cachedMessages ? sortMessages(cachedMessages) : [],
       streamingMessage: null,
@@ -3052,13 +2941,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         workspaceDetailsCache.set(session.workspaceId, {
           workspace: full.workspace,
           agents: full.agents,
+          workerInstances: full.workerInstances,
         })
         if (get().currentSessionId !== sessionId) return
         const currentAgents = sessionWorkspaceAgents(session, full.agents)
         const resolvedSnapshot = projectRoomResourceSnapshot(roomSnapshot, currentAgents)
-        const normalizedMessages = resolvedSnapshot
-          ? applyCanonicalArtifactsToSummaryMessages(sortMessages(roomProjection.messages), resolvedSnapshot.run)
-          : sortMessages(roomProjection.messages)
+        const normalizedMessages = sortMessages(roomProjection.messages)
         messageCache.set(sessionId, normalizedMessages)
         if (resolvedSnapshot) {
           wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, sessionId))
@@ -3067,6 +2955,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           currentSession: session,
           currentWorkspace: full.workspace,
           currentWorkspaceAgents: currentAgents,
+          currentWorkspaceWorkers: full.workerInstances,
           sessions: resolvedSnapshot
             ? mergeSessionsWithRunProjection(
                 upsertSessionList(s.sessions, session),
@@ -3094,9 +2983,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         if (get().currentSessionId !== sessionId) return
         const resolvedSnapshot = projectRoomResourceSnapshot(roomSnapshot, [])
-        const normalizedMessages = resolvedSnapshot
-          ? applyCanonicalArtifactsToSummaryMessages(sortMessages(roomProjection.messages), resolvedSnapshot.run)
-          : sortMessages(roomProjection.messages)
+        const normalizedMessages = sortMessages(roomProjection.messages)
         messageCache.set(sessionId, normalizedMessages)
         if (resolvedSnapshot) {
           wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, sessionId))
@@ -3145,7 +3032,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : (state.sessions.find((item) => item.id === sessionId) ?? null)
 
     let workspaceAgentId: string | null = null
-    let full: WorkspaceFull | null = null
+    let full: WorkspaceDetailsCacheEntry | null = null
     if (workspaceId) {
       full = await api.getWorkspace(workspaceId)
       if (currentSession?.type === SessionType.Direct && currentSession.workspaceAgentId) {
@@ -3178,6 +3065,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       workspaceDetailsCache.set(workspaceId, {
         workspace: full.workspace,
         agents: full.agents,
+        workerInstances: full.workerInstances,
       })
     }
     set((s) => ({
@@ -3187,6 +3075,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         s.currentSessionId === session.id ? (full?.workspace ?? null) : s.currentWorkspace,
       currentWorkspaceAgents:
         s.currentSessionId === session.id ? (full?.agents ?? []) : s.currentWorkspaceAgents,
+      currentWorkspaceWorkers:
+        s.currentSessionId === session.id ? (full?.workerInstances ?? []) : s.currentWorkspaceWorkers,
     }))
   },
 
@@ -3199,6 +3089,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentSession: s.currentSessionId === sessionId ? null : s.currentSession,
       currentWorkspace: s.currentSessionId === sessionId ? null : s.currentWorkspace,
       currentWorkspaceAgents: s.currentSessionId === sessionId ? [] : s.currentWorkspaceAgents,
+      currentWorkspaceWorkers: s.currentSessionId === sessionId ? [] : s.currentWorkspaceWorkers,
       messages: s.currentSessionId === sessionId ? [] : s.messages,
       streamingMessage: s.currentSessionId === sessionId ? null : s.streamingMessage,
       streamingCodeAgentRun: s.currentSessionId === sessionId ? null : s.streamingCodeAgentRun,
@@ -3627,10 +3518,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break
       }
       case WsEvent.RoomTimelineEvent: {
-        const projected = projectRoomTimelineWsPayload(
-          (e.payload ?? {}) as RoomTimelineWsPayload,
-          eventSessionId,
-        )
+        const roomTimelinePayload = (e.payload ?? {}) as RoomTimelineWsPayload
+        const projected = projectRoomTimelineWsPayload(roomTimelinePayload, eventSessionId)
         if (!projected) break
         const projectedSessionId = projected.sessionId
         const messageControl = projected.projection.messageControl
@@ -3670,7 +3559,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 timeline: roomSnapshot.timeline,
                 sessionId: session.id,
               })
-              let full: { workspace: Workspace; agents: WorkspaceAgent[] } | null = null
+              let full: WorkspaceDetailsCacheEntry | null = null
               if (session.workspaceId) {
                 full =
                   workspaceDetailsCache.get(session.workspaceId) ??
@@ -3679,6 +3568,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   workspaceDetailsCache.set(session.workspaceId, {
                     workspace: full.workspace,
                     agents: full.agents,
+                    workerInstances: full.workerInstances,
                   })
                 }
               }
@@ -3686,12 +3576,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               const currentAgents =
                 session.workspaceId && full ? sessionWorkspaceAgents(session, full.agents) : []
               const resolvedSnapshot = projectRoomResourceSnapshot(roomSnapshot, currentAgents)
-              const normalizedMessages = resolvedSnapshot
-                ? applyCanonicalArtifactsToSummaryMessages(
-                    sortMessages(roomProjection.messages),
-                    resolvedSnapshot.run,
-                  )
-                : sortMessages(roomProjection.messages)
+              const normalizedMessages = sortMessages(roomProjection.messages)
               messageCache.set(projectedSessionId, normalizedMessages)
               if (resolvedSnapshot) {
                 wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, projectedSessionId))
@@ -3700,6 +3585,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 currentSession: session,
                 currentWorkspace: full?.workspace ?? (session.workspaceId ? s.currentWorkspace : null),
                 currentWorkspaceAgents: currentAgents,
+                currentWorkspaceWorkers: full?.workerInstances ?? s.currentWorkspaceWorkers,
                 sessions: resolvedSnapshot
                   ? mergeSessionsWithRunProjection(
                       upsertSessionList(s.sessions, session),
@@ -3726,6 +3612,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             } else {
               await get().fetchSessions()
             }
+          })
+        }
+        if (roomTimelinePayload.event?.metadata?.hiddenFromChat !== true) {
+          wsClient.send({
+            type: WsEvent.TimelineRendered,
+            payload: {
+              sessionId: projectedSessionId,
+              roomId: projected.projection.room.id,
+              eventId: roomTimelinePayload.event?.id ?? null,
+            },
           })
         }
         break

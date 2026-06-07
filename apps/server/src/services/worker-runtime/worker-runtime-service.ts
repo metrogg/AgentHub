@@ -5,6 +5,7 @@ import {
   db,
   desc,
   eq,
+  sessions,
   roomParticipants,
   rooms,
   runtimeLeases,
@@ -174,7 +175,15 @@ export class WorkerRuntimeService {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'WorkerRuntime 只能从 direct room 执行私聊')
     }
 
-    const workerParticipant = await findWorkerParticipant(room.id, input.workspaceAgentId)
+    const [session] = room.sessionId
+      ? await db.select().from(sessions).where(eq(sessions.id, room.sessionId)).limit(1)
+      : []
+    const effectiveWorkspaceAgentId = input.workspaceAgentId || session?.workspaceAgentId || null
+    if (!effectiveWorkspaceAgentId) {
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Direct room 还没有绑定 Agent')
+    }
+
+    const workerParticipant = await findWorkerParticipant(room.id, effectiveWorkspaceAgentId)
     if (!workerParticipant?.workspaceAgentId) {
       throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Direct room 还没有 Agent participant')
     }
@@ -203,11 +212,20 @@ export class WorkerRuntimeService {
     const [workspace] = room.workspaceId
       ? await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId)).limit(1)
       : []
+    const [workerInstance] = workerParticipant.workerInstanceId
+      ? await db.select().from(workerInstances).where(eq(workerInstances.id, workerParticipant.workerInstanceId)).limit(1)
+      : []
 
     const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 100 })
     const prompt = input.prompt?.trim() || latestHumanMessageBody(timeline) || room.title
 
-    const runtime = new EphemeralCodeAgentWorkerRuntime(agent)
+    const runtime =
+      workerInstance?.runtimeBase === 'openclaw' || workerInstance?.runtimeBase === 'copaw' || workerInstance?.runtimeBase === 'qwenpaw'
+        ? new ResidentRoomWorkerRuntime({
+            runtimeType: workerInstance.runtimeBase === 'openclaw' ? 'openclaw' : 'qwenpaw',
+            workerParticipantId: workerParticipant.id,
+          })
+        : new EphemeralCodeAgentWorkerRuntime(agent)
     this.roomRuntimeKind.set(room.id, runtime.kind)
 
     const abortController = new AbortController()
@@ -246,16 +264,21 @@ export class WorkerRuntimeService {
       let next = await iterator.next()
       while (!next.done) {
         const event = next.value
+        if (event.type === 'message') {
+          next = await iterator.next()
+          continue
+        }
         const timelineEvent = await roomService.appendTimelineEvent({
           roomId: room.id,
           senderParticipantId: workerParticipant.id,
           senderType: 'worker',
-          type: event.type === 'message' ? 'worker.message' : 'task.progress',
+          type: 'task.progress',
           body: event.message ?? '',
           metadata: {
             kind: `worker-runtime.${event.type}`,
             workspaceAgentId: agent.id,
             runtimeType: runtime.runtimeType,
+            hiddenFromChat: true,
             ...(event.type === 'progress'
               ? { progressPercent: event.progressPercent }
               : event.type === 'artifact'
@@ -273,7 +296,7 @@ export class WorkerRuntimeService {
         roomId: room.id,
         senderParticipantId: workerParticipant.id,
         senderType: 'worker',
-        type: result.status === 'completed' ? 'worker.message' : 'task.progress',
+        type: result.status === 'completed' || result.status === 'failed' ? 'worker.message' : 'task.progress',
         body: result.message ?? (result.status === 'completed' ? '执行完成。' : '执行失败。'),
         metadata: {
           kind: 'worker-runtime.completed',
@@ -281,6 +304,7 @@ export class WorkerRuntimeService {
           workspaceAgentId: agent.id,
           runtimeType: runtime.runtimeType,
           artifacts: result.artifacts ?? [],
+          ...(result.status === 'waiting_for_human' ? { hiddenFromChat: true } : {}),
         },
       })
       appendedEventIds.push(resultEvent.id)
@@ -659,20 +683,21 @@ export class WorkerRuntimeService {
       senderType: 'worker',
       type: 'task.progress',
       body: `${agent.name} 已接单。`,
-      metadata: {
-        kind: 'worker-runtime.started',
-        status: 'running',
-        taskThreadStatus: 'active',
-        progressPercent: 5,
+        metadata: {
+          kind: 'worker-runtime.started',
+          status: 'running',
+          taskThreadStatus: 'active',
+          progressPercent: 5,
         runId: room.runId ?? null,
         taskId: room.taskId ?? null,
         taskThreadId: room.taskThreadId ?? null,
         workspaceAgentId: agent.id,
-        workerInstanceId: thread?.workerInstanceId ?? null,
-        runtimeLeaseId: lease?.id ?? null,
-        runtimeType: runtime.runtimeType,
-      },
-    })
+          workerInstanceId: thread?.workerInstanceId ?? null,
+          runtimeLeaseId: lease?.id ?? null,
+          runtimeType: runtime.runtimeType,
+          hiddenFromChat: true,
+        },
+      })
     appendedEventIds.push(startedEvent.id)
 
     await syncRunControllerAtTaskRoomStart({
@@ -1340,6 +1365,7 @@ async function appendWorkerRuntimeEvent(input: {
         workspaceAgentId: input.workspaceAgentId,
         workerInstanceId: input.workerInstanceId ?? null,
         runtimeType: input.runtimeType,
+        hiddenFromChat: true,
         ...(input.event.metadata ?? {}),
       },
     })
@@ -1350,15 +1376,16 @@ async function appendWorkerRuntimeEvent(input: {
     senderType: 'worker',
     type: 'task.progress',
     body: input.event.message,
-    metadata: {
-      kind: input.event.type === 'failed' ? 'worker-runtime.failed' : 'worker-runtime.progress',
-      workspaceAgentId: input.workspaceAgentId,
-      workerInstanceId: input.workerInstanceId ?? null,
-      runtimeType: input.runtimeType,
-      progressPercent: input.event.type === 'progress' ? input.event.progressPercent ?? null : null,
-      ...(input.event.metadata ?? {}),
-    },
-  })
+      metadata: {
+        kind: input.event.type === 'failed' ? 'worker-runtime.failed' : 'worker-runtime.progress',
+        workspaceAgentId: input.workspaceAgentId,
+        workerInstanceId: input.workerInstanceId ?? null,
+        runtimeType: input.runtimeType,
+        progressPercent: input.event.type === 'progress' ? input.event.progressPercent ?? null : null,
+        hiddenFromChat: true,
+        ...(input.event.metadata ?? {}),
+      },
+    })
 }
 
 const DEFAULT_WORKER_RUNTIME_HEARTBEAT_MS = 60_000
@@ -1419,6 +1446,7 @@ function startWorkerRuntimeHeartbeat(input: {
         workerInstanceId: input.workerInstanceId ?? null,
         runtimeLeaseId: input.runtimeLeaseId ?? null,
         runtimeType: input.runtimeType,
+        hiddenFromChat: true,
       },
     })
   }

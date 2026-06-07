@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Hono } from 'hono'
 import { inArray } from 'drizzle-orm'
-import { db, sessions, workspaces, workspaceAgents, workspaceTasks, orchestratorRuns, settings, users, eq, and, desc, asc } from '@agenthub/db'
+import { db, sessions, workspaces, workspaceAgents, workspaceTasks, workerInstances, orchestratorRuns, settings, users, eq, and, desc, asc } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { env } from '../env'
 import { getRuntimeServerPort } from '../lib/runtime-server'
@@ -56,10 +56,13 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
           .where(inArray(workspaceAgents.workspaceId, workspaceIds))
           .orderBy(asc(workspaceAgents.workspaceId), asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
       : []
-    const contacts = mergeMobileContacts(
-      contactsFromWorkspaceAgents(agentList),
-      savedLibrary.found ? contactsFromSavedAgents(savedLibrary.agents) : [],
-    )
+    const workerList = workspaceIds.length
+      ? await db
+          .select()
+          .from(workerInstances)
+          .where(inArray(workerInstances.workspaceId, workspaceIds))
+          .orderBy(asc(workerInstances.workspaceId), asc(workerInstances.createdAt))
+      : []
     const lastMessages = await listRoomLastMessagePreviews(sessionList.map((session) => session.id))
 
     return c.json({
@@ -69,7 +72,8 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
       })),
       workspaces: workspaceList,
       agents: agentList,
-      contacts,
+      contacts: savedLibrary.found ? contactsFromSavedAgents(savedLibrary.agents) : [],
+      liveContacts: contactsFromWorkerInstances(workerList, agentList),
       currentUser: profile,
     })
   })
@@ -568,33 +572,9 @@ function contactsFromSavedAgents(agentList: SavedAgentConfig[]) {
   })
 }
 
-function contactsFromWorkspaceAgents(agentList: Array<typeof workspaceAgents.$inferSelect>) {
-  const seen = new Set<string>()
-  return agentList.flatMap((agent) => {
-    const key = contactDedupeKey(agent)
-    if (seen.has(key)) return []
-    seen.add(key)
-    return [{
-      id: agent.id,
-      source: 'workspace-agent',
-      workspaceId: agent.workspaceId,
-      workspaceAgentId: agent.id,
-      name: agent.name,
-      role: agent.role,
-      roleType: agent.roleType,
-      description: agent.description,
-      avatar: agent.avatar,
-      color: agent.color,
-      runtimeType: agent.runtimeType,
-      codeAgentType: agent.codeAgentType,
-      capabilityTags: agent.capabilityTags,
-    }]
-  })
-}
-
 type MobileAgentContact =
   | ReturnType<typeof contactsFromSavedAgents>[number]
-  | ReturnType<typeof contactsFromWorkspaceAgents>[number]
+  | ReturnType<typeof contactsFromWorkerInstances>[number]
 
 export function mergeMobileContacts(...groups: MobileAgentContact[][]) {
   const byIdentity = new Map<string, MobileAgentContact>()
@@ -614,7 +594,7 @@ function shouldPreferContact(candidate: MobileAgentContact, current: MobileAgent
   const candidateMaterialized = Boolean(candidate.workspaceId && candidate.workspaceAgentId)
   const currentMaterialized = Boolean(current.workspaceId && current.workspaceAgentId)
   if (candidateMaterialized !== currentMaterialized) return candidateMaterialized
-  if (candidate.source === 'workspace-agent' && current.source !== 'workspace-agent') return true
+  if (candidate.source === 'worker-instance' && current.source !== 'worker-instance') return true
   return false
 }
 
@@ -630,6 +610,39 @@ function resolveMobileContactAgents(
     if (saved) return [saved]
     const workspaceAgent = workspaceById.get(id)
     return workspaceAgent ? [workspaceAgent] : []
+  })
+}
+
+function contactsFromWorkerInstances(
+  workerList: Array<typeof workerInstances.$inferSelect>,
+  agentList: Array<typeof workspaceAgents.$inferSelect>,
+) {
+  const agentsById = new Map(agentList.map((agent) => [agent.id, agent]))
+  const seen = new Set<string>()
+  return workerList.flatMap((worker) => {
+    const agent = agentsById.get(worker.workspaceAgentId)
+    if (!agent) return []
+    const key = contactDedupeKey(agent)
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{
+      id: worker.id,
+      source: 'worker-instance',
+      workspaceId: worker.workspaceId,
+      workspaceAgentId: worker.workspaceAgentId,
+      name: agent.name,
+      role: agent.role,
+      roleType: agent.roleType,
+      description: agent.description,
+      avatar: agent.avatar,
+      color: agent.color,
+      runtimeType: agent.runtimeType,
+      codeAgentType: agent.codeAgentType,
+      capabilityTags: agent.capabilityTags,
+      observedState: worker.observedState,
+      lastHeartbeatAt: worker.lastHeartbeatAt?.toISOString?.() ?? null,
+      desiredState: worker.desiredState,
+    }]
   })
 }
 

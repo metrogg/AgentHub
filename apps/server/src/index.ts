@@ -67,6 +67,15 @@ for (let i = 0; i < maxTries; i++) {
             if (data.type === WsEvent.SessionJoin && data.payload?.sessionId) {
               joinRoom(data.payload.sessionId, ws)
               ws.send(JSON.stringify({ type: WsEvent.SessionJoined, payload: { sessionId: data.payload.sessionId } }))
+            } else if (data.type === WsEvent.TimelineRendered) {
+              logger.debug(
+                {
+                  sessionId: data.payload?.sessionId,
+                  roomId: data.payload?.roomId,
+                  eventId: data.payload?.eventId,
+                },
+                'timeline rendered ack',
+              )
             }
           } catch {
             // ignore malformed messages

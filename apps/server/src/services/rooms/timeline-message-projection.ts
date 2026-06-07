@@ -16,6 +16,21 @@ const PROJECTABLE_EVENT_TYPES = new Set([
   'system',
 ])
 
+const INTERNAL_RUNTIME_CHAT_KINDS = new Set([
+  'worker-runtime.message',
+  'worker-runtime.started',
+  'worker-runtime.progress',
+  'worker-runtime.heartbeat',
+  'worker-runtime.busy',
+  'worker-runtime.claimed',
+  'worker-runtime.resident-assignment',
+  'worker-runtime.group-mention-started',
+  'worker-runtime.group-mention-dispatched',
+  'worker-runtime.waiting-for-human',
+  'worker-runtime.waiting-on-human-dependency',
+  'worker-runtime.failed',
+])
+
 export async function listSessionMessagesRoomFirst(input: {
   sessionId: string
 }): Promise<MessageRow[]> {
@@ -257,6 +272,7 @@ function timelineEventToMessage(input: {
   const kind = asString(metadata.kind)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic') return null
+  if (kind && INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return null
 
   const content = visibleBodyForEvent(event)
   if (!content.trim()) return null
@@ -316,11 +332,12 @@ function displayNameForEvent(event: TimelineEventRow, participant?: ParticipantR
 }
 
 function visibleBodyForEvent(event: TimelineEventRow) {
-  if (event.body.trim()) return event.body
   const metadata = asRecord(event.metadata)
   if (metadata.hiddenFromChat === true) return ''
   if (typeof metadata.kind === 'string' && metadata.kind.startsWith('manager.status.')) return ''
   if (metadata.kind === 'manager.dispatch.diagnostic') return ''
+  if (typeof metadata.kind === 'string' && INTERNAL_RUNTIME_CHAT_KINDS.has(metadata.kind)) return ''
+  if (event.body.trim()) return event.body
   if (event.type === 'approval.requested' && metadata.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
   }

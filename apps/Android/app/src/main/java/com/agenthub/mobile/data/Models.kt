@@ -114,6 +114,9 @@ data class AgentContact(
     val runtimeType: String = "llm",
     val codeAgentType: String? = null,
     val capabilityTags: List<String> = emptyList(),
+    val observedState: String? = null,
+    val desiredState: String? = null,
+    val lastHeartbeatAt: String? = null,
 )
 
 @Serializable
@@ -139,6 +142,7 @@ data class MobileSyncResponse(
     val workspaces: List<Workspace> = emptyList(),
     val agents: List<WorkspaceAgent> = emptyList(),
     val contacts: List<AgentContact> = emptyList(),
+    val liveContacts: List<AgentContact> = emptyList(),
     val currentUser: MobileUserProfile = MobileUserProfile(),
 )
 
@@ -359,6 +363,7 @@ data class MobileUiState(
     val workspaces: List<Workspace> = emptyList(),
     val agents: List<WorkspaceAgent> = emptyList(),
     val contacts: List<AgentContact> = emptyList(),
+    val liveContacts: List<AgentContact> = emptyList(),
     val messages: List<Message> = emptyList(),
     val selectedSessionId: String? = null,
     val archivedSessionIds: Set<String> = emptySet(),

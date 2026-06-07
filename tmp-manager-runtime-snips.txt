@@ -1,0 +1,32 @@
+--- 73-79 ---
+73: 
+74:     let step: ManagerStepResult
+75:     try {
+76:       step = await runManagerRuntimeToCompletion(
+77:         activeRuntime.step(
+78:           {
+79:             context: {
+--- 103-109 ---
+103:           if (event.type === 'room_message' && event.messageType !== 'status') {
+104:             sawVisibleRoomMessage = true
+105:           }
+106:           const appended = await appendManagerRuntimeEvent(room.id, event, activeRuntime.runtimeType, input.source)
+107:           if (appended) appendedEventIds.push(appended.id)
+108:         },
+109:       )
+--- 160-166 ---
+160:   return null
+161: }
+162: 
+163: async function runManagerRuntimeToCompletion(
+164:   iterator: AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult>,
+165:   onEvent: (event: ManagerRuntimeEvent) => Promise<void>,
+166: ): Promise<ManagerStepResult> {
+--- 172-178 ---
+172:   return next.value
+173: }
+174: 
+175: async function appendManagerRuntimeEvent(
+176:   roomId: string,
+177:   event: ManagerRuntimeEvent,
+178:   runtimeType: ManagerRuntimeType,

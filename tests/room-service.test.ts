@@ -947,6 +947,7 @@ describe('RoomService Matrix room adapter contract', () => {
         ownerId: 'default-user',
         afterSequence: 0,
         source: 'matrix-sync',
+        sourceEventId: groupEvent!.id,
       },
     ])
     // HiClaw model: Worker picks up @mention via /sync, no platform dispatch
@@ -1022,6 +1023,85 @@ describe('RoomService Matrix room adapter contract', () => {
       expect(updatedIdentity?.metadata?.matrixSync?.nextBatch).toBe('loop-batch-2')
     } finally {
       globalThis.fetch = originalFetch
+    }
+  })
+
+  test('Matrix dispatcher routes human direct room messages to Worker runtime', async () => {
+    const directCalls: any[] = []
+    const dispatcher = new MatrixRoomEventDispatcher({})
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Direct Workspace',
+        goal: 'Direct room routing',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Direct Worker Target',
+        role: 'Worker',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Direct Agent Session',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        metadata: { kind: 'agent-direct', savedAgentId: agent!.id },
+      })
+      .returning()
+    const room = await roomService.ensureRoomForSession(session!.id, 'default-user')
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'opencode',
+        observedState: 'listening',
+      })
+      .returning()
+    await roomService.addWorkerParticipant(room.id, agent!.id, worker!.id)
+    const [event] = await db
+      .insert(timelineEvents)
+      .values({
+        roomId: room.id,
+        providerEventId: '$dispatcher-direct-human',
+        senderType: 'human',
+        type: 'human.message',
+        body: '你好，直接回复我',
+        metadata: {
+          kind: 'matrix.sync.imported',
+          matrix: {
+            eventId: '$dispatcher-direct-human',
+          },
+        },
+        sequence: 1,
+      })
+      .returning()
+
+    const original = workerRuntimeService.runDirectRoom.bind(workerRuntimeService)
+    ;(workerRuntimeService as any).runDirectRoom = async (input: any) => {
+      directCalls.push(input)
+      return { roomId: input.roomId, appendedEventIds: ['stub-event'] }
+    }
+
+    try {
+      const result = await dispatcher.dispatchImportedEvents({ eventIds: [event!.id] })
+      expect(result.dispatchedEventIds).toContain(event!.id)
+      expect(directCalls).toHaveLength(1)
+      expect(directCalls[0]?.roomId).toBe(room.id)
+      expect(directCalls[0]?.workspaceAgentId).toBe(agent!.id)
+    } finally {
+      ;(workerRuntimeService as any).runDirectRoom = original
     }
   })
 

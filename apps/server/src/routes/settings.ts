@@ -35,6 +35,7 @@ import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/
 import { describeContainerRuntime, ensureOpenClawRuntimeImage } from '../services/container-runtime/agent-runtime-containers'
 import { dockerRuntime } from '../services/container-runtime/docker-runtime'
 import { describeControllerPlane } from '../services/controller-plane/diagnostics'
+import { controllerApi } from '../services/controller-plane'
 import { runResidentWorkerSelfTest } from '../services/controller-plane/resident-worker-self-test'
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
@@ -265,10 +266,17 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     })
     return c.json(result)
   })
+  .post('/controller-plane/workers/:workerInstanceId/sync-config', async (c) => {
+    const workerInstanceId = c.req.param('workerInstanceId')
+    const result = await controllerApi.syncWorkerConfig(workerInstanceId)
+    logger.warn({ workerInstanceId, result }, 'Worker sync-config requested from settings')
+    return c.json(result)
+  })
   .get('/container-runtime/status', async (c) => {
     return c.json(await describeContainerRuntime())
   })
   .post('/container-runtime/prepare-local', async (c) => {
+    const containerConfig = applyLocalContainerRuntimeConfig()
     const infra = await startLocalHiclawLiteInfra()
     const image = await ensureOpenClawRuntimeImage()
     const diagnostics = await describeContainerRuntime()
@@ -279,6 +287,7 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       message: ok
         ? '本地容器运行时已准备好：Tuwunel / MinIO 已启动，OpenClaw runtime 镜像可用。'
         : infra.message || image.error || diagnostics.docker.error || '本地容器运行时准备失败。',
+      config: containerConfig,
       infra,
       image,
       diagnostics,
@@ -286,6 +295,7 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .post('/local-runtime/prepare', async (c) => {
     const matrixConfig = applyLocalMatrixRuntimeConfig()
+    const containerConfig = applyLocalContainerRuntimeConfig()
     const infra = await startLocalHiclawLiteInfra()
     const image = await ensureOpenClawRuntimeImage()
     const provider = getManagerProvider('openclaw')
@@ -308,6 +318,12 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
         label: '应用本地 Matrix 配置',
         ok: true,
         message: `${matrixConfig.homeserverUrl} / ${matrixConfig.serverName}`,
+      },
+      {
+        id: 'container-config',
+        label: '应用容器后端配置',
+        ok: true,
+        message: `${containerConfig.containerRuntime} / ${containerConfig.managerBackend} / ${containerConfig.workerBackend}`,
       },
       {
         id: 'infra',
@@ -939,6 +955,18 @@ function applyLocalMatrixRuntimeConfig() {
     autoInviteParticipants: true,
     autoJoinParticipants: true,
   }
+}
+
+function applyLocalContainerRuntimeConfig() {
+  const config = {
+    containerRuntime: process.env.AGENTHUB_CONTAINER_RUNTIME?.trim() || 'docker',
+    managerBackend: process.env.AGENTHUB_MANAGER_BACKEND?.trim() || 'docker',
+    workerBackend: process.env.AGENTHUB_WORKER_BACKEND?.trim() || 'docker',
+  }
+  process.env.AGENTHUB_CONTAINER_RUNTIME = config.containerRuntime
+  process.env.AGENTHUB_MANAGER_BACKEND = config.managerBackend
+  process.env.AGENTHUB_WORKER_BACKEND = config.workerBackend
+  return config
 }
 
 function parseManagerRuntimeType(value: string): ManagerRuntimeType {

@@ -1,19 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import type { Message, OrchestratorRunListItem, Session } from '../apps/web/src/lib/api'
+import type { OrchestratorRunListItem, Session } from '../apps/web/src/lib/api'
 import { SessionType } from '../apps/web/src/lib/api'
-import { MessageType, OrchestratorRunStatus, SenderType } from '../packages/shared/src/index'
+import { OrchestratorRunStatus } from '../packages/shared/src/index'
 import { __chatStoreTestHooks } from '../apps/web/src/stores/chatStore'
-
-function message(partial: Partial<Message> & Pick<Message, 'id' | 'sessionId' | 'content'>): Message {
-  return {
-    senderId: 'agent-1',
-    senderType: SenderType.Agent,
-    type: MessageType.Text,
-    metadata: null,
-    createdAt: '2026-06-03T00:00:00.000Z',
-    ...partial,
-  }
-}
 
 function run(partial: Partial<OrchestratorRunListItem>): OrchestratorRunListItem {
   return {
@@ -47,62 +36,61 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'typ
 }
 
 describe('chat store artifact snapshot projection', () => {
-  test('hydrates summary message artifacts and delivery cards from resource snapshot canonical artifacts', () => {
-    const messages = [
-      message({
-        id: 'summary-1',
-        sessionId: 'group-1',
-        content: 'done',
-        metadata: {
-          delivery_report: {
-            status: 'completed',
-            checklist: [{ item: 'Report', done: true }],
-            files: [],
-          },
+  test('resource snapshot carries task artifacts into task board directly', () => {
+    const taskBoard = __chatStoreTestHooks.taskBoardFromRun(
+      run({
+        status: OrchestratorRunStatus.Running,
+        taskBoardSnapshot: {
+          runId: 'run-1',
+          title: 'Snapshot plan',
+          goal: 'Snapshot goal',
+          collaborationMode: 'pipeline',
+          sessionId: 'group-1',
+          status: 'running',
+          phases: [
+            {
+              id: 'implementation',
+              title: '实现',
+              purpose: '以服务端快照为准',
+              taskIds: ['task-1'],
+              status: 'active',
+            },
+          ],
+          tasks: [
+            {
+              id: 'task-1',
+              phaseId: 'implementation',
+              title: 'Snapshot task',
+              description: 'From server snapshot',
+              agentId: 'agent-1',
+              agentName: 'Snapshot Builder',
+              status: 'running',
+              progress: 55,
+              dependencies: [],
+              childSessionId: 'child-1',
+              artifactCount: 1,
+              artifacts: [
+                {
+                  artifactId: 'artifact-1',
+                  id: 'artifact-1',
+                  title: 'report.html',
+                  filePath: 'deliverables/report.html',
+                  size: 2048,
+                  status: 'registered',
+                  taskId: 'task-1',
+                },
+              ],
+              validationStatus: 'passed',
+            },
+          ],
         },
       }),
-    ]
-    const orchestratorRun = run({
-      resourceSnapshot: {
-        artifacts: [
-          {
-            id: 'artifact-1',
-            artifactId: 'artifact-1',
-            title: 'report.html',
-            kind: 'file',
-            artifactKind: 'file',
-            filePath: 'deliverables/report.html',
-            size: 2048,
-            taskId: 'task-1',
-          },
-        ],
-      },
-    })
-
-    const next = __chatStoreTestHooks.applyCanonicalArtifactsToSummaryMessages(
-      messages,
-      orchestratorRun,
     )
 
-    expect(next).toHaveLength(1)
-    const metadata = next[0]?.metadata as Record<string, any>
-    expect(Array.isArray(metadata.artifacts)).toBe(true)
-    expect(metadata.artifacts[0]?.title).toBe('report.html')
-    expect(metadata.file_card?.files).toEqual([
-      {
-        fileName: 'report.html',
-        filePath: 'deliverables/report.html',
-        fileSize: 2048,
-        runId: 'run-1',
-      },
-    ])
-    expect(metadata.delivery_report?.files).toEqual([
-      {
-        name: 'report.html',
-        size: 2048,
-        type: 'html',
-      },
-    ])
+    expect(taskBoard).toBeTruthy()
+    expect(taskBoard?.tasks[0]?.artifactCount).toBe(1)
+    expect(taskBoard?.tasks[0]?.artifacts?.[0]?.title).toBe('report.html')
+    expect(taskBoard?.tasks[0]?.artifacts?.[0]?.filePath).toBe('deliverables/report.html')
   })
 
   test('resource snapshot recomputes phase status from task thread state', () => {

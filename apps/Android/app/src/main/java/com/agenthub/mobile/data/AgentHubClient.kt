@@ -177,6 +177,7 @@ class AgentHubClient(
             workspaces = workspaces,
             agents = agents,
             contacts = dedupeWorkspaceAgents(agents),
+            liveContacts = emptyList(),
         )
     }
 

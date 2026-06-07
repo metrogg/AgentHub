@@ -122,11 +122,6 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
           if (chunk.metadata?.sessionId && typeof chunk.metadata.sessionId === 'string') {
             sessionId = chunk.metadata.sessionId
           }
-          yield {
-            type: 'progress',
-            message: 'Worker runtime metadata updated.',
-            metadata: chunk.metadata,
-          }
           continue
         }
         chunks.push(chunk.text)

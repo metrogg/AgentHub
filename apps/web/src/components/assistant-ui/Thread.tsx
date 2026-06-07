@@ -97,9 +97,6 @@ import {
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import { ClarificationCard } from '@/components/ClarificationCard'
-import DeliveryReport from '@/components/DeliveryReport'
-import type { DeliveryReportData } from '@/components/DeliveryReport'
-import { FileCard } from '@/components/FileCard'
 import {
   api,
   friendlyErrorMessage,
@@ -611,7 +608,7 @@ function estimateThreadMessageHeight(message?: Message) {
   let height = 72 + Math.min(520, lineCount * 24)
   const metadata = message.metadata ?? {}
   if (metadata.codeAgentRun) height += 240
-  if (metadata.artifacts || metadata.file_card || metadata.delivery_report) height += 150
+  if (metadata.artifacts) height += 150
   if (metadata.attachments) height += 96
   if (message.type === 'task_board') height += 320
   return height
@@ -2741,10 +2738,6 @@ function messageDisplayContent(message: Message) {
   const displayContent = metadata.displayContent
   if (typeof displayContent === 'string' && displayContent.trim()) return displayContent
 
-  const codeAgentRun = nestedRecord(metadata.codeAgentRun)
-  const finalMessage = codeAgentRun?.finalMessage
-  if (typeof finalMessage === 'string' && finalMessage.trim()) return finalMessage
-
   if (message.content.trim()) return message.content
 
   const attachments = metadata.attachments
@@ -4845,8 +4838,6 @@ function AssistantMessageParts() {
             clarification_card: ClarificationCardWrapper,
             member_proposal_card: MemberProposalCard,
             controller_approval_card: ControllerApprovalCard,
-            file_card: FileCardMessage,
-            delivery_report: DeliveryReportMessage,
           },
         },
       }}
@@ -4961,7 +4952,7 @@ function MemberProposalCard({ data }: { data?: Record<string, unknown> | null })
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-neutral-950">
-            {confirmed ? '已加入建议成员' : 'Orchestrator 建议补充成员'}
+            {confirmed ? '已加入建议成员' : 'Manager 建议补充成员'}
           </div>
           <div className="mt-1 text-xs leading-5 text-neutral-500">
             这些只是候选 Agent 配置，确认后才会成为当前群聊的真实成员。
@@ -5060,7 +5051,7 @@ function MemberProposalCard({ data }: { data?: Record<string, unknown> | null })
           >
             {error ||
               (continueStatus === 'running'
-                ? 'Orchestrator 正在重新规划并分发任务...'
+                ? 'Manager 正在重新规划并分发任务...'
                 : continueStatus === 'completed'
                   ? '已接回任务计划，任务正在看板中执行。'
                   : continueStatus === 'failed'
@@ -5084,7 +5075,7 @@ function MemberProposalCard({ data }: { data?: Record<string, unknown> | null })
               ? '已继续分发'
               : continueStatus === 'running'
                 ? '规划中...'
-                : '让 Orchestrator 重新规划/继续分发'}
+                : '让 Manager 重新规划/继续分发'}
           </button>
         </div>
       )}
@@ -5272,37 +5263,6 @@ function readControllerApprovalSummary(value: unknown): ControllerApprovalSummar
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-interface FileCardEntry {
-  fileName: string
-  filePath: string
-  fileSize?: number
-  runId: string
-}
-
-function FileCardMessage({ data }: { data?: { files?: FileCardEntry[] } | null }) {
-  const files = data?.files
-  if (!files || files.length === 0) return null
-
-  return (
-    <div className="not-prose mt-3 space-y-2">
-      {files.map((file) => (
-        <FileCard
-          key={file.fileName}
-          fileName={file.fileName}
-          filePath={file.filePath}
-          fileSize={file.fileSize}
-          runId={file.runId}
-        />
-      ))}
-    </div>
-  )
-}
-
-function DeliveryReportMessage({ data }: { data?: DeliveryReportData | null }) {
-  if (!data) return null
-  return <DeliveryReport data={data} />
 }
 
 function requestArtifactPreview(item: ArtifactPreviewItem) {
@@ -6435,9 +6395,7 @@ const CodeAgentRunCard: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
 
 const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
   const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
-  const [detailsOpen, setDetailsOpen] = useState(() =>
-    data.status === 'running' || data.status === 'failed' || data.status === 'timed-out',
-  )
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const detailsData = useMemo(
     () =>
       detailsOpen

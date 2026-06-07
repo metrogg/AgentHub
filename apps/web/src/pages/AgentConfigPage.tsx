@@ -185,7 +185,7 @@ export default function AgentConfigPage() {
   const modelCompatibilityMessage = (() => {
     const modelId = draft.modelId ?? null
     if (managerAgent) {
-      return 'Orchestrator 是群聊 Manager / Team Leader；这里选择 Manager 基座，模型和运行状态由设置页的 Manager Runtime 接管。'
+      return 'Manager 是群聊总指挥；这里选择 Manager 基座，模型和运行状态由设置页的 Manager Runtime 接管。'
     }
     const codeAgentType = cliWorkerBaseFromRuntimeBase(workerRuntimeBase)
     const model = selectedModel
@@ -214,7 +214,7 @@ export default function AgentConfigPage() {
     return '已绑定独立模型，运行时会随当前 CLI 注入。'
   })()
   const runtimeHint = managerAgent
-    ? 'Orchestrator 是 Manager / Team Leader，不作为普通 Worker 接单；它通过 OpenClaw / QwenPaw 常驻监听 Matrix Room。'
+    ? 'Manager 是总指挥，不作为普通 Worker 接单；它通过 OpenClaw 常驻监听 Matrix Room。'
     : '执行成员选择 Worker 基座。Agent Runtime 页面只做安装、认证和原生诊断，不决定具体 Agent 用哪个模型。'
 
   function selectAgent(agent: SavedAgentConfig, replaceUrl = false) {
@@ -797,7 +797,7 @@ export default function AgentConfigPage() {
                               <div className="grid gap-3 md:grid-cols-2">
                                 <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
                                   <input type="checkbox" checked={draft.autoInvoke ?? true} onChange={(event) => setDraft({ ...draft, autoInvoke: event.target.checked })} />
-                                  {t('允许 Orchestrator 自动调用')}
+                                  {t('允许 Manager 自动调用')}
                                 </label>
                                 <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
                                   <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => setDraft({ ...draft, approvalRequired: event.target.checked })} />
