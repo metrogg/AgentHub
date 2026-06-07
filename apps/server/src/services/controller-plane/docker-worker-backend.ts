@@ -21,8 +21,10 @@ import { ensureWorkerAgentContractFromController } from '../agent-contract'
 import {
   localCliWorkerBackend,
   loadWorkerOpenClawRoomBindings,
+  workerBackendHealthFromInspect,
   type WorkerBackend,
   type WorkerBackendEnsureInput,
+  type WorkerBackendHealthResult,
   type WorkerBackendInspectResult,
   type WorkerBackendStartInput,
   type WorkerBackendStopInput,
@@ -278,6 +280,12 @@ export class DockerWorkerBackend implements WorkerBackend {
       message: container.running ? 'Worker container is running.' : 'Worker container is not running.',
       details: { containerName, container },
     }
+  }
+
+  async health(workerInstanceId: string): Promise<WorkerBackendHealthResult> {
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+    if (worker?.runtimeBase !== 'openclaw') return localCliWorkerBackend.health(workerInstanceId)
+    return workerBackendHealthFromInspect(this.id, await this.inspect(workerInstanceId))
   }
 
   async syncConfig(workerInstanceId: string): Promise<{ synced: boolean; details?: Record<string, unknown> }> {

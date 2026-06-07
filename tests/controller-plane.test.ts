@@ -330,8 +330,16 @@ describe('Controller Plane', () => {
     expect(inspected.details?.contractReady).toBe(true)
     expect(Array.isArray(inspected.details?.blockers)).toBe(true)
     expect(inspected.details?.inspection).toBeTruthy()
-    expect(inspected.details?.parityOperations).toEqual(['inspect', 'syncConfig', 'start', 'stop'])
-  })
+    expect(inspected.details?.parityOperations).toEqual(['inspect', 'health', 'syncConfig', 'start', 'stop'])
+
+    const health = await localCliWorkerBackend.health(worker!.id)
+    expect(health.workerInstanceId).toBe(worker!.id)
+    expect(['ready', 'blocked']).toContain(health.status)
+    expect(health.state).toMatch(/^bridge-/)
+    expect(Array.isArray(health.blockers)).toBe(true)
+    expect(health.details?.backendId).toBe('local-cli')
+    expect(health.details?.source).toBe('inspectCodeAgentRuntime')
+  }, 15_000)
 
   test('controller apply creates Worker resources from manifest objects', async () => {
     const [workspace] = await db
@@ -356,6 +364,17 @@ describe('Controller Plane', () => {
         },
         async inspect(workerInstanceId) {
           return { workerInstanceId, ready: true, state: 'ready' }
+        },
+        async health(workerInstanceId) {
+          return {
+            workerInstanceId,
+            ready: true,
+            status: 'ready',
+            state: 'ready',
+            message: 'test backend ready',
+            blockers: [],
+            lastCheckedAt: new Date().toISOString(),
+          }
         },
         async syncConfig(workerInstanceId) {
           return { synced: true, details: { workerInstanceId } }
@@ -495,6 +514,17 @@ describe('Controller Plane', () => {
         },
         async inspect(workerInstanceId) {
           return { workerInstanceId, ready: true, state: 'ready' }
+        },
+        async health(workerInstanceId) {
+          return {
+            workerInstanceId,
+            ready: true,
+            status: 'ready',
+            state: 'ready',
+            message: 'test backend ready',
+            blockers: [],
+            lastCheckedAt: new Date().toISOString(),
+          }
         },
         async syncConfig(workerInstanceId) {
           return { synced: true, details: { workerInstanceId } }
@@ -878,6 +908,17 @@ describe('Controller Plane', () => {
         },
         async inspect(workerInstanceId) {
           return { workerInstanceId, ready: true, state: 'ready' }
+        },
+        async health(workerInstanceId) {
+          return {
+            workerInstanceId,
+            ready: true,
+            status: 'ready',
+            state: 'ready',
+            message: 'test backend ready',
+            blockers: [],
+            lastCheckedAt: new Date().toISOString(),
+          }
         },
         async syncConfig(workerInstanceId) {
           return { synced: true, details: { workerInstanceId } }

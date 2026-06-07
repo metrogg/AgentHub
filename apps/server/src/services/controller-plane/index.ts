@@ -38,6 +38,7 @@ export {
   localCliWorkerBackend,
   type WorkerBackend,
   type WorkerBackendEnsureInput,
+  type WorkerBackendHealthResult,
   type WorkerBackendInspectResult,
   type WorkerBackendStartInput,
   type WorkerBackendStopInput,

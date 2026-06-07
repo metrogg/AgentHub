@@ -26,6 +26,17 @@ export interface WorkerBackendInspectResult {
   details?: Record<string, unknown>
 }
 
+export interface WorkerBackendHealthResult {
+  workerInstanceId: string
+  ready: boolean
+  status: 'ready' | 'blocked' | 'unknown'
+  state: string | null
+  message: string | null
+  blockers: string[]
+  lastCheckedAt: string
+  details?: Record<string, unknown>
+}
+
 export interface WorkerBackendEnsureInput {
   workerInstanceId: string
   context: WorkerReconcileContext
@@ -50,6 +61,7 @@ export interface WorkerBackend {
   start(input: WorkerBackendStartInput): Promise<{ started: boolean; details?: Record<string, unknown> }>
   stop(input: WorkerBackendStopInput): Promise<{ stopped: boolean; details?: Record<string, unknown> }>
   inspect(workerInstanceId: string): Promise<WorkerBackendInspectResult>
+  health(workerInstanceId: string): Promise<WorkerBackendHealthResult>
   syncConfig(workerInstanceId: string): Promise<{ synced: boolean; details?: Record<string, unknown> }>
 }
 
@@ -303,6 +315,10 @@ export class LocalCliWorkerBackend implements WorkerBackend {
     }
   }
 
+  async health(workerInstanceId: string): Promise<WorkerBackendHealthResult> {
+    return workerBackendHealthFromInspect(this.id, await this.inspect(workerInstanceId))
+  }
+
   async syncConfig(workerInstanceId: string): Promise<{ synced: boolean; details?: Record<string, unknown> }> {
     const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
     if (isQwenPawRuntimeBase(worker?.runtimeBase)) {
@@ -402,6 +418,43 @@ export class LocalCliWorkerBackend implements WorkerBackend {
 
 export const localCliWorkerBackend = new LocalCliWorkerBackend()
 
+export function workerBackendHealthFromInspect(
+  backendId: string,
+  inspection: WorkerBackendInspectResult,
+): WorkerBackendHealthResult {
+  const detailBlockers = Array.isArray(inspection.details?.blockers)
+    ? inspection.details.blockers.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+  const state = inspection.state ?? null
+  const status =
+    state === 'unknown'
+      ? 'unknown'
+      : inspection.ready
+        ? 'ready'
+        : 'blocked'
+  const blockers = inspection.ready ? detailBlockers : [
+    ...(inspection.message ? [inspection.message] : []),
+    ...detailBlockers,
+  ]
+  return {
+    workerInstanceId: inspection.workerInstanceId,
+    ready: status === 'ready' && inspection.ready && blockers.length === 0,
+    status,
+    state,
+    message:
+      status === 'ready'
+        ? inspection.message ?? 'Worker backend is ready.'
+        : blockers[0] ?? inspection.message ?? 'Worker backend health is unknown.',
+    blockers,
+    lastCheckedAt: new Date().toISOString(),
+    details: {
+      backendId,
+      inspection,
+      ...(inspection.details ?? {}),
+    },
+  }
+}
+
 function isQwenPawRuntimeBase(runtimeBase?: string | null) {
   return runtimeBase === 'qwenpaw' || runtimeBase === 'copaw'
 }
@@ -485,8 +538,8 @@ async function inspectBridgeWorkerBackend(
       contractFiles,
       inspection,
       blockers,
-      parityOperations: ['inspect', 'syncConfig', 'start', 'stop'],
-      missingOperations: ['prepare', 'health'],
+      parityOperations: ['inspect', 'health', 'syncConfig', 'start', 'stop'],
+      missingOperations: ['prepare'],
     },
   }
 }
