@@ -224,6 +224,7 @@ export class WorkerRuntimeService {
 
     const appendedEventIds: string[] = []
     let latestCodeAgentRun: CodeAgentRunMetadata | null = null
+    let lastCodeAgentProgressEventAt = 0
     try {
       const startedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
@@ -239,6 +240,8 @@ export class WorkerRuntimeService {
           runtimeType: codeAgentRuntime ?? runtime.runtimeType,
           workerRuntimeType: runtime.runtimeType,
           codeAgentType: agent.codeAgentType ?? null,
+          hiddenFromChat: true,
+          uiPresentation: 'room-status',
         },
       })
       appendedEventIds.push(startedEvent.id)
@@ -270,6 +273,17 @@ export class WorkerRuntimeService {
         const eventMetadata = asRecordOrNull(event.metadata)
         const eventCodeAgentRun = codeAgentRunMetadataFromRecord(eventMetadata)
         if (eventCodeAgentRun) latestCodeAgentRun = eventCodeAgentRun
+        if (
+          event.type === 'progress' &&
+          shouldThrottleDirectCodeAgentProgress({
+            run: eventCodeAgentRun,
+            message: event.message,
+            lastAppendedAt: lastCodeAgentProgressEventAt,
+          })
+        ) {
+          next = await iterator.next()
+          continue
+        }
         const timelineEvent = await roomService.appendTimelineEvent({
           roomId: room.id,
           senderParticipantId: workerParticipant.id,
@@ -283,7 +297,9 @@ export class WorkerRuntimeService {
             runtimeType: readCodeAgentRuntime(eventMetadata) ?? codeAgentRuntime ?? runtime.runtimeType,
             workerRuntimeType: runtime.runtimeType,
             codeAgentType: agent.codeAgentType ?? null,
-            ...(eventCodeAgentRun ? { hiddenFromChat: true } : {}),
+            ...(event.type === 'progress' || eventCodeAgentRun
+              ? { hiddenFromChat: true, uiPresentation: 'room-status' }
+              : {}),
             ...(event.type === 'progress'
               ? { progressPercent: event.progressPercent }
               : event.type === 'artifact'
@@ -292,6 +308,9 @@ export class WorkerRuntimeService {
           },
         })
         appendedEventIds.push(timelineEvent.id)
+        if (event.type === 'progress' && isThrottleableCodeAgentProgress(eventCodeAgentRun, event.message)) {
+          lastCodeAgentProgressEventAt = Date.now()
+        }
         next = await iterator.next()
       }
 
@@ -311,7 +330,7 @@ export class WorkerRuntimeService {
         body: result.message ?? (result.status === 'completed' ? '执行完成。' : '执行失败。'),
         metadata: {
           ...(resultMetadata ?? {}),
-          kind: 'worker-runtime.completed',
+          kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
           workspaceAgentId: agent.id,
           runtimeType:
@@ -867,10 +886,7 @@ export class WorkerRuntimeService {
               ? '等待用户澄清。'
               : '任务失败。'),
         metadata: {
-          kind:
-            result.status === 'waiting_for_human'
-              ? 'worker-runtime.waiting-for-human'
-              : 'worker-runtime.completed',
+          kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
           workspaceAgentId: agent.id,
           workerInstanceId: thread?.workerInstanceId ?? null,
@@ -1706,6 +1722,13 @@ function terminalSharedTaskTimestamps(status: WorkerRuntimeResult['status']) {
   return { updatedAt: now }
 }
 
+function workerRuntimeTerminalKind(status: WorkerRuntimeResult['status']) {
+  if (status === 'waiting_for_human') return 'worker-runtime.waiting-for-human'
+  if (status === 'cancelled') return 'worker-runtime.cancelled'
+  if (status === 'failed') return 'worker-runtime.failed'
+  return 'worker-runtime.completed'
+}
+
 async function refreshWorkerContractMirror(input: {
   workerInstanceId: string | null
   source: string
@@ -1736,6 +1759,7 @@ function artifactsForRunController(value: unknown) {
 type WorkspaceAgentRow = typeof workspaceAgents.$inferSelect
 type CodeAgentRuntime = CodeAgentRunMetadata['runtime']
 type CodeAgentRunStatus = CodeAgentRunMetadata['status']
+const DIRECT_CODE_AGENT_PROGRESS_MIN_INTERVAL_MS = 15_000
 
 function asRecordOrNull(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -1807,6 +1831,23 @@ function finalizeCodeAgentRunMetadata(input: {
       input.run.exitCode ||
       (status === 'failed' || status === 'timed-out' || status === 'cancelled' ? 1 : 0),
   }
+}
+
+function shouldThrottleDirectCodeAgentProgress(input: {
+  run: CodeAgentRunMetadata | null
+  message: string | undefined
+  lastAppendedAt: number
+}) {
+  if (!isThrottleableCodeAgentProgress(input.run, input.message)) return false
+  if (input.lastAppendedAt <= 0) return false
+  return Date.now() - input.lastAppendedAt < DIRECT_CODE_AGENT_PROGRESS_MIN_INTERVAL_MS
+}
+
+function isThrottleableCodeAgentProgress(
+  run: CodeAgentRunMetadata | null,
+  message: string | undefined,
+) {
+  return run?.status === 'running' && message === 'Worker runtime metadata updated.'
 }
 
 function codeAgentRunStatusFromWorkerStatus(status: WorkerRuntimeResult['status']): CodeAgentRunStatus {

@@ -1,7 +1,12 @@
 import { Hono } from 'hono'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
-import { streamReply } from '../services/llm'
+import {
+  formatLlmTransportError,
+  redactSensitive,
+  resolveLlmRuntimeConfig,
+  type LlmRuntimeConfig,
+} from '../services/llm-client'
 
 interface QuickPromptItem {
   id: string
@@ -38,7 +43,8 @@ async function generateQuickPrompts(seed: string, count: number): Promise<{
   error?: string
 }> {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 45_000)
+  const timeout = setTimeout(() => controller.abort(new Error('quick prompts timeout')), 4_000)
+  let runtimeConfig: LlmRuntimeConfig | null = null
   try {
     const system = [
       '你是 AgentHub 欢迎页的动态提示词生成器。',
@@ -59,11 +65,11 @@ async function generateQuickPrompts(seed: string, count: number): Promise<{
       ],
     })
 
-    let output = ''
-    for await (const delta of streamReply([{ role: 'user', content: prompt }], system, undefined, controller.signal)) {
-      output += delta
-      if (output.length > 10_000) break
+    runtimeConfig = await resolveLlmRuntimeConfig()
+    if (!runtimeConfig.apiKey) {
+      return { items: [], source: 'unavailable', error: 'LLM API Key is not configured.' }
     }
+    const output = await fetchQuickPromptCompletion(runtimeConfig, system, prompt, controller.signal)
 
     const jsonText = extractJsonObject(output)
     if (!jsonText) throw new Error('模型未返回可解析 JSON')
@@ -72,14 +78,143 @@ async function generateQuickPrompts(seed: string, count: number): Promise<{
     if (!items.length) throw new Error('模型返回的快速提示为空')
     return { items, source: 'llm' }
   } catch (error: any) {
-    const message = error?.name === 'AbortError'
+    const message = isQuickPromptTimeout(error)
       ? '快速提示模型生成超时'
-      : error?.message || '快速提示模型生成失败'
+      : runtimeConfig
+        ? redactSensitive(formatLlmTransportError(error, runtimeConfig), [runtimeConfig.apiKey])
+        : error?.message || '快速提示模型生成失败'
     logger.warn({ err: message }, 'Dynamic quick prompts unavailable')
     return { items: [], source: 'unavailable', error: message }
   } finally {
     clearTimeout(timeout)
   }
+}
+
+function isQuickPromptTimeout(error: unknown) {
+  if (!error || typeof error !== 'object') return false
+  const record = error as { message?: unknown; name?: unknown; cause?: unknown }
+  if (record.name === 'AbortError') return true
+  if (typeof record.message === 'string' && /quick prompts timeout|aborted|abort/i.test(record.message)) {
+    return true
+  }
+  return isQuickPromptTimeout(record.cause)
+}
+
+async function fetchQuickPromptCompletion(
+  config: LlmRuntimeConfig,
+  system: string,
+  prompt: string,
+  signal: AbortSignal,
+) {
+  if (isAnthropicQuickPromptRuntime(config)) {
+    return fetchAnthropicQuickPromptCompletion(config, system, prompt, signal)
+  }
+  return fetchOpenAiQuickPromptCompletion(config, system, prompt, signal)
+}
+
+async function fetchOpenAiQuickPromptCompletion(
+  config: LlmRuntimeConfig,
+  system: string,
+  prompt: string,
+  signal: AbortSignal,
+) {
+  const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
+  const response = await globalThis.fetch(url, {
+    method: 'POST',
+    signal,
+    headers: {
+      authorization: `Bearer ${config.apiKey ?? ''}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ],
+      stream: false,
+      temperature: 0.8,
+      max_tokens: 1200,
+    }),
+  })
+
+  if (!response.ok) throw new Error(await formatQuickPromptHttpError(response, url))
+  const body = await response.json().catch(() => null) as {
+    choices?: Array<{ message?: { content?: unknown }; text?: unknown }>
+    output_text?: unknown
+  } | null
+  const content = body?.choices?.[0]?.message?.content ?? body?.choices?.[0]?.text ?? body?.output_text
+  if (typeof content !== 'string') throw new Error('模型未返回文本内容')
+  return content
+}
+
+async function fetchAnthropicQuickPromptCompletion(
+  config: LlmRuntimeConfig,
+  system: string,
+  prompt: string,
+  signal: AbortSignal,
+) {
+  const baseUrl = config.baseUrl.replace(/\/$/, '')
+  const candidateUrls = baseUrl.endsWith('/v1')
+    ? [`${baseUrl}/messages`]
+    : [`${baseUrl}/v1/messages`, `${baseUrl}/messages`]
+  let lastError = ''
+
+  for (const url of candidateUrls) {
+    const response = await globalThis.fetch(url, {
+      method: 'POST',
+      signal,
+      headers: {
+        authorization: `Bearer ${config.apiKey ?? ''}`,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'x-api-key': config.apiKey ?? '',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        system,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 1200,
+      }),
+    })
+
+    if (response.ok) {
+      const body = await response.json().catch(() => null) as {
+        content?: Array<{ text?: unknown }>
+      } | null
+      const content = body?.content
+        ?.map((part) => typeof part.text === 'string' ? part.text : '')
+        .join('')
+      if (typeof content !== 'string') throw new Error('模型未返回文本内容')
+      return content
+    }
+
+    lastError = await formatQuickPromptHttpError(response, url)
+    if (response.status !== 404) break
+  }
+
+  throw new Error(lastError || 'Anthropic-compatible quick prompts request failed.')
+}
+
+function isAnthropicQuickPromptRuntime(config: LlmRuntimeConfig) {
+  const provider = config.provider.toLowerCase()
+  if (provider === 'anthropic' || provider === 'claude') return true
+  try {
+    const url = new URL(config.baseUrl)
+    return url.hostname.includes('anthropic.com') || /\/anthropic\/?$/i.test(url.pathname)
+  } catch {
+    return false
+  }
+}
+
+async function formatQuickPromptHttpError(response: Response, url: string) {
+  const body = await response.text().catch(() => '')
+  const detail = body.trim().slice(0, 400)
+  return [
+    `HTTP ${response.status} ${response.statusText || ''}`.trim(),
+    `URL: ${url}`,
+    detail,
+  ].filter(Boolean).join(' | ')
 }
 
 function normalizePromptItems(

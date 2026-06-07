@@ -1,6 +1,6 @@
 import { gt } from 'drizzle-orm'
 import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, sql, timelineEvents, workspaceAgents } from '@agenthub/db'
-import { MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
+import { MatrixApiError, MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
 import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
 import type {
   AddParticipantInput,
@@ -242,18 +242,26 @@ export class MatrixRoomAdapter implements RoomAdapter {
     if (senderIdentity?.accessToken) {
       await this.ensureSenderJoined(room.providerRoomId, input.senderParticipantId!, senderIdentity.accessToken)
     }
-    const matrixEvent = await this.client().sendTextMessage(
-      room.providerRoomId,
-      input.body ?? '',
-      {
-        senderType: input.senderType,
-        eventType: input.type,
-        senderParticipantId: input.senderParticipantId ?? null,
-        sentAsMatrixUserId: senderIdentity?.userId ?? null,
-        ...(input.metadata ?? {}),
-      },
-      { accessToken: senderIdentity?.accessToken ?? null },
-    )
+    const messageMetadata = {
+      senderType: input.senderType,
+      eventType: input.type,
+      senderParticipantId: input.senderParticipantId ?? null,
+      sentAsMatrixUserId: senderIdentity?.userId ?? null,
+      ...(input.metadata ?? {}),
+    }
+    const sendMessage = () =>
+      this.client().sendTextMessage(
+        room.providerRoomId,
+        input.body ?? '',
+        messageMetadata,
+        { accessToken: senderIdentity?.accessToken ?? null },
+      )
+    const matrixEvent = await this.sendWithMembershipRetry({
+      providerRoomId: room.providerRoomId,
+      participantId: input.senderParticipantId ?? null,
+      accessToken: senderIdentity?.accessToken ?? null,
+      send: sendMessage,
+    })
     const sequenceRows = await db
       .select({ nextSequence: sql<number>`coalesce(max(${timelineEvents.sequence}), 0) + 1` })
       .from(timelineEvents)
@@ -296,26 +304,34 @@ export class MatrixRoomAdapter implements RoomAdapter {
     if (!mentionParticipant?.providerUserId) {
       throw new Error(`Matrix mention target participant is not bound to a Matrix user: ${input.mentionParticipantId}`)
     }
+    const mentionUserId = mentionParticipant.providerUserId
     if (senderIdentity?.accessToken) {
       await this.ensureSenderJoined(room.providerRoomId, input.senderParticipantId!, senderIdentity.accessToken)
     }
-    const matrixEvent = await this.client().sendMentionMessage(
-      room.providerRoomId,
-      {
-        body: input.body ?? '',
-        mentionUserId: mentionParticipant.providerUserId,
-        mentionDisplayName: mentionParticipant.displayName,
-        metadata: {
-          senderType: input.senderType,
-          eventType: input.type,
-          senderParticipantId: input.senderParticipantId ?? null,
-          mentionParticipantId: input.mentionParticipantId,
-          mentionUserId: mentionParticipant.providerUserId,
-          ...(input.metadata ?? {}),
+    const sendMention = () =>
+      this.client().sendMentionMessage(
+        room.providerRoomId,
+        {
+          body: input.body ?? '',
+          mentionUserId,
+          mentionDisplayName: mentionParticipant.displayName,
+          metadata: {
+            senderType: input.senderType,
+            eventType: input.type,
+            senderParticipantId: input.senderParticipantId ?? null,
+            mentionParticipantId: input.mentionParticipantId,
+            mentionUserId,
+            ...(input.metadata ?? {}),
+          },
         },
-      },
-      { accessToken: senderIdentity?.accessToken ?? null },
-    )
+        { accessToken: senderIdentity?.accessToken ?? null },
+      )
+    const matrixEvent = await this.sendWithMembershipRetry({
+      providerRoomId: room.providerRoomId,
+      participantId: input.senderParticipantId ?? null,
+      accessToken: senderIdentity?.accessToken ?? null,
+      send: sendMention,
+    })
     return this.insertLocalTimelineEvent({
       ...input,
       providerEventId: input.providerEventId ?? matrixEvent.event_id,
@@ -420,6 +436,17 @@ export class MatrixRoomAdapter implements RoomAdapter {
         membership.invited = true
       } catch (error) {
         membership.inviteError = (error as Error).message
+        const fallbackInvite = await this.inviteUserFromJoinedParticipant({
+          roomId: room.id,
+          providerRoomId: room.providerRoomId,
+          targetUserId: participant.providerUserId,
+        })
+        if (fallbackInvite.invited) {
+          membership.invited = true
+          membership.invitedWithParticipantToken = true
+        } else if (fallbackInvite.error) {
+          membership.fallbackInviteError = fallbackInvite.error
+        }
       }
     }
     if (client.shouldAutoJoinParticipants() && identity?.accessToken) {
@@ -434,7 +461,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
     await db
       .update(roomParticipants)
       .set({
-        status: membership.joined ? 'joined' : membership.invited ? 'invited' : participant.status,
+        status: membership.joined ? 'joined' : membership.invited ? 'invited' : 'left',
         metadata: {
           ...(participant.metadata ?? {}),
           ...participantMetadata,
@@ -445,17 +472,160 @@ export class MatrixRoomAdapter implements RoomAdapter {
       .where(eq(roomParticipants.id, participant.id))
   }
 
-  private async ensureSenderJoined(providerRoomId: string, participantId: string, accessToken: string) {
+  private async sendWithMembershipRetry<T>(input: {
+    providerRoomId: string
+    participantId: string | null
+    accessToken: string | null
+    send: () => Promise<T>
+  }) {
+    try {
+      return await input.send()
+    } catch (error) {
+      if (!isSenderMembershipLeaveError(error) || !input.participantId || !input.accessToken) {
+        throw error
+      }
+      await this.ensureSenderJoined(input.providerRoomId, input.participantId, input.accessToken, {
+        forceInvite: true,
+      })
+      return input.send()
+    }
+  }
+
+  private async ensureSenderJoined(
+    providerRoomId: string,
+    participantId: string,
+    accessToken: string,
+    options: { forceInvite?: boolean } = {},
+  ) {
     const [participant] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participantId)).limit(1)
     if (!participant) return
-    if (participant.status === 'joined') return
     const client = this.client()
+    const membership: Record<string, unknown> = {
+      ...(participant.metadata?.matrixMembership && typeof participant.metadata.matrixMembership === 'object'
+        ? (participant.metadata.matrixMembership as Record<string, unknown>)
+        : {}),
+      provider: 'matrix',
+      providerRoomId,
+      providerUserId: participant.providerUserId ?? null,
+      senderJoinCheckedAt: new Date().toISOString(),
+    }
     try {
       await client.joinRoom(providerRoomId, accessToken)
-      await db.update(roomParticipants).set({ status: 'joined', updatedAt: new Date() }).where(eq(roomParticipants.id, participantId))
-    } catch {
+      await db
+        .update(roomParticipants)
+        .set({
+          status: 'joined',
+          metadata: {
+            ...(participant.metadata ?? {}),
+            matrixMembership: {
+              ...membership,
+              joined: true,
+              joinedWithParticipantToken: true,
+              senderJoinError: null,
+            },
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(roomParticipants.id, participantId))
+      return
+    } catch (firstError) {
+      if (options.forceInvite && participant.providerUserId) {
+        try {
+          await client.inviteUser(providerRoomId, participant.providerUserId)
+        } catch (inviteError) {
+          const fallbackInvite = await this.inviteUserFromJoinedParticipant({
+            roomId: participant.roomId,
+            providerRoomId,
+            targetUserId: participant.providerUserId,
+          })
+          if (!fallbackInvite.invited) {
+            membership.inviteError = (inviteError as Error).message
+            if (fallbackInvite.error) membership.fallbackInviteError = fallbackInvite.error
+          }
+        }
+        try {
+          await client.joinRoom(providerRoomId, accessToken)
+          await db
+            .update(roomParticipants)
+            .set({
+              status: 'joined',
+              metadata: {
+                ...(participant.metadata ?? {}),
+                matrixMembership: {
+                  ...membership,
+                  invitedForSenderJoin: true,
+                  joined: true,
+                  joinedWithParticipantToken: true,
+                  senderJoinError: null,
+                },
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(roomParticipants.id, participantId))
+          return
+        } catch (secondError) {
+          await db
+            .update(roomParticipants)
+            .set({
+              status: 'left',
+              metadata: {
+                ...(participant.metadata ?? {}),
+                matrixMembership: {
+                  ...membership,
+                  joined: false,
+                  senderJoinError: (secondError as Error).message,
+                },
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(roomParticipants.id, participantId))
+          return
+        }
+      }
+      await db
+        .update(roomParticipants)
+        .set({
+          status: 'left',
+          metadata: {
+            ...(participant.metadata ?? {}),
+            matrixMembership: {
+              ...membership,
+              joined: false,
+              senderJoinError: (firstError as Error).message,
+            },
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(roomParticipants.id, participantId))
       // best-effort: if join fails, the send attempt will surface the real error
     }
+  }
+
+  private async inviteUserFromJoinedParticipant(input: {
+    roomId: string
+    providerRoomId: string
+    targetUserId: string
+  }) {
+    const participants = await db
+      .select()
+      .from(roomParticipants)
+      .where(eq(roomParticipants.roomId, input.roomId))
+    let lastError: string | null = null
+    for (const participant of participants) {
+      if (!participant.providerUserId || participant.providerUserId === input.targetUserId) continue
+      if (!matrixMembershipJoined(participant.metadata)) continue
+      const identity = await this.getIdentityByUserId(participant.providerUserId)
+      if (!identity?.accessToken) continue
+      try {
+        await this.client().inviteUser(input.providerRoomId, input.targetUserId, {
+          accessToken: identity.accessToken,
+        })
+        return { invited: true, error: null }
+      } catch (error) {
+        lastError = (error as Error).message
+      }
+    }
+    return { invited: false, error: lastError }
   }
 
   private async getIdentityForSenderParticipant(participantId: string) {
@@ -541,6 +711,20 @@ function readMatrixMetadata(metadata: Record<string, unknown> | null | undefined
   const matrix = metadata?.matrix
   if (!matrix || typeof matrix !== 'object' || Array.isArray(matrix)) return {}
   return matrix as Record<string, unknown>
+}
+
+function matrixMembershipJoined(metadata: Record<string, unknown> | null | undefined) {
+  const membership = metadata?.matrixMembership
+  if (!membership || typeof membership !== 'object' || Array.isArray(membership)) return false
+  return (membership as Record<string, unknown>).joined === true
+}
+
+function isSenderMembershipLeaveError(error: unknown) {
+  if (!(error instanceof MatrixApiError)) return false
+  return (
+    error.status === 403 &&
+    /sender'?s membership|membership `?leave`?|is not `?join`?|M_FORBIDDEN/i.test(error.responseBody)
+  )
 }
 
 async function resolveWorkspaceManagerAgent(workspaceId: string) {

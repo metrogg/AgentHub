@@ -129,11 +129,8 @@ describe('room timeline projection', () => {
       ],
     })
 
-    expect(projection.messages.map((message) => message.id)).toEqual([
-      'room:event-started',
-      'room:event-completed',
-    ])
-    expect(projection.messages[1]?.metadata?.codeAgentRun).toMatchObject({
+    expect(projection.messages.map((message) => message.id)).toEqual(['room:event-completed'])
+    expect(projection.messages[0]?.metadata?.codeAgentRun).toMatchObject({
       type: 'code-agent-run',
       status: 'completed',
       runtime: 'opencode',

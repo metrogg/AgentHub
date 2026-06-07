@@ -304,7 +304,7 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('LLM runtime uses OpenAI-compatible endpoint for ccswitch models with an auxiliary Anthropic endpoint', async () => {
-    for (const key of ['MODEL_CATALOG', 'ACTIVE_MODEL_ID']) {
+    for (const key of ['MODEL_CATALOG', 'ACTIVE_MODEL_ID', 'INTERNAL_LLM_DEFAULT_MODEL_ID']) {
       await dbApi.db.delete(dbApi.settings).where(dbApi.eq(dbApi.settings.key, key))
     }
     await dbApi.db.insert(dbApi.settings).values([
@@ -334,6 +334,68 @@ describe('AgentHub smoke tests', () => {
     expect(config.provider).toBe('mimo')
     expect(config.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/v1')
     expect(config.model).toBe('mimo-v2.5-pro')
+  })
+
+  test('welcome quick prompts degrade when the internal LLM endpoint has a TLS certificate error', async () => {
+    for (const key of ['MODEL_CATALOG', 'ACTIVE_MODEL_ID', 'INTERNAL_LLM_DEFAULT_MODEL_ID']) {
+      await dbApi.db.delete(dbApi.settings).where(dbApi.eq(dbApi.settings.key, key))
+    }
+    await dbApi.db.insert(dbApi.settings).values([
+      {
+        key: 'MODEL_CATALOG',
+        value: JSON.stringify([
+          {
+            id: 'ccswitch-Xiaomi MiMo',
+            enabled: true,
+            name: 'Xiaomi MiMo',
+            provider: 'anthropic',
+            modelId: 'mimo-v2.5-pro',
+            apiEndpoint: 'https://token-plan-cn.xiaomimimo.com/v1',
+            anthropicEndpoint: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+            apiKey: 'sk-test-quick-prompts',
+          },
+        ]),
+      },
+      {
+        key: 'ACTIVE_MODEL_ID',
+        value: 'ccswitch-Xiaomi MiMo',
+      },
+    ])
+
+    let llmCalls = 0
+    globalThis.fetch = async (input, init) => {
+      const url = fetchInputUrl(input)
+      if (url === 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions') {
+        llmCalls += 1
+        const error = new Error('unknown certificate verification error') as Error & {
+          code?: string
+          path?: string
+        }
+        error.code = 'UNKNOWN_CERTIFICATE_VERIFICATION_ERROR'
+        error.path = url
+        throw error
+      }
+      return globalMockedFetch(input, init)
+    }
+
+    try {
+      const startedAt = Date.now()
+      const result = await json<{
+        items: unknown[]
+        source: 'llm' | 'unavailable'
+        error?: string
+      }>(await postJson('/api/welcome/quick-prompts', { seed: 'tls-test', count: 6 }))
+
+      expect(Date.now() - startedAt).toBeLessThan(5_000)
+      expect(llmCalls).toBe(1)
+      expect(result.source).toBe('unavailable')
+      expect(result.items).toEqual([])
+      expect(result.error).toContain('TLS 证书校验失败')
+      expect(result.error).toContain('token-plan-cn.xiaomimimo.com')
+      expect(result.error).not.toContain('sk-test-quick-prompts')
+    } finally {
+      globalThis.fetch = globalMockedFetch
+    }
   })
 
   test('database enforces collaboration foreign keys', () => {
@@ -410,6 +472,40 @@ describe('AgentHub smoke tests', () => {
 
     expect(message.content).toBe('hello smoke')
     expect(list.items.map((item) => item.id)).toContain(message.id)
+  })
+
+  test('resending an edited room-first user message appends a new human message', async () => {
+    const session = await json<{ id: string; title: string }>(
+      await postJson('/api/sessions', { title: 'Smoke resend chat', type: 'direct' }),
+    )
+    const original = await json<{ id: string; content: string }>(
+      await postJson(`/api/messages/${session.id}`, {
+        content: 'original resend text',
+        type: 'text',
+      }),
+    )
+
+    const edited = await json<{ id: string; content: string }>(
+      await app.request(`/api/messages/${session.id}/${original.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: 'edited resend text' }),
+      }),
+    )
+    const resent = await json<{
+      removedMessageIds: string[]
+      message: { id: string; content: string; metadata?: Record<string, unknown> | null }
+    }>(await postJson(`/api/messages/${session.id}/${original.id}/resend`, {}))
+    const list = await json<{ items: Array<{ id: string; content: string }> }>(
+      await app.request(`/api/messages/${session.id}`),
+    )
+
+    expect(edited.content).toBe('edited resend text')
+    expect(resent.removedMessageIds).toEqual([])
+    expect(resent.message.id).not.toBe(original.id)
+    expect(resent.message.content).toBe('edited resend text')
+    expect(resent.message.metadata?.resentFromMessageId).toBe(original.id)
+    expect(list.items.map((item) => item.content)).toContain('edited resend text')
   })
 
   test('development reset clears application data and reseeds the default user', async () => {

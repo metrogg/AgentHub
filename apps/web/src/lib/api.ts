@@ -1974,7 +1974,7 @@ export const api = {
       method: 'POST',
     }),
   resendMessage: (sessionId: string, messageId: string) =>
-    request<{ removedMessageIds: string[] }>(`/messages/${sessionId}/${messageId}/resend`, {
+    request<{ removedMessageIds: string[]; message?: Message }>(`/messages/${sessionId}/${messageId}/resend`, {
       method: 'POST',
     }),
   pinMessage: (sessionId: string, messageId: string) =>
