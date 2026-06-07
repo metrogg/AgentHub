@@ -3705,7 +3705,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
                       resolvedSnapshot.taskBoard,
                     )
                   : upsertSessionList(s.sessions, session),
-                messages: normalizedMessages,
+                // Merge instead of replace: preserve any in-flight streaming message
+                // that hasn't been persisted to the server yet.
+                messages: s.streamingMessage
+                  ? mergeMessages(normalizedMessages, s.messages.filter((m) => m.id === s.streamingMessage!.id))
+                  : normalizedMessages,
                 ...(resolvedSnapshot
                   ? {
                       taskBoard: resolvedSnapshot.taskBoard,
