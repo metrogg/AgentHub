@@ -130,17 +130,17 @@ if (residentManagerAutoStartEnabled && (provider.runtimeType === 'openclaw' || p
   if ((!status.running || status.error) && !status.endpoint) {
     logger.info({ runtimeType: provider.runtimeType, controllerPort: runtimePort }, 'Starting resident Manager process...')
     if (!provider.ensureStarted) {
-      logger.error('Provider does not support ensureStarted; Manager is unavailable.')
-      process.exit(1)
-    }
-    const result = await provider.ensureStarted()
-    if (result.error) {
-      logger.error(
-        { error: result.error, runtimeType: provider.runtimeType },
-        'FATAL: Resident Manager failed to start. AgentHub cannot coordinate without a Manager. ' +
-          'Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_MANAGER_RUNTIME correctly.',
-      )
-      process.exit(1)
+      logger.warn('Provider does not support ensureStarted; Manager is unavailable. AgentHub will start without a resident Manager.')
+    } else {
+      const result = await provider.ensureStarted()
+      if (result.error) {
+        logger.warn(
+          { error: result.error, runtimeType: provider.runtimeType },
+          'Resident Manager failed to start. AgentHub is running without a Manager — install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_MANAGER_RUNTIME correctly.',
+        )
+      } else {
+        logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
+      }
     }
     logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
   } else {

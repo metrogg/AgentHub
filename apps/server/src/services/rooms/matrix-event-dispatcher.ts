@@ -48,6 +48,14 @@ export interface MatrixRoomEventDispatcherHandlers {
     afterSequence: number
     source: string
   }): Promise<unknown>
+  runDirectRoom?(input: {
+    roomId: string
+    ownerId: string
+    workspaceAgentId: string
+    prompt?: string
+    signal?: AbortSignal
+    overrides?: { sandboxPolicy?: string; approvalRequired?: boolean }
+  }): Promise<unknown>
   cancelTaskRoom?(input: {
     roomId: string
     ownerId: string
@@ -148,6 +156,7 @@ export class MatrixRoomEventDispatcher {
         }
         return { consumed: false, skipped: true, reason: 'no-resident-manager-provider' }
       },
+      runDirectRoom: (input) => workerRuntimeService.runDirectRoom(input),
       cancelTaskRoom: (input) => cancelTaskRoomFromMatrix(input),
       recordApprovalControl: (input) => recordApprovalControlFromMatrix(input),
       resumeTaskRoomAfterHumanAnswer: (input) =>
