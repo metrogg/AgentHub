@@ -329,6 +329,8 @@ Manager skill 的目标形态是：
 
 OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心跳；Claude/OpenCode/Codex/Gemini bridge runtime 从 CLI 子进程、session bridge 和 WorkerRuntime heartbeat 得到心跳。ManagerPatrol 只消费这些统一字段，不直接猜某个 CLI 的内部状态。
 
+长任务的 heartbeat 是观察信号，不是单独的失败判据。缺 heartbeat 会触发 warning、Patrol 和 Manager skill 观察；真正失败应来自 runtime 退出、Worker 明确 `BLOCKED`、用户取消、Controller recovery policy，或 Manager 在 Room/Lease/SharedStorage 证据充分后采取的恢复动作。
+
 ## 与 HiClaw 的取舍
 
 直接学习：
@@ -370,6 +372,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 进展：新增 `ensureWorkerAgentContractFromController()`，Worker 也像 Manager 一样能从 Controller/DB 统一重建 contract 镜像。它会读取 WorkerInstance、WorkspaceAgent、Matrix identity、Room participant、TaskThread、RuntimeLease 和 WorkspaceTask，组装 currentRooms/currentTasks 后刷新 `rooms.json / tasks.json / state.json`。MemberReconciler、本机 OpenClaw backend、Docker OpenClaw backend 已切到这个入口，不再各自从 OpenClaw room config 或局部查询手拼 contract。
    - 进展：Bridge / service-managed Worker 在 task room 运行结束后会再次调用 `ensureWorkerAgentContractFromController()`，把 completed / waiting_for_human / failed、RuntimeLease release/waiting/fail 和 task room 状态刷新进本地 `tasks.json / state.json`。这样 Worker 与 Manager 后续读取的 contract mirror 不再停留在执行开始时。
    - 进展：WorkerRuntime heartbeat 现在会轻量更新 Worker 本地 `state.json.heartbeat.lastHeartbeatAt`，task room start/result 也会写入 `lastTaskStartedAt / lastTaskCompletedAt / lastError`。这让 bridge/service-managed Worker 具备和 resident Worker 更接近的本地 heartbeat mirror，而不是只有 DB 和 Room timeline 有心跳。
+   - 进展：WorkerController 的 heartbeat 监督已改成 warning-first。busy Worker 长时间没有 heartbeat 时，Controller 会保留 `busy` 状态、写入 `health.staleHeartbeat/staleReason`，并发 `manager.next_action` warning 让 Manager/Patrol 检查 task room、RuntimeLease、shared result 和 runtime health；不会只因为时间到了就停 listener、stale lease 或发 `task.failed`。
    - Manager contract 已统一生成 `runtime.json`、`SOUL.md`、`AGENTS.md`、`TOOLS.md`、`HEARTBEAT.md`、`skills/`、`memory/`、`workers-registry.json`、`teams-registry.json`、`humans-registry.json`、`state.json`、`rooms.json`、`logs/`，并镜像到 OpenClaw `agentDir`。
    - 进展：Manager `runtime.json` 现在同时记录 `runtimeContract`。OpenClaw Manager 被明确描述为 Node.js gateway mode，QwenPaw Manager 被明确描述为 Python workspace mode；两者共享同一组 `SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / registry / state / rooms / heartbeat / reconcile` 能力契约。Manager `AGENTS.md` 注入块会同步写入 runtime profile、Manager Reconcile 5 阶段、Member Reconcile 5 阶段、Worker Reconcile 5 阶段和 Controller skill surface，避免后续再把 OpenClaw/QwenPaw 当成两个互不相干的入口。
    - 新增 `ensureManagerAgentContractFromController()`：Manager 启动前会从 Controller/DB 同步 active rooms、WorkerInstance、WorkspaceAgent、Matrix identity、Room participant、RuntimeLease、Human participant 和 active runs，刷新 `workers-registry.json / humans-registry.json / rooms.json / state.json`，不再只是空 registry 文件。

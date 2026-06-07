@@ -33,6 +33,9 @@ export interface WorkerReconcileContext {
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 /** Maximum number of idle workers to stop in a single reconcile pass. */
 const MAX_IDLE_STOP_BATCH = 10
+/** HiClaw-lite supervision warns on stale heartbeat before declaring failure. */
+const INITIAL_HEARTBEAT_WARN_MS = Number(process.env.AGENTHUB_WORKER_INITIAL_HEARTBEAT_WARN_MS ?? 10 * 60 * 1000)
+const STALE_HEARTBEAT_WARN_MS = Number(process.env.AGENTHUB_WORKER_STALE_HEARTBEAT_WARN_MS ?? 15 * 60 * 1000)
 
 interface PhaseResult {
   changed: boolean
@@ -449,11 +452,12 @@ export class WorkerController {
 
   /**
    * Phase 3: ObserveHealth — like HiClaw's heartbeat monitoring.
-   * Detects stale workers, failed runtimes, and transitions to failed state
-   * when the worker hasn't sent a heartbeat within the expected window.
+   * Detects stale heartbeat signals and makes them visible without
+   * declaring the Worker failed on timing alone.
    *
-   * Only applies when the worker has been running long enough to expect a
-   * heartbeat. Freshly started workers without a heartbeat yet are not failed.
+   * Long coding work can be quiet. Actual failure should come from runtime
+   * exit, explicit Worker protocol messages, cancellation, or Manager recovery
+   * policy after inspecting the task room, lease, shared result, and heartbeat.
    */
   private async observeHealth(
     worker: WorkerInstanceRow,
@@ -463,78 +467,54 @@ export class WorkerController {
       return { changed: false }
     }
 
-    // If the worker has never sent a heartbeat, check how long it's been busy
     if (!worker.lastHeartbeatAt) {
-      // Allow a grace period before expecting heartbeats
       const busyDurationMs = Date.now() - worker.updatedAt.getTime()
-      const GRACE_PERIOD_MS = 2 * 60 * 1000 // 2 minutes
-      if (busyDurationMs < GRACE_PERIOD_MS) {
+      if (busyDurationMs < INITIAL_HEARTBEAT_WARN_MS) {
         return { changed: false }
       }
-      // Worker has been busy for too long without a single heartbeat
-      const message = `Worker has been busy for ${Math.round(busyDurationMs / 1000)}s without a heartbeat. Marking as failed.`
-      await markWorkerInstanceState(worker.id, 'failed', {
+      if (worker.health?.staleHeartbeat === true && worker.health?.staleReason === 'worker_initial_heartbeat_missing') {
+        return { changed: false }
+      }
+      const message = `Worker has been busy for ${Math.round(busyDurationMs / 1000)}s without an initial heartbeat. Keeping the Worker busy and asking Manager/Patrol to inspect progress.`
+      await markWorkerInstanceState(worker.id, 'busy', {
         message,
         health: {
           ...worker.health,
           staleHeartbeat: true,
+          staleReason: 'worker_initial_heartbeat_missing',
           busyDurationMs,
           detectedAt: new Date().toISOString(),
         },
       })
-      await stopMatrixWorkerListeners(worker.id)
-      await this.staleActiveLease(worker, message)
-      await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_no_initial_heartbeat')
-      return { changed: true, error: message }
+      await this.emitWorkerHeartbeatWarningEvent(worker, ctx, message, 'worker_initial_heartbeat_missing')
+      return { changed: true }
     }
 
     const heartbeatAgeMs = Date.now() - worker.lastHeartbeatAt.getTime()
 
-    // If no heartbeat for 5 minutes while busy, worker is likely dead
-    const STALE_THRESHOLD_MS = 5 * 60 * 1000
-    if (heartbeatAgeMs > STALE_THRESHOLD_MS) {
-      const message = `Worker has not sent a heartbeat for ${Math.round(heartbeatAgeMs / 1000)}s while busy. Marking as failed.`
-      await markWorkerInstanceState(worker.id, 'failed', {
+    if (heartbeatAgeMs > STALE_HEARTBEAT_WARN_MS) {
+      if (worker.health?.staleHeartbeat === true && worker.health?.staleReason === 'worker_heartbeat_stale') {
+        return { changed: false }
+      }
+      const message = `Worker has not sent a heartbeat for ${Math.round(heartbeatAgeMs / 1000)}s while busy. Keeping the Worker busy and asking Manager/Patrol to inspect progress.`
+      await markWorkerInstanceState(worker.id, 'busy', {
         message,
         health: {
           ...worker.health,
           staleHeartbeat: true,
+          staleReason: 'worker_heartbeat_stale',
           lastHeartbeatAgeMs: heartbeatAgeMs,
           detectedAt: new Date().toISOString(),
         },
       })
-      await stopMatrixWorkerListeners(worker.id)
-      await this.staleActiveLease(worker, message)
-      await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_heartbeat_lost')
-      return { changed: true, error: message }
+      await this.emitWorkerHeartbeatWarningEvent(worker, ctx, message, 'worker_heartbeat_stale')
+      return { changed: true }
     }
 
     return { changed: false }
   }
 
-  private async staleActiveLease(
-    worker: WorkerInstanceRow,
-    reason: string,
-  ): Promise<void> {
-    const [activeLease] = await db
-      .select()
-      .from(runtimeLeases)
-      .where(
-        and(
-          eq(runtimeLeases.workerInstanceId, worker.id),
-          eq(runtimeLeases.status, 'running'),
-        ),
-      )
-      .limit(1)
-    if (activeLease) {
-      await runtimeLeaseController.markStale(activeLease.id, {
-        error: reason,
-        metadata: { staleReason: 'heartbeat_lost' },
-      })
-    }
-  }
-
-  private async emitWorkerFailedEvent(
+  private async emitWorkerHeartbeatWarningEvent(
     worker: WorkerInstanceRow,
     ctx: WorkerReconcileContext,
     message: string,
@@ -547,13 +527,15 @@ export class WorkerController {
         groupSessionId: ctx.groupSessionId,
         workerInstanceId: worker.id,
         agentId: ctx.actorId ?? null,
-        type: 'task.failed',
-        severity: 'error',
+        type: 'manager.next_action',
+        severity: 'warning',
         payload: {
+          action: 'worker_heartbeat_stale',
           taskId: ctx.taskId ?? null,
-          error: message,
           reason,
+          message,
           workerInstanceId: worker.id,
+          runtimeBase: worker.runtimeBase,
         },
       })
     }
