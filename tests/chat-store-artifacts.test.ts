@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { Message, OrchestratorRunListItem, Session } from '../apps/web/src/lib/api'
+import type { Message, OrchestratorRunListItem, Room, RoomParticipant, Session, TimelineEvent } from '../apps/web/src/lib/api'
 import { SessionType } from '../apps/web/src/lib/api'
 import { MessageType, OrchestratorRunStatus, SenderType } from '../packages/shared/src/index'
 import { __chatStoreTestHooks } from '../apps/web/src/stores/chatStore'
@@ -47,6 +47,108 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'typ
 }
 
 describe('chat store artifact snapshot projection', () => {
+  test('direct room worker-runtime events drive a single live code-agent run card', () => {
+    const directRoom: Room = {
+      id: 'direct-room-1',
+      provider: 'matrix',
+      providerRoomId: '!direct:test.agenthub',
+      kind: 'direct',
+      ownerId: 'user-1',
+      workspaceId: 'workspace-1',
+      sessionId: 'direct-session-1',
+      runId: null,
+      taskId: null,
+      taskThreadId: null,
+      title: 'Direct Builder',
+      topic: null,
+      status: 'active',
+      metadata: {},
+      createdAt: '2026-06-03T00:00:00.000Z',
+      updatedAt: '2026-06-03T00:00:00.000Z',
+    }
+    const worker: RoomParticipant = {
+      id: 'participant-worker-1',
+      roomId: directRoom.id,
+      providerUserId: '@worker-builder:local.agenthub',
+      participantType: 'worker',
+      userId: null,
+      workspaceAgentId: 'agent-1',
+      workerInstanceId: null,
+      displayName: 'Direct Builder',
+      role: 'member',
+      status: 'joined',
+      metadata: {},
+      joinedAt: '2026-06-03T00:00:00.000Z',
+      updatedAt: '2026-06-03T00:00:00.000Z',
+    }
+    const liveEvent: TimelineEvent = {
+      id: 'event-live',
+      roomId: directRoom.id,
+      providerEventId: '$event-live',
+      senderParticipantId: worker.id,
+      senderType: 'worker',
+      type: 'task.progress',
+      sequence: 1,
+      body: 'Worker runtime metadata updated.',
+      metadata: {
+        kind: 'worker-runtime.progress',
+        hiddenFromChat: true,
+        type: 'code-agent-run',
+        status: 'running',
+        runtime: 'opencode',
+        command: 'opencode run',
+        durationMs: 10,
+        exitCode: 0,
+        commands: [],
+        files: [],
+      },
+      createdAt: '2026-06-03T00:00:00.000Z',
+    }
+
+    const running = __chatStoreTestHooks.applyDirectRoomRuntimeProjection(
+      {
+        agentTyping: true,
+        agentActivity: null,
+        streamingMessage: null,
+        streamingCodeAgentRun: null,
+      },
+      {
+        room: directRoom,
+        event: liveEvent,
+        participantsById: new Map([[worker.id, worker]]),
+      },
+    )
+
+    expect(running.agentTyping).toBe(false)
+    expect(running.streamingMessage?.agentName).toBe('Direct Builder')
+    expect(running.streamingCodeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: 'opencode',
+      command: 'opencode run',
+    })
+
+    const completed = __chatStoreTestHooks.applyDirectRoomRuntimeProjection(running, {
+      room: directRoom,
+      event: {
+        ...liveEvent,
+        id: 'event-completed',
+        type: 'worker.message',
+        sequence: 2,
+        body: 'done',
+        metadata: {
+          kind: 'worker-runtime.completed',
+          status: 'completed',
+          runtimeType: 'opencode',
+        },
+      },
+      participantsById: new Map([[worker.id, worker]]),
+    })
+
+    expect(completed.streamingMessage).toBeNull()
+    expect(completed.streamingCodeAgentRun).toBeNull()
+  })
+
   test('hydrates summary message artifacts and delivery cards from resource snapshot canonical artifacts', () => {
     const messages = [
       message({

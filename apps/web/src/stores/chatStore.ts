@@ -18,6 +18,7 @@ import {
 } from '../lib/api'
 import {
   applyRoomTimelineMessageControl,
+  codeAgentRunFromWorkerRuntimeEvent,
   projectRoomTimeline,
   type RoomTimelineProjection,
 } from '../lib/roomTimeline'
@@ -1248,6 +1249,63 @@ function applyLiveMessageMetadataProjection(
   }
 }
 
+function applyDirectRoomRuntimeProjection(
+  current: LiveRuntimeProjection,
+  input: {
+    room: Room
+    event: TimelineEvent
+    participantsById: Map<string, RoomParticipant>
+  },
+): LiveRuntimeProjection {
+  if (input.room.kind !== 'direct') return current
+  const run = codeAgentRunFromWorkerRuntimeEvent(input.event)
+  if (!run) return current
+  if (run.status !== 'running') return clearLiveRuntimeProjection()
+
+  const metadata = asRecord(input.event.metadata)
+  const participant = input.event.senderParticipantId
+    ? input.participantsById.get(input.event.senderParticipantId)
+    : undefined
+  const agentName =
+    asString(metadata?.agentName) ??
+    asString(metadata?.senderName) ??
+    participant?.displayName ??
+    'Agent'
+
+  return {
+    ...clearRuntimeActivity(),
+    streamingMessage: {
+      id: `room-runtime:${input.event.id}`,
+      content: '',
+      agentId:
+        asString(metadata?.workspaceAgentId) ??
+        participant?.workspaceAgentId ??
+        input.event.senderParticipantId ??
+        undefined,
+      agentName,
+    },
+    streamingCodeAgentRun: mergeCodeAgentRuns(current.streamingCodeAgentRun, run),
+  }
+}
+
+function mergeCodeAgentRuns(
+  current: CodeAgentRunMetadata | null,
+  next: CodeAgentRunMetadata,
+): CodeAgentRunMetadata {
+  if (!current || current.runtime !== next.runtime) return next
+  return {
+    ...current,
+    ...next,
+    commands: next.commands.length ? next.commands : current.commands,
+    files: next.files.length ? next.files : current.files,
+    toolCalls: next.toolCalls?.length ? next.toolCalls : current.toolCalls,
+    artifacts: next.artifacts?.length ? next.artifacts : current.artifacts,
+    logs: next.logs?.length ? next.logs : current.logs,
+    steps: next.steps?.length ? next.steps : current.steps,
+    finalMessage: next.finalMessage ?? current.finalMessage,
+  }
+}
+
 function reduceRuntimeActivityProjection(
   current: RuntimeActivityProjection,
   event: AgUiEventPayload,
@@ -2356,6 +2414,7 @@ function applyResourceSnapshotToTaskBoard(
 export const __chatStoreTestHooks = {
   applyCanonicalArtifactsToSummaryMessages,
   applyAgUiEventToState,
+  applyDirectRoomRuntimeProjection,
   applyAgUiRunStatus,
   applyTaskBoardRunStatus,
   applyResourceSnapshotToTaskBoard,
@@ -3654,6 +3713,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
               messages: mergeMessages(s.messages, projectedMessages),
             }))
           }
+        }
+        if (projectedSessionId === sessionId) {
+          set((s) =>
+            applyDirectRoomRuntimeProjection(
+              {
+                agentTyping: s.agentTyping,
+                agentActivity: s.agentActivity,
+                streamingMessage: s.streamingMessage,
+                streamingCodeAgentRun: s.streamingCodeAgentRun,
+              },
+              {
+                room: projected.projection.room,
+                event: ((e.payload ?? {}) as RoomTimelineWsPayload).event!,
+                participantsById: projected.projection.participantsById,
+              },
+            ),
+          )
         }
         if (roomTimelineShouldRefreshResources(projected.projection, projectedSessionId, sessionId)) {
           scheduleSessionRefresh(async () => {
