@@ -3300,6 +3300,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           s.messages.filter((message) => message.id !== optimisticId),
           msg,
         ),
+        // Clear typing indicator only if no WS stream has started yet
+        ...(s.streamingMessage || s.streamingCodeAgentRun ? {} : { agentTyping: false, agentActivity: null }),
       }))
       await get().fetchSessions()
     } catch (error) {
