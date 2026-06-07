@@ -182,14 +182,14 @@ describe('room timeline projection', () => {
       ],
     })
 
-    expect(projection.messages).toHaveLength(2)
+    expect(projection.messages).toHaveLength(1)
     expect(projection.messages[0]?.senderType).toBe(SenderType.Agent)
     expect(projection.messages[0]?.type).toBe(MessageType.Text)
     expect(projection.messages[0]?.metadata?.agentName).toBe('Builder')
     expect(projection.messages[0]?.metadata?.roomTimeline).toMatchObject({
       roomId: 'room-1',
-      sequence: 1,
-      eventType: 'task.progress',
+      sequence: 2,
+      eventType: 'artifact.created',
     })
 
     expect(projection.events).toHaveLength(2)
@@ -246,8 +246,7 @@ describe('room timeline projection', () => {
       ],
     })
 
-    expect(projection.messages).toHaveLength(1)
-    expect(projection.messages[0]?.content).toBe('Builder 已接单。')
+    expect(projection.messages).toHaveLength(0)
     expect(projection.events).toHaveLength(1)
     expect(projection.events[0]).toMatchObject({
       type: 'CUSTOM',
@@ -307,7 +306,7 @@ describe('room timeline projection', () => {
       ],
     })
 
-    expect(projection.messages).toHaveLength(2)
+    expect(projection.messages).toHaveLength(1)
     expect(projection.messages[0]?.content).toBe('需要确认报告口径吗？')
     expect(projection.events).toHaveLength(2)
     expect(projection.events[0]).toMatchObject({
@@ -486,7 +485,7 @@ describe('room timeline projection', () => {
       ],
     })
 
-    expect(projection.messages).toHaveLength(2)
+    expect(projection.messages).toHaveLength(0)
     expect(projection.events).toHaveLength(2)
     expect(projection.events[0]).toMatchObject({
       name: 'agenthub.task.status',
