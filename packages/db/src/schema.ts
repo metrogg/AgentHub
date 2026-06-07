@@ -112,6 +112,7 @@ export interface AgentArtifact {
   description?: string
   source?: string
   createdAt?: string
+  workspaceId?: string | null
   // diff
   filePath?: string
   status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'

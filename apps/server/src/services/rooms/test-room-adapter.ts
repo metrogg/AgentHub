@@ -52,7 +52,38 @@ export class TestRoomAdapter implements RoomAdapter {
 
   async ensureRoomForSession(input: EnsureRoomForSessionInput) {
     const [existing] = await db.select().from(rooms).where(eq(rooms.sessionId, input.sessionId)).limit(1)
-    if (existing) return existing
+    if (existing) {
+      const expectedKind = roomKindForSession(input)
+      const expectedCompatibility = {
+        source: 'session',
+        sessionType: input.sessionType,
+        workspaceAgentId: input.workspaceAgentId ?? null,
+      }
+      const existingCompatibility =
+        existing.metadata?.compatibility && typeof existing.metadata.compatibility === 'object'
+          ? (existing.metadata.compatibility as Record<string, unknown>)
+          : {}
+      const metadata = {
+        ...(existing.metadata ?? {}),
+        ...(input.metadata ?? {}),
+        compatibility: {
+          ...existingCompatibility,
+          ...expectedCompatibility,
+        },
+      }
+      const [updated] = await db
+        .update(rooms)
+        .set({
+          kind: expectedKind,
+          workspaceId: input.workspaceId ?? null,
+          title: input.title || existing.title,
+          metadata,
+          updatedAt: new Date(),
+        })
+        .where(eq(rooms.id, existing.id))
+        .returning()
+      return updated ?? existing
+    }
     const room = await this.createRoom({
       kind: roomKindForSession(input),
       ownerId: input.ownerId,

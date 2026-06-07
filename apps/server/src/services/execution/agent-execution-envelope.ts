@@ -56,6 +56,7 @@ export interface AgentExecutionEnvelope {
   agentId: string
   /** Agent 名称（用于日志/artifact） */
   agentName: string
+  workspaceId?: string | null
   /** 用户原始项目路径 */
   projectPath: string | null
   /** Prepared execution directory. Field name kept for backward compatibility. */

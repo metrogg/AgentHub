@@ -243,18 +243,28 @@ describe('RoomService Matrix room adapter contract', () => {
   })
 
   test('routes direct room human messages to Worker runtime using the session agent over stale room metadata', async () => {
+    const [oldWorkspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Old Direct Dispatch Workspace',
+        goal: 'Old direct workspace',
+        projectPath: 'C:/Users/Mozero/AppData/Local/AgentHub/workspaces/2026-06-06-task-1',
+      })
+      .returning()
     const [workspace] = await db
       .insert(workspaces)
       .values({
         ownerId: 'default-user',
         name: 'Direct Dispatch Workspace',
         goal: 'Verify direct agent chat dispatch',
+        projectPath: 'F:/Before_Work/Agenthubtest/word',
       })
       .returning()
     const [staleAgent] = await db
       .insert(workspaceAgents)
       .values({
-        workspaceId: workspace!.id,
+        workspaceId: oldWorkspace!.id,
         name: 'Old Direct Worker',
         role: 'Old worker',
         modelId: 'test-model',
@@ -290,6 +300,7 @@ describe('RoomService Matrix room adapter contract', () => {
     await db
       .update(rooms)
       .set({
+        workspaceId: oldWorkspace!.id,
         metadata: {
           ...(room.metadata ?? {}),
           compatibility: {
@@ -331,6 +342,14 @@ describe('RoomService Matrix room adapter contract', () => {
       })
       expect(directCalls[0].workspaceAgentId).not.toBe(staleAgent!.id)
       expect(event.metadata?.kind).toBe('chat.message')
+
+      const [reloadedRoom] = await db.select().from(rooms).where(eq(rooms.id, room.id)).limit(1)
+      expect(reloadedRoom?.workspaceId).toBe(workspace!.id)
+      expect(reloadedRoom?.metadata?.compatibility).toMatchObject({
+        source: 'session',
+        sessionType: 'direct',
+        workspaceAgentId: currentAgent!.id,
+      })
     } finally {
       ;(workerRuntimeService as any).runDirectRoom = originalRunDirectRoom
     }

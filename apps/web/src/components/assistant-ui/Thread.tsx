@@ -6612,8 +6612,11 @@ const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) =
           {detailsOpen ? '收起过程' : '展开过程'}
         </button>
       </div>
-      {detailsOpen && (
-        <>
+      <div
+        className="grid transition-all duration-300 ease-in-out"
+        style={{ gridTemplateRows: detailsOpen ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
           {warning && (
             <div className="mb-2 flex items-start gap-2 text-[12px] leading-5 text-amber-700">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -6637,8 +6640,8 @@ const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) =
               </FlowRail>
             </div>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -7646,6 +7649,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       title: artifact.title,
       url: artifact.url,
       path: previewPathFromUrl(artifact.url),
+      workspaceId: artifact.workspaceId ?? workspaceIdFromUrl(artifact.url) ?? undefined,
     }
   }
   if (artifact.type === 'deploy') {
@@ -7658,6 +7662,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       title: artifact.title,
       url: artifact.url,
       path: previewPathFromUrl(artifact.url),
+      workspaceId: artifact.workspaceId ?? workspaceIdFromUrl(artifact.url) ?? undefined,
     }
   }
   if (artifact.type === 'diff') {
@@ -8573,6 +8578,13 @@ function previewPathFromUrl(url?: string) {
   return path || undefined
 }
 
+function workspaceIdFromUrl(url?: string) {
+  const parsed = normalizePreviewUrl(url)
+  if (!parsed) return undefined
+  const workspaceId = parsed.searchParams.get('workspaceId')?.trim()
+  return workspaceId || undefined
+}
+
 function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
   if (!item.workspaceId || !path) return false
   const extension = extensionFromName(path)
@@ -8581,15 +8593,22 @@ function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
 }
 
 function enrichPreviewItem(item: ArtifactPreviewItem, workspaceId?: string): ArtifactPreviewItem {
+  const urlWorkspaceId = workspaceIdFromUrl(item.url)
+  const url = normalizePreviewUrl(item.url)
+  const isPathScopedPreviewFileUrl =
+    url?.pathname === '/api/artifacts/preview-file' &&
+    Boolean(url.searchParams.get('path')) &&
+    !url.searchParams.get('workspaceId') &&
+    !item.workspaceId &&
+    !urlWorkspaceId
   const next: ArtifactPreviewItem = {
     ...item,
-    workspaceId: item.workspaceId ?? workspaceId,
+    workspaceId: item.workspaceId ?? urlWorkspaceId ?? (isPathScopedPreviewFileUrl ? undefined : workspaceId),
   }
   if (!next.workspaceId || !next.path) return next
 
   if ((next.kind === 'web' || next.kind === 'deploy') && isHtmlPreviewItem(next)) {
-    const url = normalizePreviewUrl(next.url)
-    if (!url || url.pathname === '/api/artifacts/preview-file') {
+    if (!url || (url.pathname === '/api/artifacts/preview-file' && !url.searchParams.get('workspaceId'))) {
       next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
     }
     return next

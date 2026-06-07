@@ -44,6 +44,7 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
       taskId: context.taskId ?? context.sessionId,
       agentId: context.workspaceAgentId,
       agentName: this.agent.name,
+      workspaceId: context.workspaceId,
       projectPath: context.workspacePath ?? null,
       worktreePath: context.workspacePath ?? null,
       sandboxPolicy: profile.sandboxPolicy,

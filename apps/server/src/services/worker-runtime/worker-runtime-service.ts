@@ -212,8 +212,9 @@ export class WorkerRuntimeService {
         }
       : agentRow
 
-    const [workspace] = room.workspaceId
-      ? await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId)).limit(1)
+    const effectiveWorkspaceId = session?.workspaceId ?? room.workspaceId ?? agent.workspaceId ?? null
+    const [workspace] = effectiveWorkspaceId
+      ? await db.select().from(workspaces).where(eq(workspaces.id, effectiveWorkspaceId)).limit(1)
       : []
     const [workerInstance] = workerParticipant.workerInstanceId
       ? await db.select().from(workerInstances).where(eq(workerInstances.id, workerParticipant.workerInstanceId)).limit(1)
@@ -287,7 +288,7 @@ export class WorkerRuntimeService {
         {
           roomId: room.id,
           sessionId: room.sessionId ?? room.id,
-          workspaceId: room.workspaceId ?? agent.workspaceId,
+          workspaceId: effectiveWorkspaceId ?? agent.workspaceId,
           workspaceAgentId: agent.id,
           workerInstanceId: workerParticipant.workerInstanceId ?? null,
           taskId: null,

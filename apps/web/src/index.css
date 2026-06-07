@@ -1156,24 +1156,18 @@
     z-index: 0;
     pointer-events: none;
     background-image:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.28) 0%, rgba(248, 248, 246, 0.82) 68%, #f8f8f6 100%),
-      linear-gradient(115deg, rgba(250, 214, 122, 0.16) 0%, rgba(255, 255, 255, 0) 38%),
-      linear-gradient(245deg, rgba(98, 149, 216, 0.12) 0%, rgba(255, 255, 255, 0) 36%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.42) 0%, rgba(248, 248, 246, 0.88) 68%, #f8f8f6 100%),
       linear-gradient(rgba(39, 49, 67, 0.06) 1px, transparent 1px),
       linear-gradient(90deg, rgba(39, 49, 67, 0.052) 1px, transparent 1px);
     background-size:
-      100% 100%,
-      100% 100%,
       100% 100%,
       22px 22px,
       22px 22px;
     background-position:
       0 0,
-      0 0,
-      0 0,
       center top,
       center top;
-    opacity: 0.9;
+    opacity: 0.86;
   }
 
   .agenthub-chat-shell .agenthub-thread-root,
