@@ -4,7 +4,6 @@ import {
   db,
   eq,
   orchestratorRuns,
-  runtimeLeases,
   taskThreads,
   workspaces,
   workerInstances,
@@ -13,7 +12,6 @@ import {
 import { workerController } from './worker-controller'
 import { emitRunEvent } from './run-events'
 import { updateTaskThreadStatus } from './task-thread-service'
-import { runtimeLeaseController } from './runtime-lease-controller'
 import { markWorkerInstanceState } from './worker-runtime-resources'
 import { managerLoopStep } from './manager-loop'
 import { roomService } from '../rooms'
@@ -181,26 +179,7 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
           staleWorkerCount++
           const message = `Worker ${worker.id} (${worker.runtimeBase}) has been busy without a heartbeat for ${Math.round(heartbeatAgeMs / 1000)}s.`
 
-          // Mark the active lease as stale so the resource layer knows
-          const [activeLease] = await db
-            .select()
-            .from(runtimeLeases)
-            .where(
-              and(
-                eq(runtimeLeases.workerInstanceId, worker.id),
-                eq(runtimeLeases.status, 'running'),
-              ),
-            )
-            .limit(1)
-
-          if (activeLease) {
-            await runtimeLeaseController.markStale(activeLease.id, {
-              error: message,
-              metadata: { staleReason: 'patrol_heartbeat_lost', lastHeartbeatAgeMs: heartbeatAgeMs },
-            })
-          }
-
-          // Report to timeline — let Manager LLM decide next action
+          // Report to timeline — let Manager inspect evidence before recovery.
           const workerThread = threads.find((t) => t.workerInstanceId === worker.id)
           actions.push({
             kind: 'worker_stale',
@@ -218,12 +197,14 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
             threadId: workerThread?.id ?? null,
             workerInstanceId: worker.id,
             kind: 'worker_stale',
-            severity: 'error',
+            severity: 'warning',
             body: message,
             metadata: {
               reason: 'patrol_worker_stale',
               runtimeBase: worker.runtimeBase,
               heartbeatAgeMs,
+              leaseAction: 'none',
+              recoveryPolicy: 'manager_inspect_before_stale_or_fail',
             },
           })
         }

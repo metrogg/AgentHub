@@ -350,7 +350,7 @@ async function findWorkerInstance(workspaceId: string, workspaceAgentId: string)
 
 function resolveRuntimeBinding(agent: WorkerRuntimeAgentConfig): {
   runtimeFamily: 'coordinator' | 'worker'
-  runtimeBase: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  runtimeBase: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
 } {
   const workerRuntimeBase = readWorkerRuntimeBase(agent.roleProfile)
   if (workerRuntimeBase) {
@@ -374,6 +374,8 @@ function readWorkerRuntimeBase(roleProfile: unknown) {
   if (
     value === 'codex' ||
     value === 'openclaw' ||
+    value === 'qwenpaw' ||
+    value === 'copaw' ||
     value === 'claude-code' ||
     value === 'opencode' ||
     value === 'gemini'

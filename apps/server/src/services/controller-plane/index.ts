@@ -15,15 +15,50 @@ export {
   controllerApi,
   type ControllerApiOptions,
 } from './controller-api'
+export {
+  getControllerApiSchema,
+  type ControllerApiFieldSchema,
+  type ControllerApiOperationSchema,
+  type ControllerApiSchemaDocument,
+} from './controller-api-schema'
+export {
+  applyControllerManifest,
+  confirmControllerApplyApproval,
+  denyControllerApplyApproval,
+  type ControllerApplyBody,
+  type ControllerApplyResult,
+} from './controller-apply'
 export { describeControllerPlane, type ControllerPlaneDiagnostics } from './diagnostics'
+export {
+  runResidentWorkerSelfTest,
+  type ResidentWorkerSelfTestResult,
+} from './resident-worker-self-test'
 export {
   LocalCliWorkerBackend,
   localCliWorkerBackend,
   type WorkerBackend,
   type WorkerBackendEnsureInput,
+  type WorkerBackendHealthResult,
   type WorkerBackendInspectResult,
+  type WorkerBackendPrepareInput,
+  type WorkerBackendPrepareResult,
   type WorkerBackendStartInput,
   type WorkerBackendStopInput,
 } from './worker-backend'
 export { DockerWorkerBackend, dockerWorkerBackend } from './docker-worker-backend'
+export {
+  MemberReconciler,
+  type MemberReconcileInput,
+  type MemberReconcileResult,
+  type MemberReconcileStage,
+  type MemberReconcileStageName,
+} from './member-reconciler'
+export {
+  codeAgentTypeForRuntime,
+  normalizeCodeAgentType,
+  normalizeWorkerRuntimeBase,
+  readWorkerRuntimeBase,
+  workerRoleProfileFromRuntime,
+  type WorkerRuntimeBase,
+} from './worker-runtime-base'
 export { controllerReconcileQueue } from './controller-reconciler'

@@ -62,12 +62,14 @@ export function expertProfileToAgentConfig(profile: AgentExpertProfile): AgentCo
       preferredTopologies: profile.preferredTopologies,
       riskLevel: profile.riskLevel,
       managerRuntimeType: profile.managerRuntimeType ?? null,
-      ...(managerProfile ? {} : { workerRuntimeBase: profile.workerRuntimeBase ?? profile.codeAgentType ?? 'codex' }),
+      ...(managerProfile || !(profile.workerRuntimeBase ?? profile.codeAgentType)
+        ? {}
+        : { workerRuntimeBase: profile.workerRuntimeBase ?? profile.codeAgentType }),
     },
     color: profile.color,
     modelId: null,
     runtimeType: profile.runtimeType,
-    codeAgentType: managerProfile ? null : (profile.runtimeType === 'code-agent' ? (profile.codeAgentType ?? 'codex') : null),
+    codeAgentType: managerProfile ? null : (profile.runtimeType === 'code-agent' ? (profile.codeAgentType ?? null) : null),
     capabilityTags: profile.capabilityTags,
     skillIds: profile.defaultSkillIds,
     toolPermissions: profile.toolPermissions,

@@ -29,7 +29,6 @@ import {
   appendMessageControlEvent,
   appendHumanMessageRoomFirst,
 } from '../services/rooms/room-chat-bridge'
-import { roomService } from '../services/rooms/room-service'
 import { listSessionMessagesRoomFirst } from '../services/rooms/timeline-message-projection'
 import type { DispatchMonitor } from '../services/manager-runtime/planning-dispatcher'
 import {
@@ -41,6 +40,9 @@ import {
 } from '../services/agent-draft'
 
 import { buildAgentProfile } from '../services/agents/profile-builder'
+import { controllerApi } from '../services/controller-plane'
+import { normalizeMemberProposals } from '../services/manager-runtime/member-proposals'
+import type { MemberProposal } from '../services/manager-runtime/types'
 
 const agentDraftSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -408,80 +410,93 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请选择 Orchestrator 建议中的 Agent')
       }
 
+      const proposals = readMemberProposals(metadata.memberProposals)
+      const proposalById = new Map(proposals.map((proposal) => [proposal.expertProfileId ?? proposal.name, proposal]))
       const existingAgents = await db
         .select()
         .from(workspaceAgents)
         .where(eq(workspaceAgents.workspaceId, session.workspaceId))
         .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
-      const existingProfileIds = new Set(
-        existingAgents
-          .map((agent) => readExpertProfileId(agent.roleProfile))
-          .filter((id): id is string => Boolean(id)),
-      )
-      const existingNames = new Set(existingAgents.map((agent) => normalizeAgentIdentity(agent.name)))
-      const createdAgents: Array<typeof workspaceAgents.$inferSelect> = []
-      const reusedAgents: Array<typeof workspaceAgents.$inferSelect> = []
-      let orderIdx = existingAgents.length
+      const existingAgentIds = new Set(existingAgents.map((agent) => agent.id))
+      const reconcileResults = []
 
       for (const profileId of selectedProfileIds) {
+        const proposal = proposalById.get(profileId)
         const profile = CORE_AGENT_EXPERT_PROFILES.find((item) => item.id === profileId)
-        if (!profile) continue
+        const member = proposal ?? (profile ? proposalFromExpertProfile(profile) : null)
+        if (!member) continue
 
-        const existing =
-          existingAgents.find((agent) => readExpertProfileId(agent.roleProfile) === profile.id) ??
-          existingAgents.find((agent) => normalizeAgentIdentity(agent.name) === normalizeAgentIdentity(profile.name))
-        if (existing) {
-          reusedAgents.push(existing)
-          continue
-        }
-        if (existingProfileIds.has(profile.id) || existingNames.has(normalizeAgentIdentity(profile.name))) {
-          continue
-        }
-
-        const [agent] = await db
-          .insert(workspaceAgents)
-          .values({
-            ...expertProfileToAgentInsert(profile),
+        const runtimeBase =
+          member.workerRuntimeBase ??
+          member.codeAgentType ??
+          profile?.workerRuntimeBase ??
+          profile?.codeAgentType ??
+          undefined
+        try {
+          const result = await controllerApi.createWorker({
             workspaceId: session.workspaceId,
-            orderIdx,
+            ownerId: user.sub,
+            groupSessionId: session.id,
+            joinGroupRoom: true,
+            createDirectSession: true,
+            announce: true,
+            name: member.name,
+            role: member.role,
+            roleType: member.roleType ?? profile?.roleType ?? 'custom',
+            description: member.description ?? profile?.description ?? member.reason,
+            systemPrompt: member.systemPrompt ?? profile?.systemPrompt ?? '',
+            roleProfile: memberRoleProfile(member, profile),
+            color: member.color ?? profile?.color ?? '#0f766e',
+            runtimeType: member.runtimeType ?? profile?.runtimeType ?? 'code-agent',
+            runtimeBase,
+            codeAgentType: member.codeAgentType ?? profile?.codeAgentType ?? undefined,
+            modelId: member.modelId ?? null,
+            capabilityTags: member.capabilityTags?.length ? member.capabilityTags : (profile?.capabilityTags ?? []),
+            skillIds: member.skillIds?.length ? member.skillIds : (profile?.defaultSkillIds ?? []),
+            toolPermissions: member.toolPermissions?.length ? member.toolPermissions : (profile?.toolPermissions ?? []),
+            sandboxPolicy: member.sandboxPolicy ?? profile?.sandboxPolicy ?? 'workspace-write',
+            contextPolicy: member.contextPolicy ?? profile?.contextPolicy ?? 'workspace-aware',
+            autoInvoke: profile?.autoInvoke ?? true,
+            approvalRequired: profile?.approvalRequired ?? true,
           })
-          .returning()
-        if (agent) {
-          createdAgents.push(agent)
-          existingProfileIds.add(profile.id)
-          existingNames.add(normalizeAgentIdentity(profile.name))
-          orderIdx += 1
+          reconcileResults.push({
+            profileId,
+            proposal: member,
+            agentId: result.agentId,
+            workerInstanceId: result.workerInstanceId,
+            runtimeBase: result.runtimeBase,
+            stages: result.stages,
+            groupRoomId: result.groupRoom?.id ?? null,
+            directSessionId: result.directSession?.id ?? null,
+            directRoomId: result.directRoom?.id ?? null,
+            participantIds: result.participants.map((participant) => participant.id),
+            announcements: result.announcements,
+          })
+        } catch (err: any) {
+          throw AppError.fromCode(
+            AppErrorCodes.VALIDATION_FAILED,
+            `${member.name} 创建失败：${err?.message ?? 'Member Reconcile failed'}`,
+          )
         }
       }
 
-      const agentsToJoin = [...reusedAgents, ...createdAgents]
+      const agentIds = Array.from(new Set(reconcileResults.map((result) => result.agentId)))
+      const workspaceAgentRows = agentIds.length
+        ? await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, session.workspaceId))
+        : []
+      const agentsToJoin = workspaceAgentRows.filter((agent) => agentIds.includes(agent.id))
       if (!agentsToJoin.length) {
         throw AppError.fromCode(AppErrorCodes.AGENT_REPLY_FAILED, '没有创建或加入新的 Agent')
       }
 
       await ensureSessionMembers(sessionId, user.sub, agentsToJoin.map((agent) => agent.id))
-      const groupRoom = await roomService.ensureRoomForSession(session.id, user.sub)
-      for (const agent of agentsToJoin) {
-        await roomService.addWorkerParticipant(groupRoom.id, agent.id)
-      }
-      await roomService.appendTimelineEvent({
-        roomId: groupRoom.id,
-        senderType: 'manager',
-        type: 'manager.message',
-        body: `已加入：${agentsToJoin.map((agent) => agent.name).join('、')}。现在可以让 Manager 重新规划并分发任务。`,
-        metadata: {
-          kind: 'member-proposal.confirmed',
-          confirmedProfileIds: selectedProfileIds,
-          createdAgentIds: createdAgents.map((agent) => agent.id),
-          reusedAgentIds: reusedAgents.map((agent) => agent.id),
-          sourceMessageId: messageId,
-        },
-      })
       const updatedSession = await refreshGroupMemberMetadata(session, user.sub)
       await db
         .update(workspaces)
         .set({ updatedAt: new Date() })
         .where(eq(workspaces.id, session.workspaceId))
+      const createdAgentIds = agentIds.filter((id) => !existingAgentIds.has(id))
+      const reusedAgentIds = agentIds.filter((id) => existingAgentIds.has(id))
 
       const message = await updateMemberProposalRef({
         ref: proposalRef,
@@ -490,8 +505,22 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           ...metadata,
           memberProposalStatus: 'confirmed',
           confirmedProfileIds: selectedProfileIds,
-          createdAgentIds: createdAgents.map((agent) => agent.id),
-          reusedAgentIds: reusedAgents.map((agent) => agent.id),
+          createdAgentIds,
+          reusedAgentIds,
+          workerInstanceIds: reconcileResults.map((result) => result.workerInstanceId),
+          runtimeBases: reconcileResults.map((result) => result.runtimeBase),
+          memberReconcileResults: reconcileResults.map((result) => ({
+            profileId: result.profileId,
+            agentId: result.agentId,
+            workerInstanceId: result.workerInstanceId,
+            runtimeBase: result.runtimeBase,
+            stages: result.stages,
+            groupRoomId: result.groupRoomId,
+            directSessionId: result.directSessionId,
+            directRoomId: result.directRoomId,
+            participantIds: result.participantIds,
+            announcements: result.announcements,
+          })),
         },
       })
 
@@ -986,62 +1015,65 @@ async function continueMemberProposalPlanning(params: {
   }
 }
 
-function expertProfileToAgentInsert(profile: AgentExpertProfile) {
+function readMemberProposalProfileIds(value: unknown) {
+  return readMemberProposals(value)
+    .map((item) => item.expertProfileId)
+    .filter((id): id is string => Boolean(id))
+}
+
+function readMemberProposals(value: unknown): MemberProposal[] {
+  return normalizeMemberProposals(value)
+}
+
+function proposalFromExpertProfile(profile: AgentExpertProfile): MemberProposal {
   return {
+    expertProfileId: profile.id,
     name: profile.name,
     role: profile.role,
+    reason: profile.description,
+    category: profile.category,
     roleType: profile.roleType,
     description: profile.description,
-    avatar: null,
     systemPrompt: profile.systemPrompt,
-    roleProfile: {
-      expertProfileId: profile.id,
-      category: profile.category,
-      expertLevel: profile.riskLevel === 'high' ? 'specialist' : 'standard',
-      background: profile.background,
-      responsibilities: profile.capabilityTags,
-      cannotDo: profile.cannotDo,
-      acceptsTaskTypes: profile.acceptsTaskTypes,
-      outputContract: profile.outputContract,
-      qualityGates: profile.qualityGates,
-      defaultSkillIds: profile.defaultSkillIds,
-      recommendedMcpServers: profile.recommendedMcpServers,
-      preferredTopologies: profile.preferredTopologies,
-      riskLevel: profile.riskLevel,
-    },
+    runtimeType: profile.runtimeType,
+    codeAgentType: profile.codeAgentType ?? null,
+    workerRuntimeBase: profile.workerRuntimeBase ?? profile.codeAgentType ?? null,
     color: profile.color,
     modelId: null,
-    runtimeType: profile.runtimeType,
-    codeAgentType: profile.codeAgentType ?? 'codex',
     capabilityTags: profile.capabilityTags,
     skillIds: profile.defaultSkillIds,
     toolPermissions: profile.toolPermissions,
     sandboxPolicy: profile.sandboxPolicy,
     contextPolicy: profile.contextPolicy,
-    autoInvoke: profile.autoInvoke,
-    approvalRequired: false,
+    expectedContribution: profile.outputContract.join('；'),
   }
 }
 
-function readMemberProposalProfileIds(value: unknown) {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((item) => {
-      if (!item || typeof item !== 'object') return ''
-      const id = (item as { expertProfileId?: unknown }).expertProfileId
-      return typeof id === 'string' ? id : ''
-    })
-    .filter(Boolean)
-}
-
-function readExpertProfileId(roleProfile: unknown) {
-  if (!roleProfile || typeof roleProfile !== 'object') return ''
-  const value = (roleProfile as { expertProfileId?: unknown }).expertProfileId
-  return typeof value === 'string' ? value : ''
-}
-
-function normalizeAgentIdentity(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+function memberRoleProfile(member: MemberProposal, profile?: AgentExpertProfile | null) {
+  return {
+    ...(profile
+      ? {
+          expertProfileId: profile.id,
+          category: profile.category,
+          expertLevel: profile.riskLevel === 'high' ? 'specialist' : 'standard',
+          background: profile.background,
+          responsibilities: profile.capabilityTags,
+          cannotDo: profile.cannotDo,
+          acceptsTaskTypes: profile.acceptsTaskTypes,
+          outputContract: profile.outputContract,
+          qualityGates: profile.qualityGates,
+          defaultSkillIds: profile.defaultSkillIds,
+          recommendedMcpServers: profile.recommendedMcpServers,
+          preferredTopologies: profile.preferredTopologies,
+          riskLevel: profile.riskLevel,
+        }
+      : {}),
+    proposalId: member.expertProfileId,
+    proposalReason: member.reason,
+    expectedContribution: member.expectedContribution,
+    memberProposalCategory: member.category,
+    workerRuntimeBase: member.workerRuntimeBase ?? member.codeAgentType ?? profile?.workerRuntimeBase ?? profile?.codeAgentType ?? null,
+  }
 }
 
 async function ensureSessionMembers(sessionId: string, ownerId: string, agentIds: string[]) {

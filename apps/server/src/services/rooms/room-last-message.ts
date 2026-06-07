@@ -19,6 +19,7 @@ export async function listRoomLastMessagePreviews(sessionIds: string[]) {
       sessionId: rooms.sessionId,
       content: timelineEvents.body,
       senderType: timelineEvents.senderType,
+      metadata: timelineEvents.metadata,
       rank: sql<number>`row_number() over (partition by ${rooms.sessionId} order by ${timelineEvents.sequence} desc, ${timelineEvents.id} desc)`.as(
         'rank',
       ),
@@ -39,6 +40,7 @@ export async function listRoomLastMessagePreviews(sessionIds: string[]) {
       sessionId: rankedTimeline.sessionId,
       content: rankedTimeline.content,
       senderType: rankedTimeline.senderType,
+      metadata: rankedTimeline.metadata,
     })
     .from(rankedTimeline)
     .where(sql`${rankedTimeline.rank} = 1`)
@@ -46,6 +48,12 @@ export async function listRoomLastMessagePreviews(sessionIds: string[]) {
   const previews: Record<string, { content: string; senderType: string }> = {}
   for (const row of latestRows) {
     if (!row.sessionId) continue
+    const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, unknown>
+      : {}
+    if (metadata.hiddenFromChat === true) continue
+    const kind = typeof metadata.kind === 'string' ? metadata.kind : ''
+    if (kind.startsWith('manager.status.') || kind === 'manager.dispatch.diagnostic') continue
     previews[row.sessionId] = {
       content: row.content.slice(0, 120),
       senderType: timelineSenderTypeToMessageSenderType(row.senderType),

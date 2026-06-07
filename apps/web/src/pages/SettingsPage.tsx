@@ -23,6 +23,7 @@ import {
   MessageSquare,
   Monitor,
   QrCode,
+  Radio,
   RefreshCw,
   Search,
   Server,
@@ -34,7 +35,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type ContainerRuntimeDiagnostics, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
+import { api, friendlyErrorMessage, type ContainerRuntimeDiagnostics, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsConsoleLogsResponse, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -234,6 +235,23 @@ const themeModes = ['跟随系统', '亮色', '暗色']
 const accentOptions = ['黑色', '蓝色', '绿色', '琥珀色']
 const fontOptions = ['默认', 'Aptos', 'Microsoft YaHei UI', 'Noto Sans SC', 'LXGW WenKai', 'JetBrains Mono', 'Cascadia Mono']
 const fontSizeOptions = ['13', '14', '15', '16', '18']
+
+function formatSettingsError(error: unknown, fallback: string) {
+  return friendlyErrorMessage(error, fallback)
+}
+
+function emptySettingsConsoleLogsResponse(): SettingsConsoleLogsResponse {
+  return {
+    items: [],
+    sources: {
+      serverLogPath: '',
+      serverLogExists: false,
+      serverLogEnabled: false,
+      executionTraceCount: 0,
+      runEventCount: 0,
+    },
+  }
+}
 
 export default function SettingsPage() {
   const navigate = useNavigate()
@@ -2537,6 +2555,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         controllerPlane.mode,
         `kinds=${controllerPlane.queue.registeredKinds.join('/') || 'none'}`,
         `workers=${controllerPlane.resources.workerInstances}`,
+        `runtimeDetails=${controllerPlane.workerRuntimes.length}`,
         `rooms=${controllerPlane.resources.rooms}`,
         `runs=${controllerPlane.resources.runs}`,
         `leases=${controllerPlane.resources.runtimeLeases}`,
@@ -2561,9 +2580,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               : managerRuntime.activeStatus.available
                 ? 'OpenClaw 已安装，未运行'
                 : 'OpenClaw 未就绪'
-      : managerRuntime.activeRuntimeType === 'qwenpaw'
-        ? 'QwenPaw 尚未接入'
-        : '开发占位 Manager Runtime'
+      : '开发占位 Manager Runtime'
     : '等待刷新'
   const managerRuntimeDetail = managerRuntime
     ? [
@@ -2674,14 +2691,30 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     setBusy('refresh')
     try {
       const [info, consoleLogs, matrix, controller, manager, containers] = await Promise.all([
-        api.getSettingsGeneralInfo(),
-        api.getSettingsConsoleLogs(180),
+        api.getSettingsGeneralInfo().catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'settings/general-info',
+            content: formatSettingsError(error, '基础诊断接口不可用'),
+          })
+          return null
+        }),
+        api.getSettingsConsoleLogs(180).catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'settings/console-logs',
+            content: formatSettingsError(error, '控制台日志接口不可用'),
+          })
+          return emptySettingsConsoleLogsResponse()
+        }),
         api.getMatrixDiagnostics().catch((error) => {
           appendLog({
             level: 'Warn',
             source: '前端',
             module: 'rooms/matrix/diagnostics',
-            content: error?.message || 'Matrix 诊断接口不可用',
+            content: formatSettingsError(error, 'Matrix 诊断接口不可用'),
           })
           return null
         }),
@@ -2690,7 +2723,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             level: 'Warn',
             source: '前端',
             module: 'settings/controller-plane',
-            content: error?.message || 'Controller Plane 诊断接口不可用',
+            content: formatSettingsError(error, 'Controller Plane 诊断接口不可用'),
           })
           return null
         }),
@@ -2699,7 +2732,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             level: 'Warn',
             source: '前端',
             module: 'settings/manager-runtime',
-            content: error?.message || 'Manager Runtime 诊断接口不可用',
+            content: formatSettingsError(error, 'Manager Runtime 诊断接口不可用'),
           })
           return null
         }),
@@ -2708,12 +2741,12 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             level: 'Warn',
             source: '前端',
             module: 'settings/container-runtime',
-            content: error?.message || 'Container Runtime 诊断接口不可用',
+            content: formatSettingsError(error, 'Container Runtime 诊断接口不可用'),
           })
           return null
         }),
       ])
-      setGeneralInfo(info)
+      if (info) setGeneralInfo(info)
       setMatrixDiagnostics(matrix)
       setControllerPlane(controller)
       setManagerRuntime(manager)
@@ -2724,7 +2757,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, controller=${controller?.queue.running ? 'running' : 'stopped'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}, containers=${containers?.enabled ? (containers.docker.available ? 'docker' : 'blocked') : 'disabled'}`,
+        content: `诊断刷新完成：data=${info?.storage.sizeLabel ?? 'n/a'}, debug=${info?.debug.sizeLabel ?? 'n/a'}, git=${info?.git.ok ? 'ok' : 'missing'}, python=${info?.python.ok ? 'ok' : 'missing'}, sandbox=${info?.sandbox.configuredProvider ?? 'n/a'}/${info?.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, controller=${controller?.queue.running ? 'running' : 'stopped'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}, containers=${containers?.enabled ? (containers.docker.available ? 'docker' : 'blocked') : 'disabled'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2732,9 +2765,52 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Error',
         source: '前端',
         module: 'settings/general-info',
-        content: error?.message || '刷新诊断信息失败',
+        content: formatSettingsError(error, '刷新诊断信息失败'),
       })
-      if (visible) showNotice(error?.message || t('操作失败'))
+      if (visible) showNotice(formatSettingsError(error, '刷新诊断信息失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function runResidentWorkerSelfTest(
+    worker: ControllerPlaneDiagnostics['workerRuntimes'][number],
+    options: { dispatch?: boolean } = {},
+  ) {
+    const dispatch = options.dispatch === true
+    const key = `${dispatch ? 'resident-probe' : 'resident-self-test'}:${worker.workerInstanceId}`
+    setBusy(key)
+    try {
+      const result = await api.runResidentWorkerSelfTest(worker.workerInstanceId, { dispatch })
+      const failed = result.checks.find((item) => !item.ok)
+      const reply = result.observedReply
+        ? ` reply=${result.observedReply.protocol} seq=${result.observedReply.sequence}`
+        : ''
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'controller-plane/resident-self-test',
+        content: result.ok
+          ? `${worker.agentName}: ${result.message}${reply}`
+          : `${worker.agentName}: ${failed?.label ?? 'self-test'} - ${failed?.message ?? result.message}`,
+      })
+      const controller = await api.getControllerPlaneStatus().catch(() => null)
+      if (controller) setControllerPlane(controller)
+      showNotice(
+        result.ok
+          ? dispatch
+            ? `${worker.agentName} Matrix Probe 通过${reply ? `：${result.observedReply?.protocol}` : ''}`
+            : `${worker.agentName} resident 自检通过`
+          : `${worker.agentName} 自检未通过：${failed?.message ?? result.message}`,
+      )
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '前端',
+        module: 'controller-plane/resident-self-test',
+        content: error?.message || 'Resident Worker 自检失败',
+      })
+      showNotice(error?.message || t('操作失败'))
     } finally {
       setBusy(null)
     }
@@ -2890,6 +2966,13 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
 
   async function prepareLocalRuntime() {
     setBusy('local-runtime-prepare')
+    showNotice('正在准备本机运行环境，请稍候...')
+    appendLog({
+      level: 'Info',
+      source: '前端',
+      module: 'settings/local-runtime/prepare',
+      content: '开始准备本机运行环境：应用 Matrix 配置、启动 Tuwunel / MinIO、检查 OpenClaw runtime 并等待 Manager 健康检查。',
+    })
     try {
       const result = await api.prepareLocalRuntime()
       setMatrixDiagnostics(result.diagnostics.matrix)
@@ -2912,9 +2995,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Error',
         source: '后端',
         module: 'settings/local-runtime/prepare',
-        content: error?.message || '准备本机运行环境失败',
+        content: formatSettingsError(error, '准备本机运行环境失败'),
       })
-      showNotice(error?.message || t('操作失败'))
+      showNotice(formatSettingsError(error, '准备本机运行环境失败'))
     } finally {
       setBusy(null)
     }
@@ -3019,9 +3102,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Error',
         source: '后端',
         module: 'container-runtime/prepare-local',
-        content: error?.message || '准备本地容器运行时失败',
+        content: formatSettingsError(error, '准备本地容器运行时失败'),
       })
-      showNotice(error?.message || t('操作失败'))
+      showNotice(formatSettingsError(error, '准备本地容器运行时失败'))
     } finally {
       setBusy(null)
     }
@@ -3422,6 +3505,24 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                   </>
                 )
               })()}
+              {(() => {
+                const diagnostics = settingsManagerRuntimeDiagnostics(managerRuntime)
+                const contract = settingsAsRecord(diagnostics.contract)
+                const contractFiles = settingsAsRecord(contract?.files)
+                return (
+                  <>
+                    <InfoRow label="SOUL" value={diagnostics.managerPersonaReady === true ? '人格文件就绪' : 'SOUL.md 未完整'} />
+                    <InfoRow label="AGENTS" value={contract?.ready === true ? '协作上下文已生成' : 'AGENTS.md / contract 未完整'} />
+                    <InfoRow label="skills" value={diagnostics.agenthubSkillLoaded === true ? '已注入 agenthub-controller' : '未检测到 Manager skill'} />
+                    <InfoRow label="runtime manifest" value={contractFiles?.runtimeManifest === true ? '已生成' : '缺失'} />
+                    <InfoRow label="workers registry" value={contractFiles?.workerRegistry === true ? '已生成' : '缺失'} />
+                    <InfoRow label="teams registry" value={contractFiles?.teamRegistry === true ? '已生成' : '缺失'} />
+                    <InfoRow label="humans registry" value={contractFiles?.humanRegistry === true ? '已生成' : '缺失'} />
+                    <InfoRow label="state / rooms" value={contractFiles?.state === true && contractFiles?.rooms === true ? '已生成' : '缺失'} />
+                    <InfoRow label="heartbeat" value={contractFiles?.heartbeat === true ? '已生成' : '缺失'} />
+                  </>
+                )
+              })()}
               <InfoRow label="当前主脑" value={managerRuntime.activeRuntimeType} />
               <InfoRow label="配置来源" value={managerRuntime.configuredRuntimeType} />
               <InfoRow
@@ -3483,7 +3584,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             </div>
 
             <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-              OpenClaw 优先作为 Manager / Team Leader runtime，也可以作为 resident Worker 基座。检测到 OpenClaw CLI 只代表可管理生命周期；Worker 侧需要 Docker resident runtime 或等价的常驻后端来监听 Matrix Room。
+              OpenClaw 是 resident runtime，OpenCode / Claude Code / Codex / Gemini 是 bridge runtime。它们都必须读取同一份 SOUL / AGENTS / skills / runtime manifest / state / rooms / tasks contract，只是 adapter 不同。
             </div>
           </div>
         )}
@@ -3683,6 +3784,38 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               <InfoRow label="threads / leases" value={`${controllerPlane.resources.taskThreads} / ${controllerPlane.resources.runtimeLeases}`} />
             </div>
 
+            <div className="mt-4 rounded-xl border px-3 py-3" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--settings-text)' }}>Worker Runtime 状态</div>
+                  <div className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                    对齐 HiClaw-lite：每个 Worker 都要有 runtime base、Matrix 身份、Room participant、SOUL/AGENTS/Skills contract 和 heartbeat。
+                  </div>
+                </div>
+                <span className="rounded-full px-2 py-1 text-xs" style={{ background: 'var(--settings-panel-muted)', color: 'var(--settings-muted-text)' }}>
+                  {controllerPlane.workerRuntimes.length} workers
+                </span>
+              </div>
+              {controllerPlane.workerRuntimes.length === 0 ? (
+                <div className="rounded-xl border px-3 py-6 text-center text-xs" style={{ borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
+                  还没有 WorkerInstance。通过添加 Worker、Manager 补员或任务分配创建后，这里会显示 resident / bridge、Matrix listener 和 contract 状态。
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {controllerPlane.workerRuntimes.slice(0, 12).map((worker) => (
+                    <WorkerRuntimeDiagnosticRow
+                      key={worker.workerInstanceId}
+                      worker={worker}
+                      busy={busy === `resident-self-test:${worker.workerInstanceId}`}
+                      probeBusy={busy === `resident-probe:${worker.workerInstanceId}`}
+                      onSelfTest={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker, { dispatch: false })}
+                      onProbe={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker, { dispatch: true })}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
             {controllerPlane.queue.pendingKeys.length > 0 && (
               <div className="mt-4 rounded-xl border px-3 py-2" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
                 <div className="mb-2 text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>待调和资源</div>
@@ -3738,6 +3871,134 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     </div>
   )
 }
+
+function WorkerRuntimeDiagnosticRow({
+  worker,
+  busy,
+  probeBusy,
+  onSelfTest,
+  onProbe,
+}: {
+  worker: ControllerPlaneDiagnostics['workerRuntimes'][number]
+  busy?: boolean
+  probeBusy?: boolean
+  onSelfTest?: () => void
+  onProbe?: () => void
+}) {
+  const contractMissing = Object.entries(worker.contractFiles)
+    .filter(([, ok]) => !ok)
+    .map(([name]) => name)
+  const participantSummary = worker.matrixParticipants.length
+    ? worker.matrixParticipants.map((participant) => `${participant.roomKind}:${participant.status}`).join(' / ')
+    : 'no rooms'
+  const heartbeat = worker.lastHeartbeatAt ? new Date(worker.lastHeartbeatAt).toLocaleString() : 'no heartbeat'
+  const inspection = worker.runtimeInspection
+  const doctorProbe = inspection?.doctorProbe
+  const capabilityProbe = inspection?.capabilityProbe
+  const capabilitySummary = capabilityProbe?.detected?.length
+    ? capabilityProbe.detected.slice(0, 5).join(' / ')
+    : null
+  const runtimeHealth = worker.runtimeHealth
+  const runtimeReady = runtimeHealth.ready
+  const runtimeStatus = runtimeHealth.message
+    ?? (runtimeReady ? 'runtime ready' : runtimeHealth.blockers[0] ?? 'runtime blocked')
+  const modeLabel = worker.mode === 'bridge'
+    ? 'AgentHub bridge'
+    : worker.mode === 'resident-openclaw'
+      ? 'OpenClaw resident'
+      : 'resident worker'
+  const runtimeDetail = [
+    runtimeHealth.inspectedBy,
+    runtimeHealth.state,
+    inspection?.nativeProbe?.command ?? inspection?.command,
+    doctorProbe ? `${doctorProbe.kind}:${doctorProbe.supported ? (doctorProbe.ok ? 'ok' : 'failed') : 'unsupported'}` : null,
+    capabilitySummary ? `cap:${capabilitySummary}` : null,
+    worker.mode === 'bridge' ? null : participantSummary,
+  ].filter(Boolean).join(' / ')
+  return (
+    <div
+      className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1.1fr)_8rem_minmax(0,1fr)_minmax(0,1fr)]"
+      style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}
+    >
+      <div className="min-w-0">
+        <div className="truncate font-semibold" style={{ color: 'var(--settings-text)' }} title={worker.agentName}>
+          {worker.agentName}
+        </div>
+        <div className="mt-1 truncate font-mono" style={{ color: 'var(--settings-muted-text)' }} title={worker.workerInstanceId}>
+          {worker.workerInstanceId}
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="font-mono" style={{ color: 'var(--settings-text)' }}>{inspection?.adapterName ?? worker.runtimeBase}</div>
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={`${modeLabel}${runtimeDetail ? ` / ${runtimeDetail}` : ''}`}>
+          {modeLabel}{inspection?.nativeProbe?.version ? ` / ${inspection.nativeProbe.version}` : runtimeHealth.state ? ` / ${runtimeHealth.state}` : ''}
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div style={{ color: worker.observedState === 'failed' ? '#dc2626' : 'var(--settings-text)' }}>
+          {worker.observedState} / {worker.desiredState}
+        </div>
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={heartbeat}>
+          {heartbeat}
+        </div>
+      </div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap gap-1">
+          <span className={cn('rounded-full px-2 py-0.5', worker.contractReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+            {worker.contractReady ? 'contract ready' : `missing ${contractMissing.join('/') || 'contract'}`}
+          </span>
+          <span className={cn('rounded-full px-2 py-0.5', runtimeReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+            {runtimeReady ? 'runtime ready' : 'runtime blocked'}
+          </span>
+          {worker.matrixIdentity.userId && (
+            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700">
+              {worker.listenerManagedBy}
+            </span>
+          )}
+          {doctorProbe && (
+            <span
+              className={cn('rounded-full px-2 py-0.5', doctorProbe.supported ? (doctorProbe.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700') : 'bg-slate-100 text-slate-600')}
+              title={`${doctorProbe.command}${doctorProbe.output ? `\n${doctorProbe.output}` : ''}`}
+            >
+              {doctorProbe.kind} {doctorProbe.supported ? (doctorProbe.ok ? 'ok' : 'failed') : 'unsupported'}
+            </span>
+          )}
+          {capabilityProbe && (
+            <span
+              className={cn('rounded-full px-2 py-0.5', capabilityProbe.detected.length ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-600')}
+              title={`${capabilityProbe.command}${capabilityProbe.detected.length ? `\n${capabilityProbe.detected.join(', ')}` : ''}${capabilityProbe.output ? `\n\n${capabilityProbe.output}` : ''}`}
+            >
+              caps {capabilityProbe.detected.length ? capabilityProbe.detected.slice(0, 3).join('/') : 'unknown'}
+            </span>
+          )}
+        </div>
+        <div className="mt-1 truncate" style={{ color: worker.lastError || !runtimeReady ? '#dc2626' : 'var(--settings-muted-text)' }} title={worker.lastError ?? runtimeStatus}>
+          {worker.lastError ?? runtimeStatus}
+        </div>
+        {runtimeHealth.blockers.length > 0 && (
+          <div className="mt-1 truncate" style={{ color: '#dc2626' }} title={runtimeHealth.blockers.join(' / ')}>
+            {runtimeHealth.blockers[0]}
+          </div>
+        )}
+        {onSelfTest && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" onClick={onSelfTest} disabled={busy || probeBusy} className="settings-soft-button h-7 px-2 text-xs">
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+              Resident 自检
+            </button>
+            {onProbe && (
+              <button type="button" onClick={onProbe} disabled={busy || probeBusy} className="settings-soft-button h-7 px-2 text-xs">
+                {probeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Radio className="h-3.5 w-3.5" />}
+                Matrix Probe
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ConsoleMetric({ icon: Icon, label, value, detail, ok }: { icon: LucideIcon; label: string; value: number | string; detail: string; ok: boolean }) {
   const { t } = useI18n()
   return (

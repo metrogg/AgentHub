@@ -136,17 +136,12 @@ describe('HiClaw-lite kernel boundary', () => {
     expect(violations).toEqual([])
   })
 
-  test('Manager HiClaw skill surface includes the 4 new Phase-1 builtin skills', () => {
-    // Skill 补齐 Phase 1: extend the HiClaw-lite Manager skill surface from 5
-    // to 9 builtin skills. The 4 new entries are documented per HiClaw's
-    // SKILL.md template (Purpose / Controller API Surface / Rules / Gotchas /
-    // Operation Reference / Best Practices / Coordination Protocol). They
-    // must appear in BUILTIN_MANAGER_SKILLS so ensureManagerConfig() writes
-    // them into the OpenClaw Manager workspace on first boot.
-    const config = readFileSync(
-      join(process.cwd(), 'apps/server/src/services/manager-runtime/manager-config.ts'),
-      'utf8',
-    )
+  test('Manager HiClaw skill surface is sourced from the normalized manager-agent bundle', () => {
+    // The Manager skill surface is now generated through agent-contract and
+    // seeded from infra/manager-agent/skills, not from a private source-code
+    // constant. This keeps OpenClaw/QwenPaw and future Manager runtimes on
+    // the same file contract.
+    const skillRoot = join(process.cwd(), 'infra/manager-agent/skills')
     const newSkillNames = [
       'team-management',
       'project-management',
@@ -154,24 +149,143 @@ describe('HiClaw-lite kernel boundary', () => {
       'task-coordination',
     ]
     for (const name of newSkillNames) {
-      expect(config).toMatch(new RegExp(`name:\\s*'${name}'`))
+      const skill = readFileSync(join(skillRoot, name, 'SKILL.md'), 'utf8')
+      expect(skill).toContain(`#`)
+      expect(skill).toContain('Decision Pattern')
     }
   })
 
-  test('Manager skillDoc helper renders HiClaw-style sections when provided', () => {
-    // The skillDoc() helper in manager-config.ts must support the optional
-    // HiClaw sections (gotchas / operationReference / coordinationProtocol /
-    // bestPractices) without breaking the original 5 builtin skills. A
-    // sample-render check via a small one-off invocation is the cheapest
-    // regression guard.
-    const config = readFileSync(
-      join(process.cwd(), 'apps/server/src/services/manager-runtime/manager-config.ts'),
+  test('Manager skill bundle uses Controller schema/apply instead of legacy manager actions', () => {
+    const managerRoot = join(process.cwd(), 'infra/manager-agent')
+    const files = listTextFiles(managerRoot, /\.(md|json|ya?ml|sh|ts)$/)
+    const violations: string[] = []
+
+    for (const file of files) {
+      const rel = toRepoPath(file)
+      const text = readFileSync(file, 'utf8')
+      if (text.includes('/api/internal/manager/actions')) {
+        violations.push(`${rel} references legacy manager action endpoint`)
+      }
+      if (/localhost:8000\/api\/rooms/.test(text)) {
+        violations.push(`${rel} hard-codes product room routes`)
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
+
+  test('core Manager skills discover Controller capabilities through agenthub schema', () => {
+    const skillRoot = join(process.cwd(), 'infra/manager-agent/skills')
+    const requiredSchemaSkills = [
+      'agenthub-controller',
+      'worker-management',
+      'task-management',
+      'channel-management',
+      'project-management',
+      'team-management',
+      'human-management',
+      'heartbeat',
+    ]
+
+    for (const skillName of requiredSchemaSkills) {
+      const skill = readFileSync(join(skillRoot, skillName, 'SKILL.md'), 'utf8')
+      expect(skill).toContain('agenthub schema')
+    }
+
+    const worker = readFileSync(join(skillRoot, 'worker-management', 'SKILL.md'), 'utf8')
+    expect(worker).toContain('kind: Worker')
+    expect(worker).toContain('runtimeBase: <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini>')
+
+    const task = readFileSync(join(skillRoot, 'task-management', 'SKILL.md'), 'utf8')
+    expect(task).toContain('kind: Task')
+    expect(task).toContain('Controller assignment creates the task room')
+
+    const channel = readFileSync(join(skillRoot, 'channel-management', 'SKILL.md'), 'utf8')
+    expect(channel).toContain('kind: Room')
+    expect(channel).toContain('Do not call product UI `/api/rooms` routes directly')
+
+    const heartbeat = readFileSync(join(skillRoot, 'heartbeat', 'SKILL.md'), 'utf8')
+    expect(heartbeat).toContain('kind: Manager')
+    expect(heartbeat).toContain('managers.reconcile')
+    expect(heartbeat).toContain('spec.desiredState')
+  })
+
+  test('Manager contract generator owns SOUL AGENTS registries and runtime context', () => {
+    const contract = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/agent-contract/manager-contract.ts'),
       'utf8',
     )
-    expect(config).toMatch(/gotchas\?:\s*string\[\]/)
-    expect(config).toMatch(/operationReference\?:\s*Array<\{\s*situation:\s*string;\s*action:\s*string\s*\}>/)
-    expect(config).toMatch(/coordinationProtocol\?:\s*string\[\]/)
-    expect(config).toMatch(/bestPractices\?:\s*string\[\]/)
+    for (const expected of [
+      'SOUL.md',
+      'AGENTS.md',
+      'TOOLS.md',
+      'HEARTBEAT.md',
+      'workers-registry.json',
+      'teams-registry.json',
+      'humans-registry.json',
+      'rooms.json',
+      'EnsureManagerIdentity',
+      'EnsureRuntimeProcess',
+      'ObserveRoomBindingsAndHeartbeat',
+    ]) {
+      expect(contract).toContain(expected)
+    }
+  })
+
+  test('AgentHub Controller CLI requires explicit Worker runtime base', () => {
+    const cli = readFileSync(join(process.cwd(), 'infra/agenthub-cli/agenthub.ts'), 'utf8')
+    expect(cli).toContain('--runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini> is required')
+    expect(cli).not.toContain("|| 'codex'")
+    expect(cli).not.toContain('|| "codex"')
+  })
+
+  test('backend Worker creation and bridge paths do not silently default missing bases to Codex', () => {
+    const guardedFiles = [
+      'apps/server/src/services/agents/profile-builder.ts',
+      'apps/server/src/services/rooms/room-chat-bridge.ts',
+      'apps/server/src/services/workspace/workspace-queries.ts',
+      'apps/server/src/services/code-agent-adapter.ts',
+      'apps/server/src/services/agent-draft.ts',
+      'apps/server/src/routes/workspaces.ts',
+      'apps/server/src/routes/messages.ts',
+    ]
+    const forbiddenPatterns = [
+      /\?\?\s*['"]codex['"]/,
+      /\|\|\s*['"]codex['"]/,
+      /codeAgentType:\s*[^,\n]*\?\?\s*['"]codex['"]/,
+    ]
+    const violations: string[] = []
+    for (const file of guardedFiles) {
+      const text = readFileSync(join(process.cwd(), file), 'utf8')
+      for (const pattern of forbiddenPatterns) {
+        if (pattern.test(text)) violations.push(`${file} matches ${pattern}`)
+      }
+    }
+    expect(violations).toEqual([])
+  })
+
+  test('frontend Agent configuration does not silently default missing Worker bases to Codex', () => {
+    const guardedFiles = [
+      'apps/web/src/pages/AgentConfigPage.tsx',
+      'apps/web/src/lib/agentLibrary.ts',
+      'apps/web/src/lib/expertProfiles.ts',
+      'apps/web/src/lib/codingToolsLifecycle.ts',
+      'packages/shared/src/agent-role-presets.ts',
+    ]
+    const forbiddenPatterns = [
+      /\?\?\s*['"]codex['"]/,
+      /\|\|\s*['"]codex['"]/,
+      /codeAgentType:\s*['"]codex['"]/,
+      /defaultCodeAgentTypeFor/,
+    ]
+    const violations: string[] = []
+    for (const file of guardedFiles) {
+      const text = readFileSync(join(process.cwd(), file), 'utf8')
+      for (const pattern of forbiddenPatterns) {
+        if (pattern.test(text)) violations.push(`${file} matches ${pattern}`)
+      }
+    }
+    expect(violations).toEqual([])
   })
 
   test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {
@@ -229,6 +343,23 @@ function listSourceFiles(root: string): string[] {
       continue
     }
     if (/\.(ts|tsx)$/.test(entry)) {
+      files.push(path)
+    }
+  }
+  return files
+}
+
+function listTextFiles(root: string, pattern: RegExp): string[] {
+  const entries = readdirSync(root)
+  const files: string[] = []
+  for (const entry of entries) {
+    const path = join(root, entry)
+    const stat = statSync(path)
+    if (stat.isDirectory()) {
+      files.push(...listTextFiles(path, pattern))
+      continue
+    }
+    if (pattern.test(entry)) {
       files.push(path)
     }
   }

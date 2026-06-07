@@ -15,12 +15,25 @@ describe('Manager config workspace', () => {
 
     expect(existsSync(paths.soulPath)).toBe(true)
     expect(existsSync(paths.agentsPath)).toBe(true)
+    expect(existsSync(paths.runtimeManifestPath)).toBe(true)
+    expect(existsSync(paths.toolsPath)).toBe(true)
+    expect(existsSync(paths.heartbeatPath)).toBe(true)
     expect(existsSync(paths.workerRegistryPath)).toBe(true)
+    expect(existsSync(paths.teamRegistryPath)).toBe(true)
+    expect(existsSync(paths.humanRegistryPath)).toBe(true)
     expect(existsSync(paths.statePath)).toBe(true)
+    expect(existsSync(paths.roomsPath)).toBe(true)
+    expect(existsSync(paths.agentDir)).toBe(true)
 
     const agents = readFileSync(paths.agentsPath, 'utf8')
-    expect(agents).toContain('Human participants are first-class collaborators')
+    expect(agents).toContain('AGENTHUB:MANAGER-CONTEXT:START')
+    expect(agents).toContain('Runtime type: openclaw')
     expect(agents).toContain('Skills operate AgentHub Controller APIs')
+
+    const runtimeManifest = JSON.parse(readFileSync(paths.runtimeManifestPath, 'utf8')) as Record<string, any>
+    expect(runtimeManifest.roleContract).toBe('manager')
+    expect(runtimeManifest.runtimeType).toBe('openclaw')
+    expect(runtimeManifest.registries.workers).toBe('workers-registry.json')
 
     for (const skillName of [
       'worker-management',
@@ -32,9 +45,13 @@ describe('Manager config workspace', () => {
       const skillPath = join(paths.skillsDir, skillName, 'SKILL.md')
       expect(existsSync(skillPath)).toBe(true)
       const skill = readFileSync(skillPath, 'utf8')
-      expect(skill).toContain('## Controller API Surface')
-      expect(skill).toContain('Read the Matrix room timeline')
-      expect(skill).toContain('Report the result back to the Matrix room')
+      expect(skill).toContain('##')
+      expect(skill).toContain('Decision Pattern')
     }
+
+    expect(existsSync(join(paths.agentDir, 'SOUL.md'))).toBe(true)
+    expect(existsSync(join(paths.agentDir, 'runtime-manifest.json'))).toBe(true)
+    expect(existsSync(join(paths.agentDir, 'openclaw.manager.json'))).toBe(true)
+    expect(existsSync(join(paths.agentDir, 'skills', 'agenthub-controller', 'SKILL.md'))).toBe(true)
   })
 })

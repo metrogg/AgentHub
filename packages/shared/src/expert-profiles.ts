@@ -27,7 +27,7 @@ export interface AgentExpertProfile {
   runtimeType: 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   managerRuntimeType?: 'openclaw' | 'qwenpaw' | null
-  workerRuntimeBase?: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  workerRuntimeBase?: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   defaultSkillIds: string[]
   recommendedMcpServers: string[]

@@ -79,11 +79,19 @@ describe('ManagerPatrol Room timeline integration', () => {
         (event) =>
           event.type === 'manager.message' &&
           event.metadata?.kind === 'manager-patrol-check' &&
-          (event.metadata?.patrolKind === 'worker_stale' ||
-            event.metadata?.patrolKind === 'worker_failed') &&
+          event.metadata?.patrolKind === 'worker_stale' &&
           event.metadata?.workerInstanceId === fixture.workerInstance?.id,
       ),
     ).toBe(true)
+    const groupWarning = groupEvents.find(
+      (event) =>
+        event.metadata?.kind === 'manager-patrol-check' &&
+        event.metadata?.patrolKind === 'worker_stale' &&
+        event.metadata?.workerInstanceId === fixture.workerInstance?.id,
+    )
+    expect(groupWarning?.metadata?.severity).toBe('warning')
+    expect(groupWarning?.metadata?.leaseAction).toBe('none')
+    expect(groupWarning?.metadata?.recoveryPolicy).toBe('manager_inspect_before_stale_or_fail')
 
     const taskEvents = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, fixture.taskRoom.id))
     expect(
@@ -91,11 +99,17 @@ describe('ManagerPatrol Room timeline integration', () => {
         (event) =>
           event.type === 'task.progress' &&
           event.metadata?.kind === 'manager-patrol-check' &&
-          (event.metadata?.patrolKind === 'worker_stale' ||
-            event.metadata?.patrolKind === 'worker_failed') &&
+          event.metadata?.patrolKind === 'worker_stale' &&
           event.metadata?.workerInstanceId === fixture.workerInstance?.id,
       ),
     ).toBe(true)
+
+    const [lease] = await db
+      .select()
+      .from(runtimeLeases)
+      .where(eq(runtimeLeases.id, fixture.runtimeLease!.id))
+      .limit(1)
+    expect(lease?.status).toBe('running')
   })
 })
 
@@ -190,8 +204,9 @@ async function createRunningTaskFixture(input: {
     agentName: agent!.name,
   })
   await db.update(taskThreads).set({ status: 'active' }).where(eq(taskThreads.id, thread.id))
+  let runtimeLease: typeof runtimeLeases.$inferSelect | null = null
   if (workerInstance) {
-    await db
+    const [insertedRuntimeLease] = await db
       .insert(runtimeLeases)
       .values({
         workspaceId: workspace!.id,
@@ -208,6 +223,8 @@ async function createRunningTaskFixture(input: {
         dataDir: `patrol-data-${task!.id}`,
         startedAt,
       })
+      .returning()
+    runtimeLease = insertedRuntimeLease ?? null
     await db
       .update(dbApi.workerInstances)
       .set({
@@ -243,5 +260,6 @@ async function createRunningTaskFixture(input: {
     thread,
     taskRoom,
     workerInstance,
+    runtimeLease: runtimeLease ?? null,
   }
 }

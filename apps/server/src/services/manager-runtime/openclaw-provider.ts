@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
@@ -9,6 +9,8 @@ import { getRuntimeServerPort } from '../../lib/runtime-server'
 import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv, matrixLocalpart } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
+import { resolveManagerAgentContractWorkspace } from '../agent-contract'
+import { ensureManagerAgentContractFromController } from '../agent-contract'
 import {
   containerControllerUrl,
   containerLlmBaseUrl,
@@ -125,7 +127,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       connectionMode,
       syncReady: residentSyncReady,
       running,
-      pid: containerMode ? null : running ? this.process!.pid ?? null : null,
+      pid: endpoint || containerMode ? null : running ? this.process!.pid ?? null : null,
       workspace: this.managerWorkspace,
       configPath: this.getConfigPath(),
       binaryPath: containerMode ? null : binaryPath,
@@ -193,8 +195,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     // Generate config with Matrix credentials and a real model catalog target.
     await this.generateConfig()
 
-    // Copy agent files
-    this.copyAgentFiles()
+    // Copy agent files and refresh Controller-backed registries.
+    await this.copyAgentFiles()
 
     // Launch
     if (managerContainersEnabled()) {
@@ -427,39 +429,18 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return configPath
   }
 
-  private copyAgentFiles(): void {
-    const sourceDir = join(process.cwd(), 'infra', 'manager-agent')
-    if (!existsSync(sourceDir)) return
-    mkdirSync(this.managerWorkspace, { recursive: true })
-    for (const file of ['SOUL.md', 'AGENTS.md', 'HEARTBEAT.md', 'TOOLS.md']) {
-      const src = join(sourceDir, file)
-      const dst = join(this.managerWorkspace, file)
-      if (existsSync(src) && !existsSync(dst)) {
-        writeFileSync(dst, readFileSync(src, 'utf8'), 'utf8')
-      }
-    }
-    const skillsSource = join(sourceDir, 'skills')
-    const skillsTarget = join(this.managerWorkspace, 'skills')
-    if (existsSync(skillsSource)) {
-      mkdirSync(skillsTarget, { recursive: true })
-      this.copyDirSync(skillsSource, skillsTarget)
-    }
-    // Copy agenthub CLI to Manager workspace so skills can use it
-    const cliSource = join(process.cwd(), 'infra', 'agenthub-cli', 'agenthub.ts')
-    if (existsSync(cliSource)) {
-      const cliDst = join(this.managerWorkspace, 'agenthub')
-      writeFileSync(cliDst, readFileSync(cliSource, 'utf8'), 'utf8')
-      chmodSync(cliDst, 0o755)
-    }
-    // Ensure state files exist
-    const statePath = join(this.managerWorkspace, 'state.json')
-    if (!existsSync(statePath)) {
-      writeFileSync(statePath, JSON.stringify({ schemaVersion: 1, status: 'ready', activeTasks: [] }, null, 2), 'utf8')
-    }
-    const registryPath = join(this.managerWorkspace, 'workers-registry.json')
-    if (!existsSync(registryPath)) {
-      writeFileSync(registryPath, JSON.stringify({ schemaVersion: 1, workers: [] }, null, 2), 'utf8')
-    }
+  private async copyAgentFiles(): Promise<void> {
+    const serverPort = getRuntimeServerPort() ?? Number(process.env.PORT || 3000)
+    await ensureManagerAgentContractFromController({
+      managerId: 'global',
+      runtimeType: this.runtimeType,
+      matrixUserId: this.config.matrixUserId ?? null,
+      controllerUrl: `http://localhost:${serverPort}`,
+      sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+      matrixHomeserverUrl: this.config.matrixUrl ?? null,
+      matrixServerName: this.config.matrixDomain ?? null,
+      runtimeConfigPath: this.getConfigPath(),
+    })
   }
 
   private launch(binaryPath: string): void {
@@ -488,12 +469,12 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     })
 
     this.process.stdout?.on('data', (data: Buffer) => {
-      for (const line of data.toString().trim().split('\n')) {
+      for (const line of decodeOpenClawLogChunk(data).trim().split('\n')) {
         if (line.trim()) logger.info({ source: 'openclaw-manager' }, line.trim())
       }
     })
     this.process.stderr?.on('data', (data: Buffer) => {
-      for (const line of data.toString().trim().split('\n')) {
+      for (const line of decodeOpenClawLogChunk(data).trim().split('\n')) {
         if (line.trim()) logger.warn({ source: 'openclaw-manager' }, line.trim())
       }
     })
@@ -537,19 +518,6 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     this.containerStartedAt = new Date().toISOString()
   }
 
-  private copyDirSync(src: string, dst: string): void {
-    const { readdirSync, statSync, copyFileSync } = require('node:fs')
-    for (const entry of readdirSync(src, { withFileTypes: true })) {
-      const s = join(src, entry.name)
-      const d = join(dst, entry.name)
-      if (entry.isDirectory()) {
-        mkdirSync(d, { recursive: true })
-        this.copyDirSync(s, d)
-      } else {
-        copyFileSync(s, d)
-      }
-    }
-  }
 }
 
 // ─── QwenPaw Provider ────────────────────────────────────────────────
@@ -681,6 +649,24 @@ async function describeOpenClawManagerDiagnostics(input: {
   const soulPath = join(input.workspace, 'SOUL.md')
   const agentsPath = join(input.workspace, 'AGENTS.md')
   const toolsPath = join(input.workspace, 'TOOLS.md')
+  const contract = resolveManagerAgentContractWorkspace('global')
+  const contractFiles = {
+    runtime: existsSync(contract.runtimePath),
+    runtimeManifest: existsSync(contract.runtimeManifestPath),
+    runtimeSpecificConfig: existsSync(input.configPath),
+    soul: existsSync(contract.soulPath),
+    agents: existsSync(contract.agentsPath),
+    tools: existsSync(contract.toolsPath),
+    heartbeat: existsSync(contract.heartbeatPath),
+    skillsDir: existsSync(contract.skillsDir),
+    memoryDir: existsSync(contract.memoryDir),
+    workerRegistry: existsSync(contract.workerRegistryPath),
+    teamRegistry: existsSync(contract.teamRegistryPath),
+    humanRegistry: existsSync(contract.humanRegistryPath),
+    state: existsSync(contract.statePath),
+    rooms: existsSync(contract.roomsPath),
+    logsDir: existsSync(contract.logsDir),
+  }
   const controllerUrl = `http://localhost:${getRuntimeServerPort() ?? Number(process.env.PORT || 3000)}`
   const controllerReachable = await probeControllerHealth(controllerUrl)
 
@@ -712,6 +698,27 @@ async function describeOpenClawManagerDiagnostics(input: {
     controllerReachable,
     matrixJoinedRooms: roomBindings.filter((room) => room.managerParticipantStatus === 'joined').length,
     roomBindings,
+    contract: {
+      root: contract.root,
+      runtimePath: contract.runtimePath,
+      runtimeManifestPath: contract.runtimeManifestPath,
+      runtimeSpecificConfigPath: input.configPath,
+      soulPath: contract.soulPath,
+      agentsPath: contract.agentsPath,
+      toolsPath: contract.toolsPath,
+      heartbeatPath: contract.heartbeatPath,
+      skillsDir: contract.skillsDir,
+      memoryDir: contract.memoryDir,
+      workerRegistryPath: contract.workerRegistryPath,
+      teamRegistryPath: contract.teamRegistryPath,
+      humanRegistryPath: contract.humanRegistryPath,
+      statePath: contract.statePath,
+      roomsPath: contract.roomsPath,
+      logsDir: contract.logsDir,
+      agentDir: contract.agentDir,
+      ready: Object.values(contractFiles).every(Boolean),
+      files: contractFiles,
+    },
     configuredMatrixRooms: input.configInspection.groupKeys,
     lastManagerReplyAt: latestReply ? new Date(latestReply.createdAt).toISOString() : null,
     lastManagerReplyPreview: latestReply?.body?.slice(0, 160) ?? null,
@@ -821,6 +828,26 @@ function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) 
     result.error = err instanceof Error ? err.message : String(err)
   }
   return result
+}
+
+function decodeOpenClawLogChunk(data: Buffer) {
+  const utf8 = data.toString('utf8')
+  if (!utf8.includes('�')) return utf8
+
+  try {
+    const Decoder = TextDecoder as unknown as new (label?: string) => TextDecoder
+    const gb18030 = new Decoder('gb18030').decode(data)
+    return scoreLogText(gb18030) >= scoreLogText(utf8) ? gb18030 : utf8
+  } catch {
+    return utf8
+  }
+}
+
+function scoreLogText(text: string) {
+  const replacement = (text.match(/\uFFFD/g) ?? []).length
+  const cjk = (text.match(/[\u4e00-\u9fff]/g) ?? []).length
+  const printable = (text.match(/[A-Za-z0-9]/g) ?? []).length
+  return cjk * 3 + printable - replacement * 10
 }
 
 function arrayOfStrings(value: unknown) {

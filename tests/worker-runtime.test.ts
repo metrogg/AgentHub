@@ -1,5 +1,8 @@
 import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
@@ -7,7 +10,8 @@ const roomBridgeApi = await import('../apps/server/src/services/rooms/room-chat-
 const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const workerRuntimeResourcesApi = await import('../apps/server/src/services/orchestrator/worker-runtime-resources')
-const agentRunnerApi = await import('../apps/server/src/services/agent-runner')
+const workerProtocolApi = await import('../apps/server/src/services/worker-runtime/worker-result-listener')
+const agentContractApi = await import('../apps/server/src/services/agent-contract')
 
 const {
   artifacts,
@@ -21,8 +25,10 @@ const {
   workspaceTasks,
   workspaces,
   runtimeLeases,
+  roomParticipants,
   workerInstances,
   taskThreads,
+  and,
   eq,
 } = dbApi
 const { roomService } = roomsApi
@@ -30,7 +36,8 @@ const { appendHumanMessageRoomFirst } = roomBridgeApi
 const { WorkerRuntimeService } = workerRuntimeApi
 const { ensureTaskThread } = taskThreadApi
 const { ensureWorkerInstance } = workerRuntimeResourcesApi
-const { joinRoom, leaveRoom } = agentRunnerApi
+const { handleWorkerProtocolMessage } = workerProtocolApi
+const { resolveWorkerAgentContractWorkspace } = agentContractApi
 type WorkerRuntime = workerRuntimeApi.WorkerRuntime
 type WorkerRuntimeContext = workerRuntimeApi.WorkerRuntimeContext
 type WorkerRuntimeEvent = workerRuntimeApi.WorkerRuntimeEvent
@@ -97,7 +104,7 @@ describe('WorkerRuntime task room integration', () => {
   })
 
   test('task resources become active as soon as WorkerRuntime starts the task room', async () => {
-    const { room } = await createTaskRoomFixture()
+    const { room, thread } = await createTaskRoomFixture()
     const runtime = new DeferredWorkerRuntime()
     const service = new WorkerRuntimeService()
     const running = service.runTaskRoom({
@@ -133,6 +140,21 @@ describe('WorkerRuntime task room integration', () => {
     expect(threadRows[0]?.status).toBe('completed')
     leaseRows = await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, room.taskId!))
     expect(leaseRows[0]?.status).toBe('released')
+
+    const contract = resolveWorkerAgentContractWorkspace(thread.workerInstanceId!)
+    const contractTasks = JSON.parse(readFileSync(contract.tasksPath, 'utf8')) as {
+      tasks: Array<{ taskId: string; status: string; runtimeLeaseId: string | null }>
+    }
+    const mirroredTask = contractTasks.tasks.find((item) => item.taskId === room.taskId)
+    expect(mirroredTask?.status).toBe('completed')
+    expect(mirroredTask?.runtimeLeaseId).toBe(leaseRows[0]?.id)
+    const contractState = JSON.parse(readFileSync(contract.statePath, 'utf8')) as {
+      activeTasks: Array<{ taskId: string; status: string }>
+      heartbeat: { lastTaskStartedAt: string | null; lastTaskCompletedAt: string | null }
+    }
+    expect(contractState.activeTasks.find((item) => item.taskId === room.taskId)?.status).toBe('completed')
+    expect(contractState.heartbeat.lastTaskStartedAt).toBeTruthy()
+    expect(contractState.heartbeat.lastTaskCompletedAt).toBeTruthy()
   })
 
   test('running task room emits WorkerRuntime heartbeat into room timeline and stops after completion', async () => {
@@ -162,6 +184,11 @@ describe('WorkerRuntime task room integration', () => {
       .where(eq(workerInstances.id, heartbeatEvents[0]!.metadata!.workerInstanceId as string))
     expect(workerRowsDuringRun[0]?.observedState).toBe('busy')
     expect(workerRowsDuringRun[0]?.health?.heartbeatCount).toBeGreaterThanOrEqual(1)
+    const heartbeatContract = resolveWorkerAgentContractWorkspace(heartbeatEvents[0]!.metadata!.workerInstanceId as string)
+    const heartbeatState = JSON.parse(readFileSync(heartbeatContract.statePath, 'utf8')) as {
+      heartbeat: { lastHeartbeatAt: string | null }
+    }
+    expect(heartbeatState.heartbeat.lastHeartbeatAt).toBeTruthy()
 
     runtime.finish()
     await running
@@ -205,6 +232,25 @@ describe('WorkerRuntime task room integration', () => {
     expect(rows[0]?.objectKey).toContain('/tasks/')
     expect(rows[0]?.storageProvider).toBe('local-filesystem')
     expect(rows[0]?.storagePath).toBeTruthy()
+  })
+
+  test('completed bridge Worker writes shared task result.md', async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), 'agenthub-shared-task-'))
+    const { room } = await createTaskRoomFixture({ projectPath })
+
+    const service = new WorkerRuntimeService()
+    const result = await service.runTaskRoom({
+      roomId: room.id,
+      ownerId: 'default-user',
+      runtime: new FakeWorkerRuntime(),
+    })
+
+    expect(result.status).toBe('completed')
+    const resultPath = join(projectPath, '.agenthub', 'shared', 'tasks', room.taskId!, 'result.md')
+    const resultText = readFileSync(resultPath, 'utf8')
+    expect(resultText).toContain('STATUS: SUCCESS')
+    expect(resultText).toContain('SUMMARY: 报告已完成。')
+    expect(resultText).toContain(`- .agenthub/shared/tasks/${room.taskId}/artifacts/report.html`)
   })
 
   test('worker clarification requests and partial artifacts are preserved in task room timeline', async () => {
@@ -545,65 +591,104 @@ describe('WorkerRuntime task room integration', () => {
     const artifactRows = await db.select().from(artifacts).where(eq(artifacts.roomId, room.id))
     expect(artifactRows.some((artifact) => artifact.title === 'report.html')).toBe(true)
   })
+
+  test('resident Worker TASK_COMPLETED protocol reconciles task room resources by room id', async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), 'agenthub-resident-result-'))
+    const { room, task, thread } = await createTaskRoomFixture({ projectPath })
+    expect(room.id).not.toBe(thread.sessionId)
+    const [workerParticipant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(and(eq(roomParticipants.roomId, room.id), eq(roomParticipants.participantType, 'worker')))
+      .limit(1)
+
+    const handled = await handleWorkerProtocolMessage({
+      roomId: room.id,
+      roomKind: 'task',
+      body: 'TASK_COMPLETED: 已完成页面和说明。',
+      senderParticipantId: workerParticipant?.id ?? null,
+      senderType: 'worker',
+      eventId: 'matrix-event-completed',
+    })
+
+    expect(handled).toBe(true)
+    const [updatedTask] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, task.id)).limit(1)
+    expect(updatedTask?.status).toBe('done')
+    const [updatedThread] = await db.select().from(taskThreads).where(eq(taskThreads.id, thread.id)).limit(1)
+    expect(updatedThread?.status).toBe('completed')
+    const [lease] = await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, task.id)).limit(1)
+    expect(lease?.status).toBe('released')
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, thread.workerInstanceId!)).limit(1)
+    expect(worker?.observedState).toBe('idle')
+    const workerContract = resolveWorkerAgentContractWorkspace(thread.workerInstanceId!)
+    const tasksMirror = JSON.parse(readFileSync(workerContract.tasksPath, 'utf8')) as {
+      tasks: Array<{ taskId: string; status?: string | null; runtimeLeaseId?: string | null }>
+    }
+    expect(tasksMirror.tasks).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        status: 'completed',
+        runtimeLeaseId: lease?.id,
+      }),
+    ])
+    const resultText = readFileSync(join(projectPath, '.agenthub', 'shared', 'tasks', task.id, 'result.md'), 'utf8')
+    expect(resultText).toContain('STATUS: SUCCESS')
+    expect(resultText).toContain('SUMMARY: 已完成页面和说明。')
+  })
+
+  test('resident Worker QUESTION protocol creates clarification and waiting resources', async () => {
+    const { room, task, thread } = await createTaskRoomFixture()
+    const [workerParticipant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(and(eq(roomParticipants.roomId, room.id), eq(roomParticipants.participantType, 'worker')))
+      .limit(1)
+
+    const handled = await handleWorkerProtocolMessage({
+      roomId: room.id,
+      roomKind: 'task',
+      body: 'QUESTION: 需要中文还是英文？',
+      senderParticipantId: workerParticipant?.id ?? null,
+      senderType: 'worker',
+      eventId: 'matrix-event-question',
+    })
+
+    expect(handled).toBe(true)
+    const [updatedTask] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, task.id)).limit(1)
+    expect(updatedTask?.status).toBe('blocked')
+    expect(updatedTask?.progressStatus).toBe('awaiting_human_clarification')
+    const [updatedThread] = await db.select().from(taskThreads).where(eq(taskThreads.id, thread.id)).limit(1)
+    expect(updatedThread?.status).toBe('waiting_for_human')
+    const [lease] = await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, task.id)).limit(1)
+    expect(lease?.status).toBe('waiting_for_human')
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, thread.workerInstanceId!)).limit(1)
+    expect(worker?.observedState).toBe('waiting_for_human')
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    expect(events.some((event) => event.metadata?.kind === 'worker-runtime.clarification-requested')).toBe(true)
+    const clarificationRows = await db.select().from(taskClarifications).where(eq(taskClarifications.taskId, task.id))
+    expect(clarificationRows.some((row) => row.question === '需要中文还是英文？')).toBe(true)
+    const workerContract = resolveWorkerAgentContractWorkspace(thread.workerInstanceId!)
+    const tasksMirror = JSON.parse(readFileSync(workerContract.tasksPath, 'utf8')) as {
+      tasks: Array<{ taskId: string; status?: string | null; runtimeLeaseId?: string | null }>
+    }
+    expect(tasksMirror.tasks).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        status: 'waiting_for_human',
+        runtimeLeaseId: lease?.id,
+      }),
+    ])
+  })
 })
 
-async function createDirectRoomFixture() {
-  const [workspace] = await db
-    .insert(workspaces)
-    .values({
-      ownerId: 'default-user',
-      name: 'Direct Worker Runtime Workspace',
-      goal: 'Run direct rooms',
-    })
-    .returning()
-  const [agent] = await db
-    .insert(workspaceAgents)
-    .values({
-      workspaceId: workspace!.id,
-      name: 'Direct Builder',
-      role: 'Direct worker',
-      roleType: 'coder',
-      runtimeType: 'code-agent',
-      codeAgentType: 'opencode',
-    })
-    .returning()
-  const [session] = await db
-    .insert(sessions)
-    .values({
-      title: 'Direct Builder',
-      type: 'direct',
-      ownerId: 'default-user',
-      workspaceId: workspace!.id,
-      workspaceAgentId: agent!.id,
-      metadata: { kind: 'agent-direct', savedAgentId: agent!.id },
-    })
-    .returning()
-  const room = await roomService.createRoom({
-    kind: 'direct',
-    ownerId: 'default-user',
-    workspaceId: workspace!.id,
-    sessionId: session!.id,
-    title: 'Direct Builder',
-    metadata: { kind: 'agent-direct' },
-  })
-  await roomService.addWorkerParticipant(room.id, agent!.id)
-  await roomService.appendTimelineEvent({
-    roomId: room.id,
-    senderType: 'human',
-    type: 'human.message',
-    body: 'Hello direct worker',
-    metadata: { messageId: 'direct-human-message', skipAutoDispatch: true },
-  })
-  return { room, workspace: workspace!, agent: agent!, session: session! }
-}
-
-async function createTaskRoomFixture() {
+async function createTaskRoomFixture(options: { projectPath?: string | null } = {}) {
   const [workspace] = await db
     .insert(workspaces)
     .values({
       ownerId: 'default-user',
       name: 'Worker Runtime Workspace',
       goal: 'Run task rooms',
+      projectPath: options.projectPath ?? null,
     })
     .returning()
   const [agent] = await db

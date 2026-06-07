@@ -3,7 +3,7 @@
  * agenthub CLI — AgentHub Controller command-line interface.
  * Aligned with HiClaw's `hiclaw` CLI pattern.
  *
- * Routes: /api/controller/* (REST) + /api/internal/manager/actions (legacy)
+ * Routes: /api/controller/* (REST)
  *
  * Environment:
  *   AGENTHUB_CONTROLLER_URL  (default: http://localhost:3001)
@@ -94,15 +94,26 @@ async function cmdWorker(args: string[]) {
     case 'create': {
       const name = requireFlag(f, 'name')
       const workspaceId = requireFlag(f, 'workspace')
+      const runtimeBase = f['runtime-base'] || f['worker-runtime-base'] || f['code-agent'] || f.runtime
+      if (!runtimeBase) {
+        console.error('Error: --runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini> is required')
+        process.exit(1)
+      }
       const result = await api('/api/controller/workers', {
         method: 'POST',
         body: {
           workspaceId, name,
           runtimeType: f.runtime || 'code-agent',
-          codeAgentType: f['code-agent'] || 'codex',
+          runtimeBase,
+          codeAgentType: f['code-agent'] || undefined,
           modelId: f.model || undefined,
           skillIds: f.skills ? f.skills.split(',') : undefined,
           soul: f.soul || undefined,
+          ownerId: f.owner || undefined,
+          groupSessionId: f.session || undefined,
+          joinGroupRoom: f['join-room'] === 'true' || f['join-group-room'] === 'true',
+          createDirectSession: f['direct-session'] !== 'false',
+          announce: f.announce !== 'false',
         },
       })
       output(result, f)
@@ -168,14 +179,25 @@ async function cmdWorker(args: string[]) {
     case 'apply': {
       const name = requireFlag(f, 'name')
       const workspaceId = f.workspace || ''
+      const runtimeBase = f['runtime-base'] || f['worker-runtime-base'] || f['code-agent'] || f.runtime
+      if (!runtimeBase) {
+        console.error('Error: --runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini> is required')
+        process.exit(1)
+      }
       const result = await api('/api/controller/workers', {
         method: 'POST',
         body: {
           workspaceId, name,
           runtimeType: f.runtime || 'code-agent',
-          codeAgentType: f['code-agent'] || 'codex',
+          runtimeBase,
+          codeAgentType: f['code-agent'] || undefined,
           modelId: f.model || undefined,
           skillIds: f.skills ? f.skills.split(',') : undefined,
+          ownerId: f.owner || undefined,
+          groupSessionId: f.session || undefined,
+          joinGroupRoom: f['join-room'] === 'true' || f['join-group-room'] === 'true',
+          createDirectSession: f['direct-session'] !== 'false',
+          announce: f.announce !== 'false',
         },
       })
       output(result, f)
@@ -192,6 +214,7 @@ async function cmdWorker(args: string[]) {
     }
     default:
       console.error('Usage: agenthub worker <create|list|get|update|delete|wake|stop|sleep|ensure-ready|status|apply|report-ready> [options]')
+      console.error('Create/apply require: --runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini>')
       process.exit(1)
   }
 }
@@ -279,9 +302,10 @@ async function cmdRun(args: string[]) {
     case 'create': {
       const workspaceId = requireFlag(f, 'workspace')
       const goal = requireFlag(f, 'goal')
+      const groupSessionId = f.session?.trim() || undefined
       const result = await api('/api/controller/runs', {
         method: 'POST',
-        body: { workspaceId, goal, groupSessionId: f.session || '' },
+        body: { workspaceId, goal, groupSessionId },
       })
       output(result, f)
       break
@@ -322,7 +346,7 @@ async function cmdRoom(args: string[]) {
     case 'create': {
       const ownerId = requireFlag(f, 'owner')
       const title = requireFlag(f, 'title')
-      const result = await api('/api/rooms', {
+      const result = await api('/api/controller/rooms', {
         method: 'POST',
         body: { ownerId, title, kind: f.kind || 'group', workspaceId: f.workspace || undefined },
       })
@@ -331,7 +355,9 @@ async function cmdRoom(args: string[]) {
     }
     case 'events': case 'timeline': {
       const roomId = requireFlag(f, 'room')
-      const result = await api(`/api/rooms/${roomId}/timeline?limit=${f.limit || '20'}`)
+      const result = await api(`/api/controller/rooms/${roomId}/events`, {
+        query: { limit: f.limit || '20' },
+      })
       output(result, f)
       break
     }
@@ -339,7 +365,7 @@ async function cmdRoom(args: string[]) {
       const roomId = requireFlag(f, 'room')
       const agentId = requireFlag(f, 'agent')
       const body = requireFlag(f, 'body')
-      const result = await api(`/api/rooms/${roomId}/mention`, {
+      const result = await api(`/api/controller/rooms/${roomId}/mentions`, {
         method: 'POST', body: { workspaceAgentId: agentId, body },
       })
       output(result, f)
@@ -457,7 +483,18 @@ async function cmdApply(args: string[]) {
   if (file) {
     const { readFileSync } = require('node:fs')
     const content = readFileSync(file, 'utf8')
-    const result = await api('/api/controller/apply', { method: 'POST', body: { yaml: content } })
+    const approvalMode = f['approval-mode'] || f.approval
+    const body: Record<string, unknown> = { yaml: content }
+    if (approvalMode) body.approvalMode = approvalMode
+    if (f.room) body.requestApprovalRoomId = f.room
+    if (f.reason || f['requested-by']) {
+      body.approvalRequest = {
+        roomId: f.room || undefined,
+        reason: f.reason || undefined,
+        requestedBy: f['requested-by'] || undefined,
+      }
+    }
+    const result = await api('/api/controller/apply', { method: 'POST', body })
     output(result, f)
   } else {
     const resource = args[0]
@@ -467,11 +504,54 @@ async function cmdApply(args: string[]) {
   }
 }
 
+// ─── Approval Command ────────────────────────────────────────────────
+
+async function cmdApproval(args: string[]) {
+  const [sub, ...rest] = args
+  const { flags: f } = parseArgs(rest)
+  const eventId = f.event || f['event-id'] || f.id
+  if (!eventId) { console.error('Error: --event <timeline-event-id> is required'); process.exit(1) }
+
+  switch (sub) {
+    case 'confirm': {
+      const result = await api(`/api/controller/approvals/${eventId}/confirm`, {
+        method: 'POST',
+        body: {
+          approvedBy: f['approved-by'] || f.by || undefined,
+          reason: f.reason || undefined,
+        },
+      })
+      output(result, f)
+      break
+    }
+    case 'deny': {
+      const result = await api(`/api/controller/approvals/${eventId}/deny`, {
+        method: 'POST',
+        body: {
+          deniedBy: f['denied-by'] || f.by || undefined,
+          reason: f.reason || undefined,
+        },
+      })
+      output(result, f)
+      break
+    }
+    default:
+      console.error('Usage: agenthub approval <confirm|deny> --event <timeline-event-id> [--reason "..."]')
+      process.exit(1)
+  }
+}
+
 // ─── Status & Version ────────────────────────────────────────────────
 
 async function cmdStatus(args: string[]) {
   const { flags: f } = parseArgs(args)
   const result = await api('/api/controller/status')
+  output(result, f)
+}
+
+async function cmdSchema(args: string[]) {
+  const { flags: f } = parseArgs(args)
+  const result = await api('/api/controller/schema')
   output(result, f)
 }
 
@@ -508,7 +588,9 @@ Usage:
   agenthub room     <create|events|mention>
   agenthub team     <create|list|get|update|delete>
   agenthub human    <create|list|delete>
-  agenthub apply    -f <yaml-file>  |  agenthub apply worker --name <N> ...
+  agenthub apply    -f <yaml-file> [--approval-mode request --room <room-id>]  |  agenthub apply worker --name <N> ...
+  agenthub approval <confirm|deny> --event <timeline-event-id>
+  agenthub schema
   agenthub status
   agenthub version
   agenthub state    --workspace <id>
@@ -535,6 +617,8 @@ async function main() {
       case 'team':      await cmdTeam(rest); break
       case 'human':     await cmdHuman(rest); break
       case 'apply':     await cmdApply(rest); break
+      case 'approval':  await cmdApproval(rest); break
+      case 'schema':    await cmdSchema(rest); break
       case 'status':    await cmdStatus(rest); break
       case 'version':   await cmdVersion(rest); break
       case 'state':     await cmdState(rest); break

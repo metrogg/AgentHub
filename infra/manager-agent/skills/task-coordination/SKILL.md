@@ -33,3 +33,11 @@ Tasks can declare dependencies on other tasks. The platform handles dependency r
 - Use `--run` to group related tasks under a single orchestration run.
 - Monitor blocked tasks via `agenthub run status` and intervene if needed.
 - When a dependency task fails, decide whether to retry it or skip dependent tasks.
+
+## Decision Pattern
+
+1. Read the project/run status, task room timeline, and shared task contract.
+2. Identify whether the issue is dependency, capacity, clarification, failure, or stale lease.
+3. Use Controller APIs to release, retry, pause, cancel, or reassign tasks.
+4. Write the coordination decision back to the Matrix room.
+5. Ask the human before destructive recovery or scope changes.

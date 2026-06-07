@@ -35,6 +35,7 @@ import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/
 import { describeContainerRuntime, ensureOpenClawRuntimeImage } from '../services/container-runtime/agent-runtime-containers'
 import { dockerRuntime } from '../services/container-runtime/docker-runtime'
 import { describeControllerPlane } from '../services/controller-plane/diagnostics'
+import { runResidentWorkerSelfTest } from '../services/controller-plane/resident-worker-self-test'
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
@@ -246,6 +247,23 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/controller-plane/status', async (c) => {
     return c.json(await describeControllerPlane())
+  })
+  .post('/controller-plane/workers/:workerInstanceId/resident-self-test', async (c) => {
+    const workerInstanceId = c.req.param('workerInstanceId')
+    const user = c.get('user') ?? DEFAULT_USER
+    const body = await c.req.json<{
+      dispatch?: boolean
+      roomId?: string | null
+      timeoutMs?: number
+    }>().catch(() => ({} as { dispatch?: boolean; roomId?: string | null; timeoutMs?: number }))
+    const result = await runResidentWorkerSelfTest({
+      workerInstanceId,
+      ownerId: user.sub,
+      dispatch: body.dispatch === true,
+      roomId: body.roomId ?? null,
+      timeoutMs: body.timeoutMs,
+    })
+    return c.json(result)
   })
   .get('/container-runtime/status', async (c) => {
     return c.json(await describeContainerRuntime())
@@ -965,7 +983,7 @@ function managerRuntimeStatusMessage(status: {
     return status.error || '未检测到 OpenClaw。请安装（bash infra/setup-openclaw.sh）或检查 PATH。'
   }
   if (status.runtimeType === 'qwenpaw') {
-    return status.error || 'QwenPaw Manager runtime 尚未接入。'
+    return status.error || 'QwenPaw 仅保留兼容占位，不是当前产品主路径。'
   }
   return '未知的 Manager runtime 配置。请检查 AGENTHUB_MANAGER_RUNTIME 环境变量。'
 }

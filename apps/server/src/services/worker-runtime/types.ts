@@ -53,10 +53,14 @@ export interface WorkerRuntimeContext {
   sessionId: string
   workspaceId: string
   workspaceAgentId: string
+  workerParticipantId?: string | null
   workerInstanceId?: string | null
   taskId?: string | null
   taskThreadId?: string | null
   runId?: string | null
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
+  runtimeLeaseId?: string | null
   prompt: string
   history: Array<{
     senderType: 'human' | 'manager' | 'worker' | 'system'

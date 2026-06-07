@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
 import { matrixLocalpart } from '../rooms/matrix-client'
+import { ensureManagerAgentContract } from '../agent-contract'
 
 // ─── OpenClaw Launcher ───────────────────────────────────────────────
 // Launches OpenClaw as a child process that connects to our Tuwunel
@@ -252,31 +253,16 @@ export class OpenClawLauncher {
    * from the infra/manager-agent directory to the manager workspace.
    */
   copyAgentFiles(): void {
-    const sourceDir = join(process.cwd(), 'infra', 'manager-agent')
-    if (!existsSync(sourceDir)) {
-      logger.warn({ sourceDir }, 'Agent files source directory not found, skipping')
-      return
-    }
-    const targetDir = this.managerWorkspace
-    mkdirSync(targetDir, { recursive: true })
-
-    const files = ['SOUL.md', 'AGENTS.md', 'HEARTBEAT.md', 'TOOLS.md']
-    for (const file of files) {
-      const src = join(sourceDir, file)
-      const dst = join(targetDir, file)
-      if (existsSync(src) && !existsSync(dst)) {
-        writeFileSync(dst, readFileSync(src, 'utf8'), 'utf8')
-        logger.info({ file }, 'Copied agent file to manager workspace')
-      }
-    }
-
-    // Copy skills directory
-    const skillsSource = join(sourceDir, 'skills')
-    const skillsTarget = join(targetDir, 'skills')
-    if (existsSync(skillsSource)) {
-      mkdirSync(skillsTarget, { recursive: true })
-      this.copyDirSync(skillsSource, skillsTarget)
-    }
+    ensureManagerAgentContract({
+      managerId: 'global',
+      runtimeType: 'openclaw',
+      matrixUserId: this.config.matrixUserId ?? null,
+      controllerUrl: this.config.controllerUrl ?? null,
+      sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+      matrixHomeserverUrl: this.config.matrixUrl ?? null,
+      matrixServerName: this.config.matrixDomain ?? null,
+      runtimeConfigPath: join(this.managerWorkspace, 'openclaw.json'),
+    })
   }
 
   /**

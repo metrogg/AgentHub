@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 describe('code agent partial success handling', () => {
   test('treats webfetch 404 as a fetch problem instead of a model problem', async () => {
@@ -50,79 +53,70 @@ describe('code agent partial success handling', () => {
     expect(args).toContain('deepseek/xiaomi-token-plan-cn/mimo-v2.5')
   })
 
-  test('builds OpenClaw args from the local OpenClaw agent identity without model injection', async () => {
+  test('probes bridge CLI runtime with native version and doctor commands', async () => {
     const { __codeAgentAdapterTestHooks } = await import(
       '../apps/server/src/services/code-agent-adapter'
     )
+    const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-opencode-probe-'))
+    const commandPath = process.platform === 'win32'
+      ? join(tempDir, 'fake-opencode.cmd')
+      : join(tempDir, 'fake-opencode')
+    const script = process.platform === 'win32'
+      ? [
+          '@echo off',
+          'if "%1"=="--version" echo opencode 1.2.3 & exit /b 0',
+          'if "%1"=="doctor" echo doctor ok & exit /b 0',
+          'if "%1"=="--help" (',
+          '  echo Usage: opencode [command] [options]',
+          '  echo Commands: auth login, models, mcp, serve, run, debug, agent, session',
+          '  echo Options: --model ^<provider/model^> --output-format json --print --session-id ^<id^>',
+          '  exit /b 0',
+          ')',
+          'echo unknown command %1',
+          'exit /b 1',
+        ].join('\r\n')
+      : [
+          '#!/usr/bin/env sh',
+          'if [ "$1" = "--version" ]; then echo "opencode 1.2.3"; exit 0; fi',
+          'if [ "$1" = "doctor" ]; then echo "doctor ok"; exit 0; fi',
+          'if [ "$1" = "--help" ]; then',
+          '  echo "Usage: opencode [command] [options]"',
+          '  echo "Commands: auth login, models, mcp, serve, run, debug, agent, session"',
+          '  echo "Options: --model <provider/model> --output-format json --print --session-id <id>"',
+          '  exit 0',
+          'fi',
+          'echo "unknown command $1"',
+          'exit 1',
+        ].join('\n')
+    writeFileSync(commandPath, script, 'utf8')
+    if (process.platform !== 'win32') chmodSync(commandPath, 0o755)
 
-    const args = __codeAgentAdapterTestHooks.buildOpenClawArgs('Read prompt', {
-      roleProfile: { source: 'openclaw', openclawAgentId: 'main' },
-      modelId: 'should-not-pass',
-      modelProvider: 'should-not-pass',
+    const nativeProbe = await __codeAgentAdapterTestHooks.probeCodeAgentNativeCli(commandPath)
+    const doctorProbe = await __codeAgentAdapterTestHooks.probeCodeAgentDoctorCli('opencode', commandPath)
+    const capabilityProbe = await __codeAgentAdapterTestHooks.probeCodeAgentCapabilityCli('opencode', commandPath)
+
+    expect(nativeProbe.ok).toBe(true)
+    expect(nativeProbe.version).toBe('1.2.3')
+    expect(doctorProbe).toMatchObject({
+      kind: 'doctor',
+      supported: true,
+      ok: true,
     })
-
-    expect(args).toEqual([
-      'agent',
-      '--agent',
-      'main',
-      '--message',
-      'Read prompt',
-      '--json',
-      '--local',
-    ])
-    expect(args).not.toContain('--model')
-    expect(args).not.toContain('should-not-pass')
-  })
-
-  test('asks OpenClaw to read the generated prompt file when the task prompt is file-backed', async () => {
-    const { __codeAgentAdapterTestHooks } = await import(
-      '../apps/server/src/services/code-agent-adapter'
+    expect(doctorProbe.output).toContain('doctor ok')
+    expect(capabilityProbe.ok).toBe(true)
+    expect(capabilityProbe.detected).toEqual(
+      expect.arrayContaining([
+        'auth',
+        'models',
+        'mcp',
+        'server',
+        'nonInteractive',
+        'jsonOutput',
+        'sessionResume',
+        'agents',
+        'doctor',
+      ]),
     )
-
-    const args = __codeAgentAdapterTestHooks.buildOpenClawArgs('short wrapper', {
-      roleProfile: { openclawAgentId: 'ops' },
-      promptFile: 'C:\\Temp\\AgentHub\\task-prompt.md',
-    })
-
-    expect(args[2]).toBe('ops')
-    expect(args[3]).toBe('--message')
-    expect(args[4]).toContain('Prompt file path: C:\\Temp\\AgentHub\\task-prompt.md')
-    expect(args[4]).not.toContain('Read the attached prompt file')
-  })
-
-  test('adds workspaceId to static HTML preview artifact URLs', async () => {
-    const { __codeAgentAdapterTestHooks } = await import(
-      '../apps/server/src/services/code-agent-adapter'
-    )
-
-    const url = __codeAgentAdapterTestHooks.staticPreviewUrl(
-      'F:\\Learning\\AgentHub',
-      'dist/index.html',
-      'workspace-1',
-    )
-
-    expect(url).toContain('/api/artifacts/preview-file?')
-    expect(url).toContain('workspaceId=workspace-1')
-    expect(url).toContain(`path=${encodeURIComponent('F:\\Learning\\AgentHub\\dist\\index.html')}`)
-
-    const fallbackUrl = __codeAgentAdapterTestHooks.staticPreviewUrl(
-      'F:\\Learning\\AgentHub',
-      'dist/index.html',
-    )
-    expect(fallbackUrl).toContain('/api/artifacts/preview-dir/')
-    expect(fallbackUrl).not.toContain('/api/artifacts/preview-file?path=')
-  })
-
-  test('extracts OpenClaw JSON result messages', async () => {
-    const { __codeAgentAdapterTestHooks } = await import(
-      '../apps/server/src/services/code-agent-adapter'
-    )
-
-    expect(
-      __codeAgentAdapterTestHooks.extractOpenClawResultMessage(
-        JSON.stringify({ result: { message: 'ok' } }),
-      ),
-    ).toBe('ok')
   })
 
   test('explains OpenCode provider/model lookup failures precisely', async () => {

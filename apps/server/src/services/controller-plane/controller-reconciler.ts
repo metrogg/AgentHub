@@ -8,6 +8,9 @@ export const controllerReconcileQueue = new ReconcileQueue({
 controllerReconcileQueue.register('Worker', (request) =>
   controllerApi.handleReconcileRequest(request),
 )
+controllerReconcileQueue.register('Manager', (request) =>
+  controllerApi.handleReconcileRequest(request),
+)
 controllerReconcileQueue.register('Run', (request) =>
   controllerApi.handleReconcileRequest(request),
 )

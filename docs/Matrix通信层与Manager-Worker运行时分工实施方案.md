@@ -1,6 +1,6 @@
 # Matrix 通信层与 Manager / Worker 运行时分工实施方案
 
-最后更新：2026-06-05（Tuwunel 本地真实 Matrix 与 Controller Plane 诊断收口）
+最后更新：2026-06-07（Room timeline 主事实源、resident Manager/Worker 现场验收口径收口）
 
 本文档用于下一阶段并行重构分工。目标不是把 AgentHub 直接搬成完整 HiClaw 企业栈，而是做成轻量版 HiClaw：
 
@@ -36,7 +36,7 @@ bun run matrix:logs
 查看 AgentHub 侧 Matrix 诊断：
 
 ```bash
-curl http://localhost:8000/api/rooms/matrix/diagnostics
+curl "${AGENTHUB_API_BASE:-http://127.0.0.1:8000}/api/rooms/matrix/diagnostics"
 ```
 
 诊断接口会返回 provider、homeserver `/versions` 探测、注册配置是否存在、Matrix rooms / identities / backend participants 数量，以及 Manager / Worker listener 的 `lastSyncedAt`、`lastOkAt`、`lastErrorAt`、`consecutiveErrors`。该接口只读，不会启动或停止 listener，也不会返回 access token、registration token 或 password。
@@ -70,8 +70,8 @@ AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
 ## 一句话分工
 
 - **通信层**：Codex 继续推进。目标是让 Matrix 成为 Room 事实源，完成身份、加入、监听、mention、控制消息、文件引用、审计和前端投影闭环。
-- **Manager Runtime**：用户/另一位 Agent 推进。目标是把 CoordinatorRuntime 从“JSON action LLM 壳”升级成 HiClaw 风格 skill-driven Manager runtime。
-- **Worker Runtime**：用户/另一位 Agent 推进。目标是把 WorkerRuntime 从“一次性 CLI 任务调用”升级成 Room-native、可等待、可恢复、可停止、可审计的 Worker 状态机。
+- **Manager Runtime**：目标是把旧 CoordinatorRuntime 从“JSON action LLM 壳”退成测试/迁移层，主路径变成 HiClaw 风格 skill-driven Manager runtime。OpenClaw / QwenPaw 是 Manager runtime 候选，Manager 通过 Matrix room 看消息，通过 skill 调 Controller API。
+- **Worker Runtime**：目标是把 WorkerRuntime 从“一次性 CLI 任务调用”升级成 Room-native、可等待、可恢复、可停止、可审计的 Worker 状态机。OpenCode / Claude Code / Codex / Gemini 当前是 AgentHub-managed bridge；OpenClaw Worker 是 resident Worker 目标形态。
 
 ## 当前基线
 
@@ -83,9 +83,9 @@ AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
 - `MatrixRoomEventDispatcher`
 - `roomParticipants` / `matrixIdentities` / `timelineEvents`
 - Matrix 真实 room 创建、identity 注册或登录、invite / join、participant token 发言
-- 普通 group/direct 新消息 Room-first 写入：先写 Room timeline / Matrix event，再生成 `messages` 兼容投影
+- 普通 group/direct/task room 新消息 Room-first 写入：只写 Room timeline / Matrix event；`messages` 只保留旧会话历史只读兼容，不再为新消息生成投影缓存
 - `GET /api/messages/:sessionId` 读取侧 Room-first：优先从 Room timeline 投影，旧 `messages` 表只补历史/特殊兼容行
-- 编辑、清空、撤回、重发关联撤回、重新生成关联撤回、pin/unpin 已写成 Room timeline 的 append-only `message.*` 控制事件，旧 `messages` 更新/删除只作为迁移期 UI 缓存同步
+- 编辑、清空、撤回、重发关联撤回、重新生成关联撤回、pin/unpin 已写成 Room timeline 的 append-only `message.*` 控制事件，旧 `messages` 更新/删除只允许 legacy session 兼容
 - `/sync` 导入、mention 解析、file ref 解析、`mxc://` 下载到 ArtifactStore
 - `/stop` 取消 task room
 - `/approve` 和普通 human reply 回答 pending Worker clarification
@@ -97,16 +97,16 @@ AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
 - Matrix listener 的 durable supervisor 和启动恢复可观测面
 - 人工控制与 pending proposal / clarification / task decision 的强绑定
 - 前端完全从 Room timeline 恢复状态，而不是混合旧 snapshot
-- Manager / Worker 还不是常驻 Matrix runtime
-- Manager skill 调 Controller API 的端到端闭环还不完整
+- Resident Manager / Worker 已有最小链路和设置页诊断，但真实 OpenClaw 进程/容器长期 `/sync`、room binding、skill 调 Controller API、Worker 被 @ 后自主接单仍需要持续现场 e2e 验收
+- Manager skill 调 Controller API 的端到端闭环已有基础能力，仍要补 create_worker / invite_worker / mention_worker / assign_task 等用户可见链路的稳定验收
 
 ## 目标架构
 
 ```mermaid
 flowchart LR
   Human["Human participant"]
-  Manager["Manager Runtime<br/>OpenClaw/QwenPaw later"]
-  Worker["Worker Runtime<br/>Claude Code/OpenCode/Codex/Gemini"]
+  Manager["Manager Runtime<br/>OpenClaw/QwenPaw"]
+  Worker["Worker Runtime<br/>OpenClaw resident<br/>OpenCode/Claude/Codex/Gemini bridge"]
   Matrix["Matrix Homeserver<br/>Room / Timeline / Mention"]
   Controller["AgentHub Controller API<br/>Run/Task/Room/Worker/Lease"]
   Store["SharedStorage / ArtifactStore<br/>filesystem first, S3-compatible semantics"]

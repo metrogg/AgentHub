@@ -30,7 +30,7 @@ export interface MemberProposal {
   systemPrompt?: string
   runtimeType?: 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
-  workerRuntimeBase?: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  workerRuntimeBase?: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   color?: string
   modelId?: string | null
   capabilityTags?: string[]

@@ -60,6 +60,10 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.metadata && 'memberProposals' in (message.metadata as Record<string, unknown>)
       ? { ...(message.metadata as Record<string, unknown>), messageId: message.id, content: message.content }
       : null
+  const controllerApproval =
+    message.metadata?.kind === 'controller.apply.approval.requested'
+      ? { ...(message.metadata as Record<string, unknown>), messageId: message.id, content: message.content }
+      : null
   const rawCodeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun)
     ? message.metadata.codeAgentRun
     : null
@@ -104,6 +108,9 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const memberProposalPart = memberProposal
     ? [{ type: 'data' as const, name: 'member_proposal_card', data: memberProposal }]
     : []
+  const controllerApprovalPart = controllerApproval
+    ? [{ type: 'data' as const, name: 'controller_approval_card', data: controllerApproval }]
+    : []
 
   return {
     id: message.id,
@@ -118,6 +125,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 { type: 'text', text },
                 ...attachmentPart,
                 ...memberProposalPart,
+                ...controllerApprovalPart,
                 { type: 'data', name: 'code_agent_run', data: codeAgentRun },
                 ...fileCardPart,
                 ...deliveryReportPart,
@@ -127,6 +135,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 { type: 'text', text },
                 ...attachmentPart,
                 ...memberProposalPart,
+                ...controllerApprovalPart,
                 ...artifactPart,
                 ...fileCardPart,
                 ...deliveryReportPart,

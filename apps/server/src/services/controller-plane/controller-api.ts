@@ -18,14 +18,18 @@ import type { RoomKind, TimelineEventType } from '../rooms/types'
 import { roomService } from '../rooms/room-service'
 import { roomController } from '../rooms/room-controller'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
+import { ensureManagerAgentContractFromController, managerRuntimeSpecificConfigFileName } from '../agent-contract'
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import { workerController } from '../orchestrator/worker-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { registerArtifactBatch } from '../orchestrator/artifact-controller'
+import { getManagerProvider, type ManagerAction, type ManagerRuntimeProvider, type ManagerRuntimeType } from '../manager-runtime'
+import { ensureGroupSession } from '../workspace/session-manager'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { dockerWorkerBackend } from './docker-worker-backend'
 import { localCliWorkerBackend, type WorkerBackend } from './worker-backend'
-import { openclawLauncher } from '../manager-runtime/openclaw-launcher'
+import { MemberReconciler } from './member-reconciler'
+import { dispatchAssignBatch } from './task-dispatcher'
 import {
   condition,
   resourceRef,
@@ -36,13 +40,18 @@ import {
 
 export interface ControllerApiOptions {
   workerBackend?: WorkerBackend
+  managerProviderResolver?: (runtimeType: ManagerRuntimeType) => ManagerRuntimeProvider | null
 }
 
 export class ControllerApi {
   private readonly workerBackend: WorkerBackend
+  private readonly memberReconciler: MemberReconciler
+  private readonly managerProviderResolver: (runtimeType: ManagerRuntimeType) => ManagerRuntimeProvider | null
 
   constructor(options: ControllerApiOptions = {}) {
     this.workerBackend = options.workerBackend ?? (workerContainersEnabled() ? dockerWorkerBackend : localCliWorkerBackend)
+    this.memberReconciler = new MemberReconciler(this.workerBackend)
+    this.managerProviderResolver = options.managerProviderResolver ?? getManagerProvider
   }
 
   async applyWorker(input: {
@@ -177,11 +186,30 @@ export class ControllerApi {
 
   async createRun(input: {
     workspaceId: string
-    groupSessionId: string
+    groupSessionId?: string | null
     goal: string
     actor?: { id?: string | null; name?: string | null } | null
   }) {
-    return runController.start(input)
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, input.workspaceId))
+      .limit(1)
+    if (!workspace) throw new Error(`Workspace ${input.workspaceId} not found.`)
+
+    const groupSession = input.groupSessionId
+      ? await this.loadWorkspaceGroupSession(input.groupSessionId, input.workspaceId)
+      : await ensureGroupSession(input.workspaceId, workspace.ownerId)
+    if (!groupSession) {
+      throw new Error(`Group session ${input.groupSessionId} not found in workspace ${input.workspaceId}.`)
+    }
+
+    return runController.start({
+      workspaceId: input.workspaceId,
+      groupSessionId: groupSession.id,
+      goal: input.goal,
+      actor: input.actor ?? null,
+    })
   }
 
   async listRuns(workspaceId: string) {
@@ -224,6 +252,59 @@ export class ControllerApi {
 
   async listTasks(runId: string) {
     return db.select().from(workspaceTasks).where(eq(workspaceTasks.runId, runId))
+  }
+
+  async assignTask(input: {
+    workspaceId: string
+    title: string
+    description?: string | null
+    spec?: string | null
+    message?: string | null
+    goal?: string | null
+    targetWorkerId?: string | null
+    assignToAgentId?: string | null
+    taskKey?: string | null
+    dependsOn?: string[]
+    runId?: string | null
+    groupSessionId?: string | null
+    ownerId?: string | null
+    runtimeType?: string | null
+  }) {
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, input.workspaceId))
+      .limit(1)
+    if (!workspace) throw new Error(`Workspace ${input.workspaceId} not found.`)
+    const ownerId = input.ownerId ?? workspace.ownerId
+    if (ownerId !== workspace.ownerId) throw new Error(`Owner ${ownerId} cannot assign tasks in workspace ${workspace.id}.`)
+
+    const groupSession = input.groupSessionId
+      ? await this.loadWorkspaceGroupSession(input.groupSessionId, input.workspaceId)
+      : await ensureGroupSession(input.workspaceId, ownerId)
+    if (!groupSession) throw new Error(`Group session ${input.groupSessionId} not found in workspace ${input.workspaceId}.`)
+
+    const runContext = input.runId ? await this.getRunContext(input.runId) : null
+    const description = input.spec?.trim() || input.description?.trim() || input.message?.trim() || input.title
+    const action: ManagerAction = {
+      type: 'assign',
+      targetWorkerId: input.targetWorkerId ?? input.assignToAgentId ?? undefined,
+      taskKey: input.taskKey ?? undefined,
+      dependsOn: input.dependsOn,
+      taskTitle: input.title,
+      taskDescription: description,
+      message: input.message?.trim() || description,
+      reason: 'Controller API: task.assign',
+    }
+
+    return dispatchAssignBatch({
+      groupSession,
+      ownerId,
+      goal: input.goal?.trim() || input.title,
+      actions: [action],
+      runtimeType: input.runtimeType ?? 'code-agent',
+      run: runContext ?? undefined,
+    })
   }
 
   async getTask(taskId: string) {
@@ -272,6 +353,30 @@ export class ControllerApi {
       kind: input.kind ?? 'group',
       title: input.title,
       workspaceId: input.workspaceId ?? undefined,
+    })
+  }
+
+  async listRooms(input: { workspaceId?: string | null; ownerId?: string | null }) {
+    const predicates = []
+    if (input.workspaceId) predicates.push(eq(rooms.workspaceId, input.workspaceId))
+    if (input.ownerId) predicates.push(eq(rooms.ownerId, input.ownerId))
+    if (predicates.length === 0) return []
+    return db
+      .select()
+      .from(rooms)
+      .where(predicates.length === 1 ? predicates[0] : and(...predicates))
+  }
+
+  async getRoom(roomId: string) {
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
+    return room ?? null
+  }
+
+  listRoomEvents(input: { roomId: string; afterSequence?: number; limit?: number }) {
+    return roomService.listTimelineEvents({
+      roomId: input.roomId,
+      afterSequence: input.afterSequence ?? 0,
+      limit: input.limit ?? 100,
     })
   }
 
@@ -387,6 +492,17 @@ export class ControllerApi {
 
   async handleReconcileRequest(request: ReconcileRequest): Promise<ReconcileResult> {
     switch (request.ref.kind) {
+      case 'Manager':
+        return this.reconcileManager({
+          managerId: request.ref.id,
+          runtimeType: stringPayload(request.payload, 'runtimeType'),
+          controllerUrl: stringPayload(request.payload, 'controllerUrl'),
+          sharedStorageRoot: stringPayload(request.payload, 'sharedStorageRoot'),
+          matrixHomeserverUrl: stringPayload(request.payload, 'matrixHomeserverUrl'),
+          matrixServerName: stringPayload(request.payload, 'matrixServerName'),
+          desiredState: stringPayload(request.payload, 'desiredState'),
+          reason: request.reason,
+        })
       case 'Worker':
         return this.reconcileWorker({
           workerInstanceId: request.ref.id,
@@ -454,82 +570,206 @@ export class ControllerApi {
     name: string
     runtimeType?: string
     runtimeBase?: string
+    workerRuntimeBase?: string
     codeAgentType?: string
     modelId?: string | null
     skillIds?: string[]
     role?: string
     roleType?: string
+    description?: string
+    systemPrompt?: string
+    roleProfile?: Record<string, unknown> | null
+    color?: string
+    capabilityTags?: string[]
+    toolPermissions?: string[]
     sandboxPolicy?: string
+    contextPolicy?: string
+    autoInvoke?: boolean
+    approvalRequired?: boolean
+    ownerId?: string | null
+    groupSessionId?: string | null
+    joinGroupRoom?: boolean
+    createDirectSession?: boolean
+    announce?: boolean
   }) {
-    const requestedWorkerRuntimeBase = normalizeWorkerRuntimeBase(input.runtimeBase ?? input.runtimeType ?? input.codeAgentType)
-    const explicitModelId =
-      input.modelId?.trim() ||
-      process.env.AGENTHUB_WORKER_LLM_MODEL?.trim() ||
-      process.env.LLM_MODEL?.trim() ||
-      null
-    if (requestedWorkerRuntimeBase === 'openclaw' && !workerContainersEnabled() && !openclawLauncher.isAvailable()) {
-      throw new Error(
-        'OpenClaw Worker requires a resident backend. Install OpenClaw locally or enable AGENTHUB_WORKER_BACKEND=docker / AGENTHUB_CONTAINER_RUNTIME=docker before creating this Worker.',
-      )
+    return this.memberReconciler.reconcile(input)
+  }
+
+  async reconcileManager(input: {
+    managerId?: string | null
+    runtimeType?: string | null
+    controllerUrl?: string | null
+    sharedStorageRoot?: string | null
+    matrixHomeserverUrl?: string | null
+    matrixServerName?: string | null
+    desiredState?: string | null
+    reason?: string | null
+  }): Promise<ReconcileResult> {
+    const managerId = input.managerId?.trim() || 'global'
+    const runtimeType = input.runtimeType?.trim() || 'openclaw'
+    if (!isManagerRuntimeType(runtimeType)) {
+      throw new Error(`Manager runtimeType must be openclaw or qwenpaw, received ${runtimeType}.`)
+    }
+    const desiredState = normalizeManagerDesiredState(input.desiredState)
+
+    const identity = await this.ensureManagerMatrixIdentity(managerId)
+    const workspace = await ensureManagerAgentContractFromController({
+      managerId,
+      runtimeType,
+      matrixUserId: identity.userId,
+      controllerUrl: input.controllerUrl ?? process.env.AGENTHUB_CONTROLLER_URL ?? null,
+      sharedStorageRoot: input.sharedStorageRoot ?? process.env.AGENTHUB_SHARED_STORAGE_ROOT ?? null,
+      matrixHomeserverUrl: input.matrixHomeserverUrl ?? process.env.AGENTHUB_MATRIX_HOMESERVER_URL ?? null,
+      matrixServerName: input.matrixServerName ?? process.env.AGENTHUB_MATRIX_SERVER_NAME ?? null,
+      managerState: {
+        reconcileReason: input.reason ?? 'controller-manager-reconcile',
+        desiredRuntimeType: runtimeType,
+        desiredState: desiredState ?? 'contract-only',
+        lastControllerReconcileAt: new Date().toISOString(),
+      },
+    })
+    const runtimeLifecycle = await this.reconcileManagerRuntime({
+      runtimeType,
+      desiredState,
+    })
+
+    return {
+      ref: resourceRef('Manager', managerId),
+      phase: runtimeLifecycle.phase,
+      changed: true,
+      snapshot: {
+        managerId,
+        runtimeType,
+        desiredState: desiredState ?? 'contract-only',
+        matrixIdentity: identity,
+        workspaceRoot: workspace.root,
+        runtimePath: workspace.runtimePath,
+        runtimeManifestPath: workspace.runtimeManifestPath,
+        runtimeSpecificConfigPath: `${workspace.root}/${managerRuntimeSpecificConfigFileName(runtimeType)}`,
+        soulPath: workspace.soulPath,
+        agentsPath: workspace.agentsPath,
+        skillsDir: workspace.skillsDir,
+        workerRegistryPath: workspace.workerRegistryPath,
+        humanRegistryPath: workspace.humanRegistryPath,
+        teamRegistryPath: workspace.teamRegistryPath,
+        statePath: workspace.statePath,
+        roomsPath: workspace.roomsPath,
+        runtimeLifecycle,
+      },
+    }
+  }
+
+  private async reconcileManagerRuntime(input: {
+    runtimeType: ManagerRuntimeType
+    desiredState: ManagerDesiredState | null
+  }): Promise<{
+    desiredState: ManagerDesiredState | 'contract-only'
+    action: 'none' | 'observe' | 'ensureStarted' | 'stop'
+    phase: string
+    status: Awaited<ReturnType<ManagerRuntimeProvider['status']>> | null
+    health: Awaited<ReturnType<NonNullable<ManagerRuntimeProvider['healthCheck']>>> | null
+    error: string | null
+  }> {
+    const provider = this.managerProviderResolver(input.runtimeType)
+    if (!provider) {
+      return {
+        desiredState: input.desiredState ?? 'contract-only',
+        action: 'none',
+        phase: 'manager-runtime-blocked',
+        status: null,
+        health: null,
+        error: `Manager runtime provider not found for ${input.runtimeType}.`,
+      }
     }
 
-    const existing = await db
-      .select()
-      .from(workspaceAgents)
-      .where(and(eq(workspaceAgents.workspaceId, input.workspaceId), eq(workspaceAgents.name, input.name)))
-      .limit(1)
+    try {
+      if (input.desiredState === 'running') {
+        const status = provider.ensureStarted ? await provider.ensureStarted() : await provider.status()
+        const health = await provider.healthCheck?.().catch((error: any) => ({
+          healthy: false,
+          error: error?.message || String(error),
+        })) ?? null
+        return {
+          desiredState: input.desiredState,
+          action: provider.ensureStarted ? 'ensureStarted' : 'observe',
+          phase: status.running && !status.error ? 'manager-runtime-running' : 'manager-runtime-blocked',
+          status,
+          health,
+          error: status.error ?? health?.error ?? null,
+        }
+      }
 
-    let agentId: string
-    if (existing.length > 0 && existing[0]) {
-      agentId = existing[0].id
-      const modelId = explicitModelId || existing[0].modelId?.trim() || null
-      if (!modelId) {
-        throw new Error(
-          'Creating a Worker requires an explicit model binding. Set modelId on the Worker or configure AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL before creation.',
-        )
+      if (input.desiredState === 'stopped') {
+        const status = provider.stop ? await provider.stop() : await provider.status()
+        return {
+          desiredState: input.desiredState,
+          action: provider.stop ? 'stop' : 'observe',
+          phase: status.running ? 'manager-runtime-running' : 'manager-runtime-stopped',
+          status,
+          health: null,
+          error: status.error,
+        }
       }
-      await db
-        .update(workspaceAgents)
-        .set({
-          role: (input.role as any) || existing[0].role || 'worker',
-          roleType: (input.roleType as any) || existing[0].roleType,
-          runtimeType: 'code-agent' as any,
-          codeAgentType: normalizeCodeAgentType(input.codeAgentType) as any,
-          roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
-          modelId,
-          skillIds: input.skillIds ?? existing[0].skillIds ?? [],
-          sandboxPolicy: (input.sandboxPolicy as any) || existing[0].sandboxPolicy || 'workspace-write',
-        })
-        .where(eq(workspaceAgents.id, agentId))
-    } else {
-      if (!explicitModelId) {
-        throw new Error(
-          'Creating a Worker requires an explicit model binding. Set modelId on the Worker or configure AGENTHUB_WORKER_LLM_MODEL / LLM_MODEL before creation.',
-        )
+
+      if (input.desiredState === 'observed') {
+        const [status, health] = await Promise.all([
+          provider.status(),
+          provider.healthCheck?.().catch((error: any) => ({
+            healthy: false,
+            error: error?.message || String(error),
+          })) ?? Promise.resolve(null),
+        ])
+        return {
+          desiredState: input.desiredState,
+          action: 'observe',
+          phase: status.running && !status.error ? 'manager-runtime-observed' : 'manager-runtime-blocked',
+          status,
+          health,
+          error: status.error ?? health?.error ?? null,
+        }
       }
-      const codeAgentType = normalizeCodeAgentType(input.codeAgentType)
-      const [inserted] = await db
-        .insert(workspaceAgents)
-        .values({
-          workspaceId: input.workspaceId,
-          name: input.name,
-          role: (input.role as any) || 'worker',
-          roleType: (input.roleType as any) || undefined,
-          runtimeType: 'code-agent' as any,
-          codeAgentType: codeAgentType as any,
-          roleProfile: workerRoleProfileFromRuntime(requestedWorkerRuntimeBase),
-          modelId: explicitModelId,
-          skillIds: input.skillIds ?? [],
-          toolPermissions: [],
-          sandboxPolicy: (input.sandboxPolicy as any) || 'workspace-write',
-        })
-        .returning()
-      if (!inserted) throw new Error('Failed to create workspace agent')
-      agentId = inserted.id
+
+      return {
+        desiredState: 'contract-only',
+        action: 'none',
+        phase: 'manager-contract-synced',
+        status: null,
+        health: null,
+        error: null,
+      }
+    } catch (error) {
+      return {
+        desiredState: input.desiredState ?? 'contract-only',
+        action: input.desiredState === 'running' ? 'ensureStarted' : input.desiredState === 'stopped' ? 'stop' : 'observe',
+        phase: 'manager-runtime-blocked',
+        status: null,
+        health: null,
+        error: error instanceof Error ? error.message : String(error),
+      }
     }
+  }
 
-    const worker = await this.applyWorker({ workspaceId: input.workspaceId, workspaceAgentId: agentId })
-    return { agentId, worker }
+  private async ensureManagerMatrixIdentity(managerId: string): Promise<{ userId: string | null; identityId: string | null }> {
+    const ownerId = managerId === 'global' ? 'manager' : managerId
+    try {
+      const { createMatrixClientFromEnv } = await import('../rooms/matrix-client')
+      const { MatrixIdentityService } = await import('../rooms/matrix-identity-service')
+      const client = createMatrixClientFromEnv()
+      const identityService = new MatrixIdentityService(client)
+      const identity = await identityService.ensureIdentity({
+        ownerType: 'manager',
+        ownerId,
+        displayName: 'Manager',
+      })
+      return { userId: identity.userId ?? null, identityId: identity.id ?? null }
+    } catch {
+      const [existing] = await db
+        .select()
+        .from(matrixIdentities)
+        .where(and(eq(matrixIdentities.ownerType, 'manager'), eq(matrixIdentities.ownerId, ownerId)))
+        .limit(1)
+      return { userId: existing?.userId ?? null, identityId: existing?.id ?? null }
+    }
   }
 
   async updateWorker(workerInstanceId: string, input: {
@@ -626,14 +866,7 @@ export class ControllerApi {
       }
     }
 
-    const memberIds: string[] = []
-    for (const workerName of input.workers ?? []) {
-      const result = await this.createWorker({
-        workspaceId: input.workspaceId,
-        name: workerName,
-      })
-      memberIds.push(result.agentId)
-    }
+    const memberIds = await this.resolveExistingTeamMembers(input.workspaceId, input.workers ?? [])
 
     // Ensure group session and room exist, and reconcile participants (HiClaw model)
     const [workspace] = await db
@@ -681,6 +914,23 @@ export class ControllerApi {
     await db.delete(workspaceAgents)
       .where(and(eq(workspaceAgents.workspaceId, workspaceId), eq(workspaceAgents.name, teamName)))
     return { deleted: true, name: teamName }
+  }
+
+  private async resolveExistingTeamMembers(workspaceId: string, workers: string[]) {
+    if (workers.length === 0) return []
+    const agents = await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, workspaceId))
+    const memberIds: string[] = []
+    for (const workerRef of workers) {
+      const agent = agents.find((item) => item.id === workerRef || item.name === workerRef)
+      if (!agent) {
+        throw new Error(`Team member ${workerRef} does not exist in workspace ${workspaceId}. Apply a Worker manifest before adding it to a Team.`)
+      }
+      if (agent.roleType === 'orchestrator') {
+        throw new Error(`Team member ${workerRef} is a leader/orchestrator, not a Worker member.`)
+      }
+      memberIds.push(agent.id)
+    }
+    return memberIds
   }
 
   // ─── Human Management (HiClaw-style) ────────────────────────────────
@@ -782,33 +1032,18 @@ export class ControllerApi {
       .limit(1)
     return agent ?? null
   }
+
+  private async loadWorkspaceGroupSession(sessionId: string, workspaceId: string) {
+    const [session] = await db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.id, sessionId), eq(sessions.workspaceId, workspaceId)))
+      .limit(1)
+    return session ?? null
+  }
 }
 
 export const controllerApi = new ControllerApi()
-
-function normalizeWorkerRuntimeBase(value?: string | null) {
-  if (
-    value === 'openclaw' ||
-    value === 'claude-code' ||
-    value === 'opencode' ||
-    value === 'gemini' ||
-    value === 'codex'
-  ) {
-    return value
-  }
-  return 'codex'
-}
-
-function normalizeCodeAgentType(value?: string | null) {
-  if (value === 'claude-code' || value === 'opencode' || value === 'gemini' || value === 'codex') {
-    return value
-  }
-  return 'codex'
-}
-
-function workerRoleProfileFromRuntime(runtimeBase?: string | null): Record<string, unknown> {
-  return { workerRuntimeBase: normalizeWorkerRuntimeBase(runtimeBase) }
-}
 
 function isReadyWorkerState(state: string): boolean {
   return state === 'ready' || state === 'listening' || state === 'assigned' || state === 'busy' || state === 'idle'
@@ -817,4 +1052,25 @@ function isReadyWorkerState(state: string): boolean {
 function stringPayload(payload: Record<string, unknown> | undefined, key: string): string | null {
   const value = payload?.[key]
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+type ManagerDesiredState = 'running' | 'stopped' | 'observed'
+
+function isManagerRuntimeType(value: string): value is ManagerRuntimeType {
+  return value === 'openclaw' || value === 'qwenpaw'
+}
+
+function normalizeManagerDesiredState(value?: string | null): ManagerDesiredState | null {
+  const normalized = value?.trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'running' || normalized === 'started' || normalized === 'listening' || normalized === 'ready') {
+    return 'running'
+  }
+  if (normalized === 'stopped' || normalized === 'stopping' || normalized === 'sleeping') {
+    return 'stopped'
+  }
+  if (normalized === 'observed' || normalized === 'observe' || normalized === 'status' || normalized === 'health') {
+    return 'observed'
+  }
+  throw new Error(`Manager desiredState must be running, stopped, or observed, received ${value}.`)
 }

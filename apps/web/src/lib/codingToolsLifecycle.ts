@@ -31,7 +31,6 @@ function repairLocalAgentLibrary() {
 function normalizeCodingToolAgent(agent: SavedAgentConfig): SavedAgentConfig {
   if (agent.runtimeType !== 'code-agent') return agent
   const patch: Partial<AgentConfigInput> = {}
-  if (!agent.codeAgentType) patch.codeAgentType = 'codex'
   if (agent.approvalRequired !== false) patch.approvalRequired = false
   if (!agent.sandboxPolicy) patch.sandboxPolicy = 'workspace-write'
   if (!agent.toolPermissions?.length) patch.toolPermissions = ['chat', 'workspace:read', 'workspace:write']

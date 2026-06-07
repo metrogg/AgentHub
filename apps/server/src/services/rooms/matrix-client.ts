@@ -278,7 +278,7 @@ export class MatrixClient {
     const txId = `agenthub-${randomUUID()}`
     const linkLabel = input.mentionDisplayName || input.mentionUserId
     const mentionHtml = `<a href="https://matrix.to/#/${escapeHtml(input.mentionUserId)}">${escapeHtml(linkLabel)}</a>`
-    const visibleBody = `${input.mentionUserId} ${input.body}`
+    const visibleBody = `@${linkLabel.replace(/^@/, '')} ${input.body}`
     return this.request<{ event_id: string }>(
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${encodeURIComponent(txId)}`,
       {

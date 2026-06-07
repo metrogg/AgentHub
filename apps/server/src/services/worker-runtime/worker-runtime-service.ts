@@ -21,9 +21,11 @@ import { broadcastSessionEvent } from '../agent-runner'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
+import { updateSharedTaskDirectoryStatus } from '../orchestrator/shared-task-directory'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
+import { ensureWorkerAgentContractFromController, touchWorkerAgentContractHeartbeat } from '../agent-contract'
 import { EphemeralCodeAgentWorkerRuntime } from './local-worker-runtime'
 import { ResidentRoomWorkerRuntime } from './resident-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
@@ -198,7 +200,8 @@ export class WorkerRuntimeService {
     this.roomRuntimeKind.delete(roomId)
     return true
   }
-  /**
+
+  /**
    * Run Agent in a direct room (agent-direct session).
    * This is the HiClaw-style worker execution for private chats:
    * the worker listens to the room timeline and executes autonomously.
@@ -653,13 +656,13 @@ export class WorkerRuntimeService {
     let sharedTaskRelativeRoot: string | null = null
     let sharedTaskSpecPath: string | null = null
     if (room.taskId) {
+      sharedTaskRelativeRoot = readString(room.metadata?.sharedTaskRelativeRoot) ?? ['.agenthub', 'shared', 'tasks', room.taskId].join('/')
+      sharedTaskSpecPath = readString(room.metadata?.sharedTaskSpecPath) ?? `${sharedTaskRelativeRoot}/spec.md`
       const projectPath = workspace?.projectPath ?? lease?.cwd ?? null
       if (projectPath) {
-        sharedTaskRelativeRoot = join('.agenthub', 'shared', 'tasks', room.taskId)
         const specPath = join(projectPath, sharedTaskRelativeRoot, 'spec.md')
         try {
           specPrompt = await readFile(specPath, 'utf8')
-          sharedTaskSpecPath = specPath
         } catch (e: any) {
           if (e.code !== 'ENOENT') {
             logger.warn({ err: e, taskId: room.taskId, specPath }, 'Failed to read task spec.md')
@@ -762,6 +765,32 @@ export class WorkerRuntimeService {
       runtimeType: runtime.runtimeType,
       startedEventId: startedEvent.id,
     })
+    await syncSharedTaskDirectoryStatus({
+      roomId: room.id,
+      projectPath: workspace?.projectPath ?? lease?.cwd ?? null,
+      sharedTaskRelativeRoot,
+      taskId: room.taskId,
+      status: 'running',
+      workerInstanceId: thread?.workerInstanceId ?? null,
+      runtimeLeaseId: lease?.id ?? null,
+      messageId: startedEvent.id,
+      summary: `${agent.name} 已接单。`,
+      executionConfig: {
+        runtimeType: runtime.runtimeType,
+        source: input.source ?? 'worker-runtime.start',
+      },
+      timestamps: { startedAt: new Date().toISOString() },
+    })
+    await refreshWorkerContractMirror({
+      workerInstanceId: thread?.workerInstanceId ?? null,
+      source: input.source ?? 'worker-runtime.start',
+    })
+    if (thread?.workerInstanceId) {
+      touchWorkerAgentContractHeartbeat(thread.workerInstanceId, {
+        lastTaskStartedAt: new Date().toISOString(),
+        queueDepth: 0,
+      })
+    }
 
     const stopHeartbeat = startWorkerRuntimeHeartbeat({
       roomId: room.id,
@@ -793,10 +822,14 @@ export class WorkerRuntimeService {
           sessionId: room.sessionId ?? thread?.sessionId ?? room.id,
           workspaceId: room.workspaceId ?? agent.workspaceId,
           workspaceAgentId: agent.id,
+          workerParticipantId: workerParticipant.id,
           workerInstanceId: thread?.workerInstanceId ?? null,
           taskId: room.taskId,
           taskThreadId: room.taskThreadId,
           runId: room.runId,
+          sharedTaskRelativeRoot,
+          sharedTaskSpecPath,
+          runtimeLeaseId: lease?.id ?? null,
           prompt,
           history: timeline.map((event) => ({
             senderType: event.senderType,
@@ -908,6 +941,17 @@ export class WorkerRuntimeService {
         result: finalResult,
         source: input.source ?? 'worker-runtime.run',
       })
+      await refreshWorkerContractMirror({
+        workerInstanceId: thread?.workerInstanceId ?? null,
+        source: input.source ?? 'worker-runtime.run',
+      })
+      if (thread?.workerInstanceId) {
+        touchWorkerAgentContractHeartbeat(thread.workerInstanceId, {
+          ...(finalResult.status === 'completed' ? { lastTaskCompletedAt: new Date().toISOString() } : {}),
+          ...(finalResult.status === 'failed' ? { lastError: finalResult.message ?? 'WorkerRuntime failed.' } : {}),
+          queueDepth: 0,
+        })
+      }
 
       return finalResult
     } finally {
@@ -1430,6 +1474,12 @@ function startWorkerRuntimeHeartbeat(input: {
         heartbeatCount,
       },
     })
+    if (input.workerInstanceId) {
+      touchWorkerAgentContractHeartbeat(input.workerInstanceId, {
+        lastHeartbeatAt: now.toISOString(),
+        queueDepth: 0,
+      })
+    }
     await roomService.appendTimelineEvent({
       roomId: input.roomId,
       senderParticipantId: input.participantId,
@@ -1547,6 +1597,7 @@ async function syncRunControllerAfterTaskRoomResult(input: {
 }) {
   const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
   if (!room.runId || !room.workspaceId || !room.taskId) return
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId)).limit(1)
   const [thread] = room.taskThreadId
     ? await db.select().from(taskThreads).where(eq(taskThreads.id, room.taskThreadId)).limit(1)
     : []
@@ -1557,7 +1608,26 @@ async function syncRunControllerAfterTaskRoomResult(input: {
         .from(runtimeLeases)
         .where(and(eq(runtimeLeases.workerInstanceId, thread.workerInstanceId), eq(runtimeLeases.taskId, room.taskId)))
         .limit(1)
-    : await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, room.taskId)).limit(1)
+      : await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, room.taskId)).limit(1)
+  await syncSharedTaskDirectoryStatus({
+    roomId: room.id,
+    projectPath: workspace?.projectPath ?? lease?.cwd ?? null,
+    sharedTaskRelativeRoot: readString(room.metadata?.sharedTaskRelativeRoot) ?? ['.agenthub', 'shared', 'tasks', room.taskId].join('/'),
+    taskId: room.taskId,
+    status: sharedTaskStatusFromWorkerResult(input.result.status),
+    workerInstanceId: thread?.workerInstanceId ?? null,
+    runtimeLeaseId: lease?.id ?? null,
+    messageId: input.result.appendedEventIds.at(-1) ?? null,
+    error: input.result.status === 'failed' ? input.result.message ?? 'WorkerRuntime failed.' : null,
+    summary: input.result.message ?? null,
+    artifacts: artifactsForRunController(input.result.artifacts),
+    executionConfig: {
+      runtimeType: input.result.runtimeType,
+      source: input.source,
+      sessionId: input.result.sessionId ?? null,
+    },
+    timestamps: terminalSharedTaskTimestamps(input.result.status),
+  })
   const run = {
     runId: room.runId,
     workspaceId: room.workspaceId,
@@ -1637,8 +1707,71 @@ async function syncRunControllerAfterTaskRoomResult(input: {
   })
 }
 
+async function syncSharedTaskDirectoryStatus(input: Parameters<typeof updateSharedTaskDirectoryStatus>[0] & {
+  roomId: string
+}) {
+  try {
+    await updateSharedTaskDirectoryStatus(input)
+  } catch (error: any) {
+    logger.warn(
+      {
+        err: error?.message || String(error),
+        roomId: input.roomId,
+        taskId: input.taskId,
+        sharedTaskRelativeRoot: input.sharedTaskRelativeRoot,
+        status: input.status,
+      },
+      'Failed to update shared task directory status',
+    )
+  }
+}
+
+function sharedTaskStatusFromWorkerResult(
+  status: WorkerRuntimeResult['status'],
+): Parameters<typeof updateSharedTaskDirectoryStatus>[0]['status'] {
+  if (status === 'completed') return 'completed'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'waiting_for_human') return 'blocked'
+  return 'failed'
+}
+
+function terminalSharedTaskTimestamps(status: WorkerRuntimeResult['status']) {
+  const now = new Date().toISOString()
+  if (status === 'completed') return { completedAt: now, updatedAt: now }
+  if (status === 'cancelled') return { cancelledAt: now, updatedAt: now }
+  if (status === 'failed') return { failedAt: now, updatedAt: now }
+  return { updatedAt: now }
+}
+
+async function refreshWorkerContractMirror(input: {
+  workerInstanceId: string | null
+  source: string
+}) {
+  if (!input.workerInstanceId) return
+  try {
+    await ensureWorkerAgentContractFromController({
+      workerInstanceId: input.workerInstanceId,
+      controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+      sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+    })
+  } catch (error: any) {
+    logger.warn(
+      {
+        err: error?.message || String(error),
+        workerInstanceId: input.workerInstanceId,
+        source: input.source,
+      },
+      'Failed to refresh Worker contract mirror',
+    )
+  }
+}
+
 function artifactsForRunController(value: unknown) {
   return Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
 export const workerRuntimeService = new WorkerRuntimeService()

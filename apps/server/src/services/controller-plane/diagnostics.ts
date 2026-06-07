@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs'
 import {
   artifacts,
   db,
+  matrixIdentities,
   orchestratorRuns,
   roomParticipants,
   rooms,
@@ -10,7 +12,77 @@ import {
   workspaceTasks,
   workerInstances,
 } from '@agenthub/db'
+import { resolveManagerAgentContractWorkspace } from '../agent-contract'
+import { resolveWorkerAgentContractWorkspace, runtimeSpecificConfigFileName } from '../agent-contract'
+import { type CodeAgentRuntimeInspection } from '../code-agent-adapter'
+import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { controllerReconcileQueue } from './controller-reconciler'
+import { dockerWorkerBackend } from './docker-worker-backend'
+import { localCliWorkerBackend, type WorkerBackendHealthResult } from './worker-backend'
+import { getActiveManagerProvider, getConfiguredRuntimeType, listManagerProviders, type ManagerRuntimeStatus } from '../manager-runtime'
+
+export type WorkerRuntimeDiagnosticMode = 'resident-openclaw' | 'resident-qwenpaw' | 'bridge'
+export type WorkerRuntimeListenerOwner = 'runtime' | 'agenthub-supervisor' | 'none'
+type BridgeCodeAgentType = 'codex' | 'claude-code' | 'opencode' | 'gemini'
+
+export interface WorkerRuntimeDiagnostics {
+  workerInstanceId: string
+  workspaceId: string
+  workspaceAgentId: string
+  agentName: string
+  runtimeBase: string
+  mode: WorkerRuntimeDiagnosticMode
+  observedState: string
+  desiredState: string
+  modelId: string | null
+  runtimeHome: string | null
+  runtimeConfigPath: string | null
+  lastHeartbeatAt: Date | null
+  lastError: string | null
+  listenerManagedBy: WorkerRuntimeListenerOwner
+  contractRoot: string
+  contractReady: boolean
+  contractFiles: {
+    profile: boolean
+    runtime: boolean
+    runtimeManifest: boolean
+    runtimeSpecificConfig: boolean
+    soul: boolean
+    agents: boolean
+    state: boolean
+    rooms: boolean
+    tasks: boolean
+    skillsDir: boolean
+  }
+  matrixIdentity: {
+    userId: string | null
+    displayName: string | null
+    syncStatus: string | null
+    lastSyncAt: string | null
+    lastError: string | null
+  }
+  matrixParticipants: Array<{
+    roomId: string
+    roomKind: string
+    providerRoomId: string
+    participantId: string
+    providerUserId: string | null
+    status: string
+  }>
+  runtimeInspection: CodeAgentRuntimeInspection | null
+  runtimeHealth: WorkerRuntimeHealth
+}
+
+export interface WorkerRuntimeHealth {
+  ready: boolean
+  status: 'ready' | 'blocked' | 'unknown'
+  inspectedBy: 'bridge-cli' | 'worker-backend' | 'resource'
+  state: string | null
+  message: string | null
+  blockers: string[]
+  lastCheckedAt: string
+  details?: Record<string, unknown>
+}
 
 export interface ControllerPlaneDiagnostics {
   apiVersion: 'agenthub.dev/v1alpha1'
@@ -37,9 +109,122 @@ export interface ControllerPlaneDiagnostics {
     managerOwns: string[]
     uiReadsFrom: string[]
   }
+  managerRuntime: ManagerRuntimeDiagnostics | null
+  workerRuntimes: WorkerRuntimeDiagnostics[]
+}
+
+export interface ManagerRuntimeDiagnostics {
+  configuredRuntimeType: string
+  activeRuntimeType: string
+  availableProviders: Array<{
+    type: string
+    available: boolean
+    running: boolean
+    error: string | null
+  }>
+  status: {
+    available: boolean
+    connectionMode: string
+    running: boolean
+    syncReady: boolean
+    endpoint: string | null
+    stepEndpoint: string | null
+    healthEndpoint: string | null
+    error: string | null
+    workspace: string
+    configPath: string | null
+    binaryPath: string | null
+    startedAt: string | null
+    uptime: number | null
+  }
+  health: {
+    healthy: boolean
+    latencyMs?: number
+    error?: string
+  } | null
+  contract: {
+    root: string
+    runtimePath: string
+    runtimeManifestPath: string
+    runtimeSpecificConfigPath: string
+    soulPath: string
+    agentsPath: string
+    toolsPath: string
+    heartbeatPath: string
+    skillsDir: string
+    memoryDir: string
+    workerRegistryPath: string
+    teamRegistryPath: string
+    humanRegistryPath: string
+    statePath: string
+    roomsPath: string
+    logsDir: string
+    agentDir: string
+    files: {
+      runtime: boolean
+      runtimeManifest: boolean
+      runtimeSpecificConfig: boolean
+      soul: boolean
+      agents: boolean
+      tools: boolean
+      heartbeat: boolean
+      skillsDir: boolean
+      memoryDir: boolean
+      workerRegistry: boolean
+      teamRegistry: boolean
+      humanRegistry: boolean
+      state: boolean
+      rooms: boolean
+      logsDir: boolean
+    }
+    ready: boolean
+  }
+  matrix: {
+    userId: string | null
+    hasAccessToken: boolean
+    lastSync: unknown
+  }
+  roomBindings: Array<{
+    roomId: string
+    title: string
+    kind: string
+    providerRoomId: string
+    configured: boolean
+    sessionKey: string
+    managerParticipantId: string | null
+    managerParticipantStatus: string | null
+    managerParticipantUserId: string | null
+    boundToResidentManager: boolean
+  }>
+  controllerReachable: boolean
+  agenthubSkillLoaded: boolean
+  managerPersonaReady: boolean
+  matrixJoinedRooms: number
+  lastManagerReplyAt: string | null
+  lastManagerReplyPreview: string | null
+  lastManagerStatusKind: string | null
+  expectedResidentSessionKeyPrefix: string
 }
 
 export async function describeControllerPlane(): Promise<ControllerPlaneDiagnostics> {
+  const managerStatusPromise: Promise<ManagerRuntimeStatus> = getActiveManagerProvider().status().catch((error: any) => ({
+    runtimeType: getConfiguredRuntimeType(),
+    available: false,
+    connectionMode: 'unavailable' as const,
+    syncReady: false,
+    running: false,
+    pid: null,
+    workspace: resolveManagerAgentContractWorkspace('global').root,
+    configPath: null,
+    binaryPath: null,
+    endpoint: null,
+    stepEndpoint: null,
+    healthEndpoint: null,
+    error: error?.message || String(error),
+    diagnostics: {},
+    startedAt: null,
+    uptime: null,
+  }))
   const [
     workspaceAgentRows,
     workerInstanceRows,
@@ -50,6 +235,13 @@ export async function describeControllerPlane(): Promise<ControllerPlaneDiagnost
     taskThreadRows,
     runtimeLeaseRows,
     artifactRows,
+    workerRuntimeRows,
+    agentRows,
+    participantRows,
+    roomDiagnosticsRows,
+    matrixIdentityRows,
+    managerStatus,
+    managerProviders,
   ] = await Promise.all([
     db.select({ id: workspaceAgents.id }).from(workspaceAgents),
     db.select({ id: workerInstances.id }).from(workerInstances),
@@ -60,7 +252,21 @@ export async function describeControllerPlane(): Promise<ControllerPlaneDiagnost
     db.select({ id: taskThreads.id }).from(taskThreads),
     db.select({ id: runtimeLeases.id }).from(runtimeLeases),
     db.select({ id: artifacts.id }).from(artifacts),
+    db.select().from(workerInstances),
+    db.select().from(workspaceAgents),
+    db.select().from(roomParticipants),
+    db.select().from(rooms),
+    db.select().from(matrixIdentities),
+    managerStatusPromise,
+    listManagerProviders().catch(() => []),
   ])
+  const workerRuntimes = await describeWorkerRuntimes({
+    workers: workerRuntimeRows,
+    agents: agentRows,
+    participants: participantRows,
+    rooms: roomDiagnosticsRows,
+    matrixIdentities: matrixIdentityRows,
+  })
 
   return {
     apiVersion: 'agenthub.dev/v1alpha1',
@@ -94,5 +300,296 @@ export async function describeControllerPlane(): Promise<ControllerPlaneDiagnost
         'AG-UI projections derived from timeline/resource state',
       ],
     },
+    managerRuntime: buildManagerRuntimeDiagnostics({
+      status: managerStatus,
+      providers: managerProviders,
+    }),
+    workerRuntimes,
   }
+}
+
+function buildManagerRuntimeDiagnostics(input: {
+  status: ManagerRuntimeStatus
+  providers: Awaited<ReturnType<typeof listManagerProviders>>
+}): ManagerRuntimeDiagnostics {
+  const normalizedStatus = input.status
+  const workspace = normalizedStatus.workspace || resolveManagerAgentContractWorkspace('global').root
+  const contract = resolveManagerAgentContractWorkspace('global')
+  const runtimeType = normalizedStatus.runtimeType === 'qwenpaw' ? 'qwenpaw' : 'openclaw'
+  const runtimeSpecificConfigPath = `${contract.root}/${runtimeType === 'qwenpaw' ? 'qwenpaw.manager.json' : 'openclaw.manager.json'}`
+  const managerDiagnostics = asRecord(normalizedStatus.diagnostics)
+  const managerIdentity = asRecord(managerDiagnostics?.managerIdentity)
+  const roomBindings = Array.isArray(managerDiagnostics?.roomBindings)
+    ? managerDiagnostics.roomBindings as ManagerRuntimeDiagnostics['roomBindings']
+    : []
+  const contractFiles = {
+    runtime: existsSync(contract.runtimePath),
+    runtimeManifest: existsSync(contract.runtimeManifestPath),
+    runtimeSpecificConfig: existsSync(runtimeSpecificConfigPath),
+    soul: existsSync(contract.soulPath),
+    agents: existsSync(contract.agentsPath),
+    tools: existsSync(contract.toolsPath),
+    heartbeat: existsSync(contract.heartbeatPath),
+    skillsDir: existsSync(contract.skillsDir),
+    memoryDir: existsSync(contract.memoryDir),
+    workerRegistry: existsSync(contract.workerRegistryPath),
+    teamRegistry: existsSync(contract.teamRegistryPath),
+    humanRegistry: existsSync(contract.humanRegistryPath),
+    state: existsSync(contract.statePath),
+    rooms: existsSync(contract.roomsPath),
+    logsDir: existsSync(contract.logsDir),
+  }
+  const managerId = stringOrNull(managerDiagnostics?.managerId) ?? 'global'
+  const managerWorkspace = resolveManagerAgentContractWorkspace(managerId)
+  return {
+    configuredRuntimeType: getConfiguredRuntimeType(),
+    activeRuntimeType: runtimeType,
+    availableProviders: input.providers.map((provider) => ({
+      type: provider.type,
+      available: provider.available,
+      running: provider.running,
+      error: provider.error,
+    })),
+    status: {
+      available: normalizedStatus.available,
+      connectionMode: normalizedStatus.connectionMode,
+      running: normalizedStatus.running,
+      syncReady: Boolean(normalizedStatus.syncReady),
+      endpoint: normalizedStatus.endpoint,
+      stepEndpoint: normalizedStatus.stepEndpoint ?? null,
+      healthEndpoint: normalizedStatus.healthEndpoint ?? null,
+      error: normalizedStatus.error,
+      workspace,
+      configPath: normalizedStatus.configPath,
+      binaryPath: normalizedStatus.binaryPath,
+      startedAt: normalizedStatus.startedAt,
+      uptime: normalizedStatus.uptime,
+    },
+    health: null,
+    contract: {
+      root: managerWorkspace.root,
+      runtimePath: managerWorkspace.runtimePath,
+      runtimeManifestPath: managerWorkspace.runtimeManifestPath,
+      runtimeSpecificConfigPath,
+      soulPath: managerWorkspace.soulPath,
+      agentsPath: managerWorkspace.agentsPath,
+      toolsPath: managerWorkspace.toolsPath,
+      heartbeatPath: managerWorkspace.heartbeatPath,
+      skillsDir: managerWorkspace.skillsDir,
+      memoryDir: managerWorkspace.memoryDir,
+      workerRegistryPath: managerWorkspace.workerRegistryPath,
+      teamRegistryPath: managerWorkspace.teamRegistryPath,
+      humanRegistryPath: managerWorkspace.humanRegistryPath,
+      statePath: managerWorkspace.statePath,
+      roomsPath: managerWorkspace.roomsPath,
+      logsDir: managerWorkspace.logsDir,
+      agentDir: managerWorkspace.agentDir,
+      files: contractFiles,
+      ready: Object.values(contractFiles).every(Boolean),
+    },
+    matrix: {
+      userId: stringOrNull(managerIdentity?.userId),
+      hasAccessToken: Boolean(managerIdentity?.hasAccessToken),
+      lastSync: managerIdentity?.lastSync ?? null,
+    },
+    roomBindings,
+    controllerReachable: Boolean(managerDiagnostics?.controllerReachable),
+    agenthubSkillLoaded: Boolean(managerDiagnostics?.agenthubSkillLoaded),
+    managerPersonaReady: Boolean(managerDiagnostics?.managerPersonaReady),
+    matrixJoinedRooms: Number(managerDiagnostics?.matrixJoinedRooms ?? 0),
+    lastManagerReplyAt: stringOrNull(managerDiagnostics?.lastManagerReplyAt),
+    lastManagerReplyPreview: stringOrNull(managerDiagnostics?.lastManagerReplyPreview),
+    lastManagerStatusKind: stringOrNull(managerDiagnostics?.lastManagerStatusKind),
+    expectedResidentSessionKeyPrefix: stringOrNull(managerDiagnostics?.expectedResidentSessionKeyPrefix) ?? 'agent:manager:matrix:channel:',
+  }
+}
+
+async function describeWorkerRuntimes(input: {
+  workers: Array<typeof workerInstances.$inferSelect>
+  agents: Array<typeof workspaceAgents.$inferSelect>
+  participants: Array<typeof roomParticipants.$inferSelect>
+  rooms: Array<typeof rooms.$inferSelect>
+  matrixIdentities: Array<typeof matrixIdentities.$inferSelect>
+}): Promise<WorkerRuntimeDiagnostics[]> {
+  const agentsById = new Map(input.agents.map((agent) => [agent.id, agent]))
+  const roomsById = new Map(input.rooms.map((room) => [room.id, room]))
+  const rows = await Promise.all(
+    input.workers.map(async (worker) => {
+      const agent = agentsById.get(worker.workspaceAgentId)
+      const participantRows = input.participants.filter((participant) => participant.workerInstanceId === worker.id)
+      const identity = input.matrixIdentities.find((item) => item.ownerType === 'worker' && item.ownerId === worker.id)
+        ?? input.matrixIdentities.find((item) => item.ownerType === 'worker' && item.ownerId === worker.workspaceAgentId)
+        ?? input.matrixIdentities.find((item) => participantRows.some((participant) => participant.providerUserId === item.userId))
+        ?? null
+      const contract = resolveWorkerAgentContractWorkspace(worker.id)
+      const contractFiles = {
+        profile: existsSync(contract.profilePath),
+        runtime: existsSync(contract.runtimePath),
+        runtimeManifest: existsSync(contract.runtimeManifestPath),
+        runtimeSpecificConfig: existsSync(`${contract.root}/${runtimeSpecificConfigFileName(worker.runtimeBase)}`),
+        soul: existsSync(contract.soulPath),
+        agents: existsSync(contract.agentsPath),
+        state: existsSync(contract.statePath),
+        rooms: existsSync(contract.roomsPath),
+        tasks: existsSync(contract.tasksPath),
+        skillsDir: existsSync(contract.skillsPath),
+      }
+      const mode: WorkerRuntimeDiagnosticMode = worker.runtimeBase === 'openclaw'
+        ? 'resident-openclaw'
+        : worker.runtimeBase === 'qwenpaw' || worker.runtimeBase === 'copaw'
+          ? 'resident-qwenpaw'
+          : 'bridge'
+      const listenerManagedBy: WorkerRuntimeListenerOwner = mode === 'bridge'
+        ? (participantRows.length ? 'agenthub-supervisor' : 'none')
+        : 'runtime'
+      const matrixSync = asRecord(identity?.metadata?.matrixSync)
+      const backendHealth: WorkerBackendHealthResult = await inspectWorkerBackendHealth(worker.id).catch((error) => ({
+        workerInstanceId: worker.id,
+        ready: false,
+        status: 'blocked' as const,
+        state: 'health-failed',
+        message: error instanceof Error ? error.message : String(error),
+        blockers: [error instanceof Error ? error.message : String(error)],
+        lastCheckedAt: new Date().toISOString(),
+        details: {},
+      }))
+      const runtimeInspection = mode === 'bridge'
+        ? readCodeAgentInspection(backendHealth.details?.inspection)
+        : null
+      const runtimeHealth = buildRuntimeHealth({
+        mode,
+        worker,
+        contractReady: Object.values(contractFiles).every(Boolean),
+        hasMatrixIdentity: Boolean(identity?.userId),
+        backendHealth,
+      })
+      return {
+        workerInstanceId: worker.id,
+        workspaceId: worker.workspaceId,
+        workspaceAgentId: worker.workspaceAgentId,
+        agentName: agent?.name ?? worker.workspaceAgentId,
+        runtimeBase: worker.runtimeBase,
+        mode,
+        observedState: worker.observedState,
+        desiredState: worker.desiredState,
+        modelId: worker.modelId,
+        runtimeHome: worker.runtimeHome,
+        runtimeConfigPath: worker.runtimeConfigPath,
+        lastHeartbeatAt: worker.lastHeartbeatAt,
+        lastError: readWorkerLastError(worker.health) ?? worker.message ?? null,
+        listenerManagedBy,
+        contractRoot: contract.root,
+        contractReady: Object.values(contractFiles).every(Boolean),
+        contractFiles,
+        matrixIdentity: {
+          userId: identity?.userId ?? null,
+          displayName: identity?.displayName ?? null,
+          syncStatus: stringOrNull(matrixSync?.status),
+          lastSyncAt: stringOrNull(matrixSync?.lastSyncAt),
+          lastError: stringOrNull(matrixSync?.lastError),
+        },
+        matrixParticipants: participantRows.map((participant) => {
+          const room = roomsById.get(participant.roomId)
+          return {
+            roomId: participant.roomId,
+            roomKind: room?.kind ?? 'unknown',
+            providerRoomId: room?.providerRoomId ?? participant.roomId,
+            participantId: participant.id,
+            providerUserId: participant.providerUserId,
+            status: participant.status,
+          }
+        }),
+        runtimeInspection,
+        runtimeHealth,
+      }
+    }),
+  )
+  return rows.sort((left, right) => left.agentName.localeCompare(right.agentName))
+}
+
+async function inspectWorkerBackendHealth(workerInstanceId: string): Promise<WorkerBackendHealthResult> {
+  const backend = workerContainersEnabled() ? dockerWorkerBackend : localCliWorkerBackend
+  return backend.health(workerInstanceId)
+}
+
+function buildRuntimeHealth(input: {
+  mode: WorkerRuntimeDiagnosticMode
+  worker: typeof workerInstances.$inferSelect
+  contractReady: boolean
+  hasMatrixIdentity: boolean
+  backendHealth: WorkerBackendHealthResult
+}): WorkerRuntimeHealth {
+  const blockers: string[] = []
+  pushUnique(blockers, input.contractReady ? null : 'Agent contract is incomplete')
+  pushUnique(blockers, input.hasMatrixIdentity ? null : 'Matrix identity is missing')
+  if (input.worker.observedState === 'failed') {
+    pushUnique(blockers, readWorkerLastError(input.worker.health) ?? input.worker.message ?? 'WorkerInstance is failed')
+  }
+  for (const blocker of input.backendHealth.blockers) pushUnique(blockers, blocker)
+
+  const ready = input.backendHealth.ready && blockers.length === 0
+  const bridgeInspection = input.mode === 'bridge'
+    ? readCodeAgentInspection(input.backendHealth.details?.inspection)
+    : null
+  return {
+    ready,
+    status: ready ? 'ready' : input.backendHealth.status === 'unknown' && blockers.length === 0 ? 'unknown' : 'blocked',
+    inspectedBy: input.mode === 'bridge' ? 'bridge-cli' : 'worker-backend',
+    state: input.backendHealth.state ?? input.worker.observedState,
+    message: ready
+      ? input.backendHealth.message ?? 'Worker runtime is ready.'
+      : blockers[0] ?? input.backendHealth.message ?? 'Worker runtime is blocked.',
+    blockers,
+    lastCheckedAt: input.backendHealth.lastCheckedAt,
+    details: bridgeInspection
+      ? {
+          ...(input.backendHealth.details ?? {}),
+          codeAgentType: bridgeInspection.codeAgentType ?? null,
+          command: bridgeInspection.command ?? null,
+          nativeProbe: bridgeInspection.nativeProbe ?? null,
+          doctorProbe: bridgeInspection.doctorProbe ?? null,
+          capabilityProbe: bridgeInspection.capabilityProbe ?? null,
+          modelId: bridgeInspection.modelId ?? null,
+        }
+      : input.backendHealth.details,
+  }
+}
+
+function readCodeAgentInspection(value: unknown): CodeAgentRuntimeInspection | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Partial<CodeAgentRuntimeInspection>
+  return record.runtimeType === 'code-agent' ? record as CodeAgentRuntimeInspection : null
+}
+
+function pushUnique(target: string[], value: string | null | undefined) {
+  if (!value?.trim()) return
+  if (!target.includes(value)) target.push(value)
+}
+
+function readWorkerLastError(health: Record<string, unknown>) {
+  return stringOrNull(health.lastError)
+    ?? stringOrNull(health.error)
+    ?? stringOrNull(asRecord(health.matrixSync)?.lastError)
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringOrNull(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function bridgeCodeAgentType(runtimeBase: string): BridgeCodeAgentType | null {
+  if (
+    runtimeBase === 'codex' ||
+    runtimeBase === 'claude-code' ||
+    runtimeBase === 'opencode' ||
+    runtimeBase === 'gemini'
+  ) {
+    return runtimeBase
+  }
+  return null
 }

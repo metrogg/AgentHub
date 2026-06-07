@@ -1282,7 +1282,8 @@ describe('RoomService Matrix room adapter contract', () => {
 
       const sendCall = calls.find((call) => call.path.includes('/send/m.room.message/'))
       expect(sendCall?.auth).toContain('Bearer ')
-      expect(sendCall?.body.body).toContain('@worker-matrix-agent-mention:agenthub.local')
+      expect(sendCall?.body.body).toContain('@Mention Worker')
+      expect(sendCall?.body.body).not.toContain('@worker-matrix-agent-mention:agenthub.local')
       expect(sendCall?.body.formatted_body).toContain('matrix.to/#/@worker-matrix-agent-mention:agenthub.local')
       expect(sendCall?.body['m.mentions'].user_ids).toEqual(['@worker-matrix-agent-mention:agenthub.local'])
       const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room!.id))

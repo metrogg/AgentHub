@@ -237,7 +237,7 @@ async function ensureWorkerParticipantForAgent(
     workerInstanceId = await workerController.ensureWorkerForAgent(workspaceId, {
       id: agent.id,
       runtimeType: agent.runtimeType,
-      codeAgentType: agent.codeAgentType ?? 'codex',
+      codeAgentType: agent.codeAgentType,
       roleProfile: agent.roleProfile,
       modelId: agent.modelId,
       skillIds: agent.skillIds,

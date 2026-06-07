@@ -741,6 +741,242 @@ export interface ControllerPlaneDiagnostics {
     managerOwns: string[]
     uiReadsFrom: string[]
   }
+  managerRuntime: ControllerPlaneManagerRuntimeDiagnostics | null
+  workerRuntimes: WorkerRuntimeDiagnostic[]
+}
+
+export interface ControllerPlaneManagerRuntimeDiagnostics {
+  configuredRuntimeType: 'openclaw' | 'qwenpaw'
+  activeRuntimeType: 'openclaw' | 'qwenpaw'
+  availableProviders: Array<{
+    type: 'openclaw' | 'qwenpaw'
+    available: boolean
+    running: boolean
+    error: string | null
+  }>
+  status: {
+    available: boolean
+    connectionMode: 'external-endpoint' | 'managed-process' | 'managed-docker' | 'unavailable' | string
+    running: boolean
+    syncReady: boolean
+    endpoint: string | null
+    stepEndpoint: string | null
+    healthEndpoint: string | null
+    error: string | null
+    workspace: string
+    configPath: string | null
+    binaryPath: string | null
+    startedAt: string | null
+    uptime: number | null
+  }
+  health: {
+    healthy: boolean
+    latencyMs?: number
+    error?: string
+  } | null
+  contract: {
+    root: string
+    runtimePath: string
+    runtimeManifestPath: string
+    runtimeSpecificConfigPath: string
+    soulPath: string
+    agentsPath: string
+    toolsPath: string
+    heartbeatPath: string
+    skillsDir: string
+    memoryDir: string
+    workerRegistryPath: string
+    teamRegistryPath: string
+    humanRegistryPath: string
+    statePath: string
+    roomsPath: string
+    logsDir: string
+    agentDir: string
+    ready: boolean
+    files: {
+      runtime: boolean
+      runtimeManifest: boolean
+      runtimeSpecificConfig: boolean
+      soul: boolean
+      agents: boolean
+      tools: boolean
+      heartbeat: boolean
+      skillsDir: boolean
+      memoryDir: boolean
+      workerRegistry: boolean
+      teamRegistry: boolean
+      humanRegistry: boolean
+      state: boolean
+      rooms: boolean
+      logsDir: boolean
+    }
+  }
+  matrix: {
+    userId: string | null
+    hasAccessToken: boolean
+    lastSync: unknown
+  }
+  roomBindings: Array<{
+    roomId: string
+    title: string
+    kind: string
+    providerRoomId: string
+    configured: boolean
+    sessionKey: string
+    managerParticipantId: string | null
+    managerParticipantStatus: string | null
+    managerParticipantUserId: string | null
+    boundToResidentManager: boolean
+  }>
+  controllerReachable: boolean
+  agenthubSkillLoaded: boolean
+  managerPersonaReady: boolean
+  matrixJoinedRooms: number
+  lastManagerReplyAt: string | null
+  lastManagerReplyPreview: string | null
+  lastManagerStatusKind: string | null
+  expectedResidentSessionKeyPrefix: string
+}
+
+export interface WorkerRuntimeDiagnostic {
+  workerInstanceId: string
+  workspaceId: string
+  workspaceAgentId: string
+  agentName: string
+  runtimeBase: string
+  mode: 'resident-openclaw' | 'resident-qwenpaw' | 'bridge'
+  observedState: string
+  desiredState: string
+  modelId: string | null
+  runtimeHome: string | null
+  runtimeConfigPath: string | null
+  lastHeartbeatAt: string | null
+  lastError: string | null
+  listenerManagedBy: 'runtime' | 'agenthub-supervisor' | 'none'
+  contractRoot: string
+  contractReady: boolean
+  contractFiles: {
+    profile: boolean
+    runtime: boolean
+    soul: boolean
+    agents: boolean
+    state: boolean
+    rooms: boolean
+    tasks: boolean
+    skillsDir: boolean
+  }
+  matrixIdentity: {
+    userId: string | null
+    displayName: string | null
+    syncStatus: string | null
+    lastSyncAt: string | null
+    lastError: string | null
+  }
+  matrixParticipants: Array<{
+    roomId: string
+    roomKind: string
+    providerRoomId: string
+    participantId: string
+    providerUserId: string | null
+    status: string
+  }>
+  runtimeInspection: {
+    runtimeType: 'code-agent'
+    codeAgentType?: string
+    adapterName?: string
+    command?: string
+    modelId?: string | null
+    modelProvider?: string | null
+    modelLabel: string
+    modelSource?: string | null
+    baseUrl?: string | null
+    baseUrlHost?: string | null
+    installed: boolean
+    configured: boolean
+    executionEnabled: boolean
+    cwdValid: boolean
+    canExecute: boolean
+    commandPreview?: string
+    nativeProbe?: {
+      command: string
+      args: string[]
+      ok: boolean
+      exitCode: number | null
+      timedOut: boolean
+      output: string
+      version: string | null
+    }
+    doctorProbe?: {
+      command: string
+      args: string[]
+      kind: 'doctor' | 'test' | 'help'
+      supported: boolean
+      ok: boolean
+      exitCode: number | null
+      timedOut: boolean
+      output: string
+    }
+    capabilityProbe?: {
+      command: string
+      args: string[]
+      ok: boolean
+      exitCode: number | null
+      timedOut: boolean
+      output: string
+      detected: string[]
+      capabilities: {
+        auth: boolean
+        models: boolean
+        mcp: boolean
+        server: boolean
+        nonInteractive: boolean
+        jsonOutput: boolean
+        sessionResume: boolean
+        agents: boolean
+        project: boolean
+        doctor: boolean
+      }
+    }
+    blockers: string[]
+  } | null
+  runtimeHealth: {
+    ready: boolean
+    status: 'ready' | 'blocked' | 'unknown'
+    inspectedBy: 'bridge-cli' | 'worker-backend' | 'resource'
+    state: string | null
+    message: string | null
+    blockers: string[]
+    lastCheckedAt: string
+    details?: Record<string, unknown>
+  }
+}
+
+export interface ResidentWorkerSelfTestResult {
+  ok: boolean
+  workerInstanceId: string
+  runtimeBase: string | null
+  dispatchAttempted: boolean
+  dispatchEventId: string | null
+  probeRoom: {
+    roomId: string
+    roomKind: string
+    providerRoomId: string
+    participantId: string
+  } | null
+  observedReply: {
+    eventId: string
+    sequence: number
+    body: string
+    protocol: 'TASK_COMPLETED' | 'BLOCKED' | 'QUESTION' | 'PHASE_DONE' | 'NO_REPLY' | 'message'
+  } | null
+  checks: Array<{
+    id: string
+    label: string
+    ok: boolean
+    message: string
+    details?: Record<string, unknown>
+  }>
+  message: string
 }
 
 export interface ContainerRuntimeDiagnostics {
@@ -1564,7 +1800,7 @@ export interface OrchestratorRunResourceSnapshot {
     workspaceId: string
     workspaceAgentId: string
     runtimeFamily: 'coordinator' | 'worker' 
-    runtimeBase: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
+    runtimeBase: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
     modelId: string | null
     skillIds: string[]
     mcpServerIds: string[]
@@ -1877,6 +2113,23 @@ export const api = {
         method: 'POST',
       },
     ),
+  confirmControllerApproval: (roomId: string, eventId: string, reason?: string) =>
+    request<{
+      success: boolean
+      approvalEventId: string
+      applied: Array<{ kind: string; name?: string | null; auditEventId?: string | null; result: unknown }>
+    }>(`/rooms/${roomId}/controller-approvals/${eventId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  denyControllerApproval: (roomId: string, eventId: string, reason?: string) =>
+    request<{ success: boolean; approvalEventId: string; status: 'denied' }>(
+      `/rooms/${roomId}/controller-approvals/${eventId}/deny`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      },
+    ),
   getWelcomeQuickPrompts: (seed: string, count = 10) =>
     request<WelcomeQuickPromptsResponse>('/welcome/quick-prompts', {
       method: 'POST',
@@ -1930,6 +2183,18 @@ export const api = {
   stopLocalMatrix: () =>
     request<LocalMatrixActionResult>('/settings/matrix/local/stop', { method: 'POST', timeout: 70_000 }),
   getControllerPlaneStatus: () => request<ControllerPlaneDiagnostics>('/settings/controller-plane/status'),
+  runResidentWorkerSelfTest: (
+    workerInstanceId: string,
+    input?: { dispatch?: boolean; roomId?: string | null; timeoutMs?: number },
+  ) =>
+    request<ResidentWorkerSelfTestResult>(
+      `/settings/controller-plane/workers/${encodeURIComponent(workerInstanceId)}/resident-self-test`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input ?? {}),
+        timeout: input?.dispatch ? 70_000 : 20_000,
+      },
+    ),
   getContainerRuntimeStatus: () => request<ContainerRuntimeDiagnostics>('/settings/container-runtime/status'),
   prepareLocalContainerRuntime: () =>
     request<PrepareLocalContainerRuntimeResult>('/settings/container-runtime/prepare-local', {

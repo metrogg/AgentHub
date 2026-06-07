@@ -98,8 +98,9 @@ describe('Matrix room adapter e2e contract', () => {
       const participantRows = await db.select().from(roomParticipants).where(eq(roomParticipants.roomId, room.id))
       expect(participantRows.every((participant) => participant.status === 'joined')).toBe(true)
       const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
-      expect(events.map((event) => event.sequence)).toEqual([1, 2])
-      expect(events[1]?.metadata?.matrix).toMatchObject({
+      expect(events.map((event) => event.sequence).slice(0, 2)).toEqual([1, 2])
+      const assignmentEvent = events.find((event) => event.id === mentionEvent.id)
+      expect(assignmentEvent?.metadata?.matrix).toMatchObject({
         roomId: room.providerRoomId,
         usedParticipantToken: true,
         mentions: [worker.providerUserId],
@@ -114,6 +115,8 @@ describe('Matrix room adapter e2e contract', () => {
       expect(sentMessages[1]?.body?.['m.mentions']).toMatchObject({
         user_ids: [worker.providerUserId],
       })
+      expect(sentMessages[1]?.body?.body).toContain('@Matrix Worker')
+      expect(sentMessages[1]?.body?.body).not.toContain(worker.providerUserId)
     } finally {
       matrix.stop()
     }

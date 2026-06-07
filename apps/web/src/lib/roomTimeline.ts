@@ -317,6 +317,7 @@ function timelineEventToMessage(
   if (eventMetadata?.hiddenFromChat === true) return null
   const kind = asString(eventMetadata?.kind)
   if (kind?.startsWith('manager.status.')) return null
+  if (kind === 'manager.dispatch.diagnostic') return null
 
   if (
     event.type !== 'human.message' &&
@@ -403,8 +404,12 @@ function displayNameForEvent(event: TimelineEvent, participant?: RoomParticipant
 function visibleBodyForEvent(event: TimelineEvent) {
   if (event.body.trim()) return event.body
   if (event.type === 'system' && event.metadata?.systemEvent === 'agent_draft_created') return '已生成 Agent 草案。确认后会加入当前 Agent Group。'
+  if (event.metadata?.kind === 'manager.dispatch.diagnostic') return ''
   if (event.type === 'approval.requested' && event.metadata?.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
+  }
+  if (event.type === 'approval.requested' && event.metadata?.kind === 'controller.apply.approval.requested') {
+    return '需要确认 Controller 变更。'
   }
   if (event.type === 'artifact.created') {
     const artifact = asRecord(event.metadata?.artifact)

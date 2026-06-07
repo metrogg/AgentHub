@@ -31,3 +31,11 @@ MCP server configs are injected into the Worker's workspace as `mcporter-servers
 - MCP access is scoped per Worker — not all Workers need the same MCP servers.
 - Never expose raw API keys in chat messages.
 - MCP server changes require a Worker restart or config sync.
+
+## Decision Pattern
+
+1. Determine which Worker needs which MCP capability and why.
+2. Check whether the MCP server is supported in the current AgentHub deployment.
+3. Ask the human before adding credentials or external access.
+4. Apply scoped configuration through Controller APIs or report that the enterprise feature is not enabled.
+5. Trigger Worker config sync/restart only after the room-visible approval.

@@ -317,6 +317,37 @@ export const matrixIdentities = sqliteTable(
   }),
 )
 
+export const controllerAuditEvents = sqliteTable(
+  'controller_audit_events',
+  {
+    id: id(),
+    operationId: text('operation_id').notNull(),
+    applyOperationId: text('apply_operation_id'),
+    danger: text('danger', { enum: ['read', 'write', 'destructive'] }).notNull(),
+    approvalLevel: text('approval_level', { enum: ['not_required', 'recommended', 'required'] })
+      .notNull()
+      .default('not_required'),
+    approvalRequired: integer('approval_required', { mode: 'boolean' }).notNull().default(false),
+    approvalProvided: integer('approval_provided', { mode: 'boolean' }).notNull().default(false),
+    approvedBy: text('approved_by'),
+    approvalReason: text('approval_reason'),
+    manifestKind: text('manifest_kind').notNull(),
+    manifestName: text('manifest_name'),
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
+    resourceId: text('resource_id'),
+    resourceKind: text('resource_kind'),
+    auditFields: text('audit_fields', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    resultSummary: text('result_summary', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: now(),
+  },
+  (table) => ({
+    operationIdIdx: index('controller_audit_events_operation_id_idx').on(table.operationId),
+    workspaceIdIdx: index('controller_audit_events_workspace_id_idx').on(table.workspaceId),
+    resourceIdx: index('controller_audit_events_resource_idx').on(table.resourceKind, table.resourceId),
+    createdAtIdx: index('controller_audit_events_created_at_idx').on(table.createdAt),
+  }),
+)
+
 export const timelineEvents = sqliteTable(
   'timeline_events',
   {

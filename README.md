@@ -27,7 +27,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - **Matrix 通信主线**：新内核以 Matrix Room / timeline / participant / mention 作为协作事实源。Manager 怎么 @ Worker、Worker 怎么回应、用户怎么插话，都应该在 Room 中可见。
 - **A2A 外部互操作**：A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope；A2A 是协议，不是 Agent 类型。
 - **显式分工**：执行任务只接受 Manager / Orchestrator 的模型选择，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
-- **Agent Runtime / Agent Base 执行**：OpenClaw / QwenPaw 优先作为 Manager / Team Leader 基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker 基底。自建 Agent 是在这些基底上配置角色、提示词、Skills/MCP 能力和权限。
+- **Agent Runtime / Agent Base 执行**：OpenClaw 是 Manager / Team Leader 的主基底；OpenClaw 也可以作为 resident Worker 基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker bridge 基底。自建 Agent 是在这些基底上配置角色、提示词、模型绑定、Skills/MCP 能力和权限。
 - **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；任务契约优先发布为 `shared/tasks/{taskId}/meta.json|spec.md|plan.md|result.md` 对象引用。默认 SharedStorage 是本地 filesystem object store，但 object key 语义保持 S3-compatible，后续可替换为 MinIO/S3。
 - **产物可见**：文件、网页、diff、诊断产物进入 ArtifactStore，并从主群聊、任务 Room 和产物卡稳定投影。
 - **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
@@ -55,7 +55,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
-当前主路径已经开始资源化：群聊/私聊新消息先进入 Room timeline，再生成 `messages` 兼容投影；`GET /api/messages/:sessionId` 也优先从 Room timeline 投影，旧 `messages` 表只补历史/特殊兼容行。复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。`MatrixRoomAdapter` 已接入 Matrix Client-Server API，并新增 `matrix_identities`：Human、Manager、Worker 会被确保为真实 Matrix account，Controller 负责 invite/join，timeline 发送会优先使用 sender participant 自己的 Matrix access token，而不是由后端统一 app token 假装所有人发言。`MatrixRuntimeListener` 现在可以用真实 identity token 调 `/sync`，导入真实 room event、解析 `m.mentions` / `matrix.to` mention 和 Matrix 文件引用，并提供可 start/stop 的最小轮询 lifecycle；`MatrixRoomEventDispatcher` 会把人类群聊消息调给 Manager，把 task room 中 @ Worker 的消息调给 WorkerRuntime。自动化测试使用独立的 test room adapter，但开发和产品路径必须连接真实 Matrix homeserver。`messages` 现在是迁移期 UI projection/cache，不再是通信事实源；编辑、清空、撤回、重发关联撤回、重新生成关联撤回和 pin/unpin 已先写入 Room timeline 的 append-only `message.*` 控制事件，再同步旧 `messages` 缓存。后续要继续把旧 snapshot/AG-UI cache 降级为投影和兼容读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
+当前主路径已经开始资源化：群聊/私聊/任务子对话的新消息先进入 Room timeline / Matrix，API 和前端再从 timeline 投影出可见消息；`messages` 只保留旧会话历史只读兼容，不再为新消息写投影缓存。复杂任务通过 ManagerRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。`MatrixRoomAdapter` 已接入 Matrix Client-Server API，并新增 `matrix_identities`：Human、Manager、Worker 会被确保为真实 Matrix account，Controller 负责 invite/join，timeline 发送会优先使用 sender participant 自己的 Matrix access token，而不是由后端统一 app token 假装所有人发言。`MatrixRuntimeListener` 现在可以用真实 identity token 调 `/sync`，导入真实 room event、解析 `m.mentions` / `matrix.to` mention 和 Matrix 文件引用，并提供可 start/stop 的最小轮询 lifecycle；`MatrixRoomEventDispatcher` 会把人类群聊消息调给 Manager，把 task room 中 @ Worker 的消息调给 WorkerRuntime。自动化测试使用独立的 test room adapter，但开发和产品路径必须连接真实 Matrix homeserver。编辑、清空、撤回、重发关联撤回、重新生成关联撤回和 pin/unpin 已先写入 Room timeline 的 append-only `message.*` 控制事件，再由投影层解释当前显示状态。后续要继续把旧 snapshot/AG-UI cache 降级为历史/调试页读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
 
 ## 分层定位
 
@@ -66,7 +66,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡，并逐步进化为 Space / Task / Asset 工作台 |
 | 编排层 | Manager / Orchestrator 生成团队行动方案，通过任务账本调度、取消、重试、验收和汇总 |
 | 通信层 | Matrix 承载 Room / timeline / participant / mention，A2A 只保留为外部互操作或可选任务语义 envelope |
-| 执行层 | OpenClaw / QwenPaw 为 Manager / Team Leader 优先基底；Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Worker 基底；普通内部 LLM 只作非核心 fallback |
+| 执行层 | OpenClaw 为 Manager / Team Leader 主基底；OpenClaw 可作为 resident Worker；Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Worker bridge 基底；普通内部 LLM 只作非核心 fallback |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
 | 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
 | 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + filesystem-first ArtifactStore / SharedStorage；MinIO/S3-compatible adapter 后续可替换接入 |
@@ -76,10 +76,10 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 当前配置真相也分三层：
 
 - `模型管理`：模型目录、双端点、密钥、模型测试。
-- `Agent Runtimes / Agent Bases`：Claude Code、OpenCode、Codex、Gemini、OpenClaw、QwenPaw 等基底的安装状态、原生 auth/config、平台级诊断。旧界面里若仍出现 `Coding Tools`，它只是历史命名，不是架构概念。
+- `Agent Runtimes / Agent Bases`：Claude Code、OpenCode、Codex、Gemini、OpenClaw 等基底的安装状态、原生 auth/config、平台级诊断。旧界面里若仍出现 `Coding Tools`，它只是历史命名，不是架构概念。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、临时诊断或非核心 fallback。Manager / Orchestrator 的目标主路径必须接 OpenClaw / QwenPaw 这类真实 Agent runtime，不能默认回退到内部 LLM 主脑。
+另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、临时诊断或非核心 fallback。Manager / Orchestrator 的目标主路径必须接 OpenClaw 这类真实 Agent runtime，不能默认回退到内部 LLM 主脑。
 
 ## 技术栈
 
@@ -93,7 +93,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 状态 | Zustand |
 | 数据库 | SQLite + Drizzle ORM |
 | LLM | OpenAI-compatible + Anthropic-compatible streaming client，仅用于动态提示、临时诊断和非核心 fallback |
-| Agent Runtime / Agent Base | Manager: OpenClaw / QwenPaw；Worker: Codex CLI / Claude Code / OpenCode / Gemini CLI，后续可补 OpenClaw / QwenPaw Worker |
+| Agent Runtime / Agent Base | Manager: OpenClaw；Worker: OpenClaw resident Worker、Codex CLI / Claude Code / OpenCode / Gemini CLI bridge |
 | Agent 通信 | 真实 Matrix / Tuwunel Room timeline 是目标内部事实源；test room adapter 只用于自动化测试；A2A 降为外部互操作 |
 
 ## 项目结构
@@ -149,6 +149,8 @@ bun run dev
 打开 `http://localhost:5173` 后，进入“设置 -> 控制台”，检查 Matrix、Controller Plane、Manager Runtime、容器运行时和执行隔离状态。
 
 当前操作流程不应该比普通本地开发更复杂：先启动 `bun run infra:up`，再启动 `bun run dev`，随后在 AgentHub UI 里创建群聊、加入 Manager / Worker，并在房间里直接 @ 他们。后端会负责确保 Matrix 身份、Room membership、OpenClaw 配置、listener 或 resident 进程。所谓 resident runtime 指 Manager / Worker 各自有长期运行的 OpenClaw gateway 进程或容器，用自己的 Matrix account 监听房间；不是每次收到消息才临时启动一次 CLI。OpenClaw Manager / Worker 生成的 `openclaw.json` 会显式声明 `agents.list` 默认身份，避免 OpenClaw 落到默认 `main` agent 导致头像、名字和责任串台。
+
+创建 Worker 时必须显式绑定模型，或在环境变量中提供 `AGENTHUB_WORKER_LLM_MODEL` / `LLM_MODEL`。`runtimeBase=opencode`、`runtimeBase=claude-code`、`runtimeBase=codex`、`runtimeBase=gemini` 这类 Worker 当前仍是 AgentHub-managed bridge；`runtimeBase=openclaw` 才是 resident Worker 方向。设置页“控制台”里的 Manager Runtime、Matrix、Controller Plane、Worker runtime 和容器诊断是当前排查入口。
 
 **HiClaw-lite 容器 resident runtime 模式**
 

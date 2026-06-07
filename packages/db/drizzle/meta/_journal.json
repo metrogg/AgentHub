@@ -183,6 +183,13 @@
       "when": 1780870000000,
       "tag": "0025_matrix_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1780950000000,
+      "tag": "0026_controller_audit_events",
+      "breakpoints": true
     }
   ]
 }

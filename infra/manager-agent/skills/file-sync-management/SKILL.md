@@ -29,3 +29,11 @@ shared/tasks/{task-id}/
 - Workers must publish final results under `shared/tasks/{task-id}/`.
 - Never ask downstream workers to guess relative paths — always use explicit object refs.
 - `spec.md` is read-only for Workers — only the Manager writes it.
+
+## Decision Pattern
+
+1. Identify the task id and shared task directory.
+2. Ensure spec.md, plan.md, result.md, and artifacts/ refs are explicit.
+3. Use Controller/ArtifactStore APIs to register deliverables.
+4. Share object refs in the Matrix room instead of ambiguous local paths.
+5. Verify downstream Workers can read the referenced artifacts.

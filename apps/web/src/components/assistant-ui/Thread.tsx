@@ -4336,6 +4336,7 @@ function AssistantMessageParts() {
             chat_attachments: ChatAttachmentsPart,
             clarification_card: ClarificationCardWrapper,
             member_proposal_card: MemberProposalCard,
+            controller_approval_card: ControllerApprovalCard,
             file_card: FileCardMessage,
             delivery_report: DeliveryReportMessage,
           },
@@ -4590,6 +4591,179 @@ function readMemberProposals(value: unknown): MemberProposal[] {
     const proposal = item as Partial<MemberProposal>
     return typeof proposal.expertProfileId === 'string' && typeof proposal.name === 'string'
   })
+}
+
+type ControllerApprovalSummary = {
+  kind: string
+  name?: string | null
+  operationId: string
+  danger: string
+  approval: string
+}
+
+function ControllerApprovalCard({ data }: { data?: Record<string, unknown> | null }) {
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const selectSession = useChatStore((state) => state.selectSession)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const roomTimeline = isRecord(data?.roomTimeline) ? data.roomTimeline : null
+  const roomId = typeof roomTimeline?.roomId === 'string' ? roomTimeline.roomId : ''
+  const eventId =
+    typeof roomTimeline?.eventId === 'string'
+      ? roomTimeline.eventId
+      : typeof data?.messageId === 'string' && data.messageId.startsWith('room:')
+        ? data.messageId.slice('room:'.length)
+        : ''
+  const status = typeof data?.status === 'string' ? data.status : 'pending'
+  const reason = typeof data?.reason === 'string' ? data.reason : ''
+  const summary = readControllerApprovalSummary(data?.summary)
+  const [busyAction, setBusyAction] = useState<'confirm' | 'deny' | null>(null)
+  const [error, setError] = useState('')
+
+  if (!roomId || !eventId || !summary.length) return null
+
+  const resolved = status === 'approved' || status === 'denied'
+
+  async function refreshCurrentSession() {
+    if (!currentSessionId) return
+    await fetchSessions().catch(() => undefined)
+    await selectSession(currentSessionId).catch(() => undefined)
+  }
+
+  async function confirm() {
+    if (busyAction || resolved) return
+    setBusyAction('confirm')
+    setError('')
+    try {
+      await api.confirmControllerApproval(roomId, eventId)
+      await refreshCurrentSession()
+    } catch (err) {
+      setError(friendlyErrorMessage(err, '确认失败'))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deny() {
+    if (busyAction || resolved) return
+    setBusyAction('deny')
+    setError('')
+    try {
+      await api.denyControllerApproval(roomId, eventId)
+      await refreshCurrentSession()
+    } catch (err) {
+      setError(friendlyErrorMessage(err, '拒绝失败'))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  return (
+    <div className="not-prose mt-3 overflow-hidden rounded-2xl border border-amber-200 bg-amber-50/50 shadow-sm">
+      <div className="flex items-start gap-3 border-b border-amber-100 px-4 py-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500 text-white">
+          <Shield className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-neutral-950">
+            {status === 'approved'
+              ? 'Controller 变更已确认'
+              : status === 'denied'
+                ? 'Controller 变更已拒绝'
+                : '需要确认 Controller 变更'}
+          </div>
+          <div className="mt-1 text-xs leading-5 text-neutral-600">
+            这些变更会修改真实 Controller 资源，确认后才会执行。
+          </div>
+          {reason && <div className="mt-1 text-xs leading-5 text-neutral-500">原因：{reason}</div>}
+        </div>
+        <span
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium',
+            status === 'approved'
+              ? 'bg-emerald-50 text-emerald-700'
+              : status === 'denied'
+                ? 'bg-red-50 text-red-700'
+                : 'bg-amber-100 text-amber-800',
+          )}
+        >
+          {status === 'approved' ? (
+            <CheckCircle2 className="h-3.5 w-3.5" />
+          ) : status === 'denied' ? (
+            <XCircle className="h-3.5 w-3.5" />
+          ) : (
+            <Clock3 className="h-3.5 w-3.5" />
+          )}
+          {status === 'approved' ? '已确认' : status === 'denied' ? '已拒绝' : '待确认'}
+        </span>
+      </div>
+      <div className="divide-y divide-amber-100 bg-white/60">
+        {summary.map((item, index) => (
+          <div key={`${item.operationId}-${item.kind}-${item.name ?? index}`} className="px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-neutral-950">
+                {item.kind}{item.name ? ` ${item.name}` : ''}
+              </span>
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600">
+                {item.operationId}
+              </span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                {item.danger}
+              </span>
+              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                {item.approval}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      {!resolved && (
+        <div className="flex flex-col gap-2 border-t border-amber-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-h-5 text-xs leading-5 text-red-600">{error}</div>
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              disabled={Boolean(busyAction)}
+              onClick={() => void deny()}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-60"
+            >
+              {busyAction === 'deny' ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+              拒绝
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(busyAction)}
+              onClick={() => void confirm()}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
+            >
+              {busyAction === 'confirm' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              确认执行
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function readControllerApprovalSummary(value: unknown): ControllerApprovalSummary[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item): ControllerApprovalSummary[] => {
+    if (!isRecord(item)) return []
+    const kind = typeof item.kind === 'string' ? item.kind : ''
+    const operationId = typeof item.operationId === 'string' ? item.operationId : ''
+    if (!kind || !operationId) return []
+    return [{
+      kind,
+      name: typeof item.name === 'string' ? item.name : null,
+      operationId,
+      danger: typeof item.danger === 'string' ? item.danger : 'write',
+      approval: typeof item.approval === 'string' ? item.approval : 'recommended',
+    }]
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 interface FileCardEntry {

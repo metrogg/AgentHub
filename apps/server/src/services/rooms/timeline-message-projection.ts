@@ -255,6 +255,12 @@ function timelineEventToMessage(input: {
   if (metadata?.hiddenFromChat === true) return null
   if (isDirectRuntimeInternalEvent(event, room, metadata)) return null
 
+  const metadata = asRecord(event.metadata)
+  if (metadata.hiddenFromChat === true) return null
+  const kind = asString(metadata.kind)
+  if (kind?.startsWith('manager.status.')) return null
+  if (kind === 'manager.dispatch.diagnostic') return null
+
   const content = visibleBodyForEvent(event)
   if (!content.trim()) return null
 
@@ -326,6 +332,9 @@ function displayNameForEvent(event: TimelineEventRow, participant?: ParticipantR
 function visibleBodyForEvent(event: TimelineEventRow) {
   if (event.body.trim()) return event.body
   const metadata = asRecord(event.metadata)
+  if (metadata.hiddenFromChat === true) return ''
+  if (typeof metadata.kind === 'string' && metadata.kind.startsWith('manager.status.')) return ''
+  if (metadata.kind === 'manager.dispatch.diagnostic') return ''
   if (event.type === 'approval.requested' && metadata.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
   }

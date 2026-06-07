@@ -45,6 +45,6 @@ function normalizeWorkspaceAgentRuntime<T extends { runtimeType: string; codeAge
   return {
     ...agent,
     runtimeType: 'code-agent',
-    codeAgentType: agent.codeAgentType ?? 'codex',
+    codeAgentType: agent.codeAgentType,
   }
 }

@@ -31,7 +31,7 @@ export interface AgentRoleProfile {
   canUseTools: string[]
   cannotDo: string[]
   managerRuntimeType?: 'openclaw' | 'qwenpaw' | null
-  workerRuntimeBase?: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  workerRuntimeBase?: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
 }
 
 export interface AgentRolePreset {
@@ -44,7 +44,7 @@ export interface AgentRolePreset {
   runtimeType: 'llm' | 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   managerRuntimeType?: 'openclaw' | 'qwenpaw' | null
-  workerRuntimeBase?: 'openclaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  workerRuntimeBase?: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'workspace-write' | 'danger-full-access'
@@ -306,7 +306,9 @@ export function rolePresetValues(roleType: Exclude<AgentRoleType, 'custom'>) {
       managerRuntimeType: preset.managerRuntimeType ?? preset.roleProfile.managerRuntimeType ?? null,
       ...(preset.roleType === 'orchestrator'
         ? {}
-        : { workerRuntimeBase: preset.workerRuntimeBase ?? preset.roleProfile.workerRuntimeBase ?? preset.codeAgentType ?? 'codex' }),
+        : preset.workerRuntimeBase ?? preset.roleProfile.workerRuntimeBase ?? preset.codeAgentType
+          ? { workerRuntimeBase: preset.workerRuntimeBase ?? preset.roleProfile.workerRuntimeBase ?? preset.codeAgentType }
+          : {}),
     },
     color: preset.color,
     runtimeType: preset.runtimeType,

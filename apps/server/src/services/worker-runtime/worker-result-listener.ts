@@ -1,10 +1,26 @@
-import { db, eq, and, workspaceTasks, taskThreads } from '@agenthub/db'
-import { TaskStatus } from '@agenthub/shared'
+import {
+  and,
+  db,
+  desc,
+  eq,
+  orchestratorRuns,
+  roomParticipants,
+  rooms,
+  runtimeLeases,
+  taskThreads,
+  workspaces,
+  workspaceTasks,
+  workerInstances,
+} from '@agenthub/db'
 import { logger } from '../../lib/logger'
+import { ensureWorkerAgentContractFromController } from '../agent-contract'
 import { roomService } from '../rooms'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
+import { updateSharedTaskDirectoryStatus } from '../orchestrator/shared-task-directory'
+import { updateTaskThreadStatus } from '../orchestrator/task-thread-service'
+import { createTaskClarification } from './task-clarification-store'
 
 /**
  * Parse Worker @mention protocol messages.
@@ -37,7 +53,7 @@ export async function handleWorkerProtocolMessage(input: {
   const completedMatch = body.match(/^TASK_COMPLETED:\s*(.+)$/s)
   if (completedMatch) {
     const summary = completedMatch[1]!.trim()
-    await handleTaskCompleted(input.roomId, summary, input.eventId)
+    await handleTaskCompleted(input, summary)
     return true
   }
 
@@ -45,7 +61,7 @@ export async function handleWorkerProtocolMessage(input: {
   const blockedMatch = body.match(/^BLOCKED:\s*(.+)$/s)
   if (blockedMatch) {
     const reason = blockedMatch[1]!.trim()
-    await handleTaskBlocked(input.roomId, reason, input.eventId)
+    await handleTaskBlocked(input, reason)
     return true
   }
 
@@ -53,7 +69,7 @@ export async function handleWorkerProtocolMessage(input: {
   const questionMatch = body.match(/^QUESTION:\s*(.+)$/s)
   if (questionMatch) {
     const question = questionMatch[1]!.trim()
-    await handleWorkerQuestion(input.roomId, question, input.eventId)
+    await handleWorkerQuestion(input, question)
     return true
   }
 
@@ -62,93 +78,387 @@ export async function handleWorkerProtocolMessage(input: {
   if (phaseMatch) {
     const phaseNum = phaseMatch[1]
     const summary = phaseMatch[2]!.trim()
-    await handlePhaseCompleted(input.roomId, phaseNum!, summary, input.eventId)
+    await handlePhaseCompleted(input, phaseNum!, summary)
     return true
   }
 
   return false
 }
 
-async function handleTaskCompleted(roomId: string, summary: string, sourceEventId: string) {
-  // Find the task associated with this room
-  const [thread] = await db
-    .select()
-    .from(taskThreads)
-    .where(eq(taskThreads.sessionId, roomId))
-    .limit(1)
+type WorkerProtocolInput = Parameters<typeof handleWorkerProtocolMessage>[0]
 
-  if (!thread?.taskId) {
-    logger.warn({ roomId }, 'Worker reported TASK_COMPLETED but no task found for this room')
+async function handleTaskCompleted(input: WorkerProtocolInput, summary: string) {
+  const context = await resolveTaskRoomContext(input)
+  if (!context) {
+    logger.warn({ roomId: input.roomId }, 'Worker reported TASK_COMPLETED but no task found for this room')
     return
   }
 
-  const [task] = await db
-    .select()
-    .from(workspaceTasks)
-    .where(eq(workspaceTasks.id, thread.taskId))
-    .limit(1)
-
-  if (!task) return
-
-  // Mark task as completed
-  if (task.runId) {
-    await runController.markTaskCompleted(
-      { runId: task.runId, workspaceId: task.workspaceId, groupSessionId: roomId },
-      {
-        taskId: task.id,
-        title: task.title,
-        agentId: task.agentId ?? undefined,
-        durationMs: undefined,
-        childSessionId: undefined,
-        taskThreadId: thread.id,
-        workerInstanceId: undefined,
-        runtimeLeaseId: undefined,
-        sharedTaskRelativeRoot: undefined,
-        sharedTaskSpecPath: undefined,
-        extraPayload: { source: 'worker-protocol', summary, sourceEventId },
+  await runController.markTaskCompleted(
+    context.run,
+    {
+      taskId: context.task.id,
+      title: context.task.title,
+      agentId: context.task.agentId ?? context.thread?.workspaceAgentId ?? null,
+      childSessionId: context.thread?.sessionId ?? context.room.sessionId ?? null,
+      taskThreadId: context.thread?.id ?? context.room.taskThreadId ?? null,
+      workerInstanceId: context.workerInstanceId,
+      runtimeLeaseId: context.lease?.id ?? null,
+      sharedTaskRelativeRoot: readString(context.room.metadata?.sharedTaskRelativeRoot),
+      sharedTaskSpecPath: readString(context.room.metadata?.sharedTaskSpecPath),
+      extraPayload: {
+        source: 'worker-protocol.task-completed',
+        summary,
+        sourceEventId: input.eventId,
+        taskRoomId: context.room.id,
       },
-    ).catch((err) => {
-      logger.warn({ err, taskId: task.id }, 'Failed to mark task completed via run controller')
-    })
+    },
+  ).catch((err) => {
+    logger.warn({ err, taskId: context.task.id }, 'Failed to mark task completed via run controller')
+  })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'completed',
+    summary,
+    messageId: input.eventId,
+    timestamps: { completedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.task-completed',
+      sourceEventId: input.eventId,
+    },
+  })
+
+  await runtimeLeaseController.release(context.lease?.id, {
+    workerInstanceId: context.workerInstanceId,
+    metadata: {
+      source: 'worker-protocol.task-completed',
+      sourceEventId: input.eventId,
+      summary,
+    },
+  })
+  await markWorkerAfterProtocolResult(context.worker, 'released after worker protocol completion')
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.task-completed')
+
+  logger.info({ taskId: context.task.id, summary: summary.slice(0, 100) }, 'Worker reported TASK_COMPLETED')
+}
+
+async function handleTaskBlocked(input: WorkerProtocolInput, reason: string) {
+  const context = await resolveTaskRoomContext(input)
+  if (!context) {
+    logger.warn({ roomId: input.roomId }, 'Worker reported BLOCKED but no task found for this room')
+    return
   }
 
-  logger.info({ taskId: task.id, summary: summary.slice(0, 100) }, 'Worker reported TASK_COMPLETED')
+  await runController.markTaskBlocked(context.run, {
+    taskId: context.task.id,
+    title: context.task.title,
+    agentId: context.task.agentId ?? context.thread?.workspaceAgentId ?? null,
+    error: reason,
+    reason: 'worker_protocol_blocked',
+  })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'blocked',
+    summary: reason,
+    error: reason,
+    messageId: input.eventId,
+    timestamps: { failedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.blocked',
+      sourceEventId: input.eventId,
+    },
+  })
+
+  await runtimeLeaseController.release(context.lease?.id, {
+    workerInstanceId: context.workerInstanceId,
+    metadata: {
+      source: 'worker-protocol.blocked',
+      sourceEventId: input.eventId,
+      reason,
+    },
+  })
+  await markWorkerAfterProtocolResult(context.worker, 'blocked task reported through Matrix protocol')
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.blocked')
+
+  logger.info({ taskId: context.task.id, reason: reason.slice(0, 100) }, 'Worker reported BLOCKED')
 }
 
-async function handleTaskBlocked(roomId: string, reason: string, sourceEventId: string) {
-  const [thread] = await db
-    .select()
-    .from(taskThreads)
-    .where(eq(taskThreads.sessionId, roomId))
-    .limit(1)
+async function handleWorkerQuestion(input: WorkerProtocolInput, question: string) {
+  const context = await resolveTaskRoomContext(input)
+  if (!context) {
+    logger.warn({ roomId: input.roomId }, 'Worker asked QUESTION but no task found for this room')
+    return
+  }
 
-  if (!thread?.taskId) return
+  const clarification = await createTaskClarification({
+    runId: context.run.runId,
+    taskId: context.task.id,
+    agentId: context.task.agentId ?? context.thread?.workspaceAgentId ?? null,
+    question,
+    options: [],
+  })
 
-  const [task] = await db
-    .select()
-    .from(workspaceTasks)
-    .where(eq(workspaceTasks.id, thread.taskId))
-    .limit(1)
+  await runController.markTaskWaitingForHuman(context.run, {
+    taskId: context.task.id,
+    title: context.task.title,
+    agentId: context.task.agentId ?? context.thread?.workspaceAgentId ?? null,
+    question,
+    clarificationId: clarification?.id ?? null,
+    childSessionId: context.thread?.sessionId ?? context.room.sessionId ?? null,
+    taskThreadId: context.thread?.id ?? context.room.taskThreadId ?? null,
+    workerInstanceId: context.workerInstanceId,
+    runtimeLeaseId: context.lease?.id ?? null,
+    sharedTaskRelativeRoot: readString(context.room.metadata?.sharedTaskRelativeRoot),
+    sharedTaskSpecPath: readString(context.room.metadata?.sharedTaskSpecPath),
+    extraPayload: {
+      source: 'worker-protocol.question',
+      sourceEventId: input.eventId,
+      taskRoomId: context.room.id,
+    },
+  })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'blocked',
+    summary: `Waiting for human clarification: ${question}`,
+    error: question,
+    messageId: input.eventId,
+    timestamps: { updatedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.question',
+      sourceEventId: input.eventId,
+      clarificationId: clarification?.id ?? null,
+    },
+  })
 
-  if (!task) return
+  await runtimeLeaseController.markWaitingForHuman(context.lease?.id, {
+    workerInstanceId: context.workerInstanceId,
+    message: question,
+    metadata: {
+      source: 'worker-protocol.question',
+      sourceEventId: input.eventId,
+      clarificationId: clarification?.id ?? null,
+      question,
+      roomId: context.room.id,
+      runId: context.run.runId,
+      taskId: context.task.id,
+    },
+  })
 
-  // Update task status to blocked
-  await db
-    .update(workspaceTasks)
-    .set({ status: TaskStatus.Blocked, errorLog: reason })
-    .where(eq(workspaceTasks.id, task.id))
+  await roomService.appendTimelineEvent({
+    roomId: context.room.id,
+    senderParticipantId: input.senderParticipantId,
+    senderType: 'worker',
+    type: 'approval.requested',
+    body: question,
+    metadata: {
+      kind: 'worker-runtime.clarification-requested',
+      source: 'worker-protocol.question',
+      sourceEventId: input.eventId,
+      clarificationId: clarification?.id ?? null,
+      workspaceAgentId: context.task.agentId ?? context.thread?.workspaceAgentId ?? null,
+      workerInstanceId: context.workerInstanceId,
+      runtimeLeaseId: context.lease?.id ?? null,
+      question,
+      options: [],
+    },
+  })
 
-  logger.info({ taskId: task.id, reason: reason.slice(0, 100) }, 'Worker reported BLOCKED')
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.question')
+
+  logger.info({ taskId: context.task.id, question: question.slice(0, 100) }, 'Worker asked QUESTION via protocol')
 }
 
-async function handleWorkerQuestion(roomId: string, question: string, sourceEventId: string) {
-  // This is a clarification request — the Worker needs human input
-  // The existing clarification flow in worker-runtime-service handles this
-  // via the clarification event yielded by the runtime.
-  // For resident Workers that send QUESTION via Matrix, we log it.
-  logger.info({ roomId, question: question.slice(0, 100) }, 'Worker asked QUESTION via protocol')
+async function handlePhaseCompleted(input: WorkerProtocolInput, phaseNum: string, summary: string) {
+  const context = await resolveTaskRoomContext(input)
+  if (!context) {
+    logger.warn({ roomId: input.roomId, phaseNum }, 'Worker reported PHASE_DONE but no task found for this room')
+    return
+  }
+
+  await runController.markTaskProgress(context.run, {
+    taskId: context.task.id,
+    title: context.task.title,
+    agentId: context.task.agentId ?? context.thread?.workspaceAgentId ?? null,
+    percent: null,
+    progressStatus: `phase_${phaseNum}_done`,
+    childSessionId: context.thread?.sessionId ?? context.room.sessionId ?? null,
+    taskThreadId: context.thread?.id ?? context.room.taskThreadId ?? null,
+    workerInstanceId: context.workerInstanceId,
+    runtimeLeaseId: context.lease?.id ?? null,
+    sharedTaskRelativeRoot: readString(context.room.metadata?.sharedTaskRelativeRoot),
+    sharedTaskSpecPath: readString(context.room.metadata?.sharedTaskSpecPath),
+    persistRunUpdatedAt: true,
+    extraPayload: {
+      source: 'worker-protocol.phase-done',
+      phase: phaseNum,
+      summary,
+      sourceEventId: input.eventId,
+      taskRoomId: context.room.id,
+    },
+  })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'running',
+    summary,
+    messageId: input.eventId,
+    timestamps: { updatedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.phase-done',
+      sourceEventId: input.eventId,
+      phase: phaseNum,
+    },
+  })
+  if (context.thread?.id) {
+    await updateTaskThreadStatus(context.thread.id, 'active', input.eventId)
+  }
+  await refreshWorkerContractAfterProtocolResult(context, 'worker-protocol.phase-done')
+
+  logger.info({ taskId: context.task.id, phaseNum, summary: summary.slice(0, 100) }, 'Worker reported PHASE_DONE')
 }
 
-async function handlePhaseCompleted(roomId: string, phaseNum: string, summary: string, sourceEventId: string) {
-  logger.info({ roomId, phaseNum, summary: summary.slice(0, 100) }, 'Worker reported PHASE_DONE')
+async function resolveTaskRoomContext(input: WorkerProtocolInput) {
+  const [room] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
+  if (!room || room.kind !== 'task') return null
+
+  const [participant] = input.senderParticipantId
+    ? await db.select().from(roomParticipants).where(eq(roomParticipants.id, input.senderParticipantId)).limit(1)
+    : []
+
+  const [thread] = room.taskThreadId
+    ? await db.select().from(taskThreads).where(eq(taskThreads.id, room.taskThreadId)).limit(1)
+    : room.runId && room.taskId
+      ? await db
+          .select()
+          .from(taskThreads)
+          .where(and(eq(taskThreads.runId, room.runId), eq(taskThreads.taskId, room.taskId)))
+          .limit(1)
+      : room.sessionId
+        ? await db.select().from(taskThreads).where(eq(taskThreads.sessionId, room.sessionId)).limit(1)
+        : []
+
+  const taskId = room.taskId ?? thread?.taskId ?? null
+  if (!taskId) return null
+  const [task] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, taskId)).limit(1)
+  if (!task) return null
+
+  const runId = room.runId ?? thread?.runId ?? task.runId ?? null
+  if (!runId) return null
+  const [runRow] = await db.select().from(orchestratorRuns).where(eq(orchestratorRuns.id, runId)).limit(1)
+  const groupSessionId = thread?.groupSessionId ?? runRow?.groupSessionId ?? null
+  if (!groupSessionId) return null
+
+  const workerInstanceId = participant?.workerInstanceId ?? thread?.workerInstanceId ?? room.metadata?.workerInstanceId
+  const normalizedWorkerInstanceId = typeof workerInstanceId === 'string' ? workerInstanceId : null
+  const [worker] = normalizedWorkerInstanceId
+    ? await db.select().from(workerInstances).where(eq(workerInstances.id, normalizedWorkerInstanceId)).limit(1)
+    : []
+  const [lease] = normalizedWorkerInstanceId
+    ? await db
+        .select()
+        .from(runtimeLeases)
+        .where(and(eq(runtimeLeases.taskId, task.id), eq(runtimeLeases.workerInstanceId, normalizedWorkerInstanceId)))
+        .orderBy(desc(runtimeLeases.updatedAt))
+        .limit(1)
+    : await db
+        .select()
+        .from(runtimeLeases)
+        .where(eq(runtimeLeases.taskId, task.id))
+        .orderBy(desc(runtimeLeases.updatedAt))
+        .limit(1)
+
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId ?? task.workspaceId)).limit(1)
+
+  return {
+    room,
+    thread: thread ?? null,
+    task,
+    lease: lease ?? null,
+    workspace: workspace ?? null,
+    worker: worker ?? null,
+    workerInstanceId: normalizedWorkerInstanceId,
+    run: {
+      runId,
+      workspaceId: room.workspaceId ?? task.workspaceId,
+      groupSessionId,
+    },
+  }
+}
+
+async function updateSharedTaskStatusFromProtocol(
+  context: NonNullable<Awaited<ReturnType<typeof resolveTaskRoomContext>>>,
+  input: {
+    status: 'running' | 'completed' | 'blocked'
+    summary: string
+    error?: string | null
+    messageId?: string | null
+    timestamps?: Parameters<typeof updateSharedTaskDirectoryStatus>[0]['timestamps']
+    executionConfig?: Record<string, unknown>
+  },
+) {
+  const sharedTaskRelativeRoot =
+    readString(context.room.metadata?.sharedTaskRelativeRoot) ??
+    ['.agenthub', 'shared', 'tasks', context.task.id].join('/')
+  try {
+    await updateSharedTaskDirectoryStatus({
+      projectPath: context.workspace?.projectPath ?? context.lease?.cwd ?? null,
+      sharedTaskRelativeRoot,
+      taskId: context.task.id,
+      status: input.status,
+      workerInstanceId: context.workerInstanceId,
+      runtimeLeaseId: context.lease?.id ?? null,
+      messageId: input.messageId ?? null,
+      error: input.error ?? null,
+      summary: input.summary,
+      executionConfig: input.executionConfig ?? null,
+      timestamps: input.timestamps,
+    })
+  } catch (error: any) {
+    logger.warn(
+      {
+        err: error?.message || String(error),
+        roomId: context.room.id,
+        taskId: context.task.id,
+        status: input.status,
+      },
+      'Failed to update shared task status from Worker protocol',
+    )
+  }
+}
+
+async function markWorkerAfterProtocolResult(
+  worker: typeof workerInstances.$inferSelect | null,
+  message: string,
+) {
+  if (!worker) return
+  const nextState =
+    worker.runtimeBase === 'openclaw' || worker.runtimeBase === 'qwenpaw' || worker.runtimeBase === 'copaw'
+      ? 'listening'
+      : 'idle'
+  await markWorkerInstanceState(worker.id, nextState, {
+    message,
+    health: {
+      protocolResultAt: new Date().toISOString(),
+      runtimeBase: worker.runtimeBase,
+    },
+  })
+}
+
+async function refreshWorkerContractAfterProtocolResult(
+  context: NonNullable<Awaited<ReturnType<typeof resolveTaskRoomContext>>>,
+  source: string,
+) {
+  if (!context.workerInstanceId) return
+  await ensureWorkerAgentContractFromController({
+    workerInstanceId: context.workerInstanceId,
+    controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+    sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+  }).catch((err) => {
+    logger.warn({
+      err,
+      source,
+      workerInstanceId: context.workerInstanceId,
+      taskId: context.task.id,
+      roomId: context.room.id,
+    }, 'Failed to refresh Worker contract after Matrix protocol result')
+  })
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : null
 }
