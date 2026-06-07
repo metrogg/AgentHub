@@ -18,7 +18,7 @@ import type { RoomKind, TimelineEventType } from '../rooms/types'
 import { roomService } from '../rooms/room-service'
 import { roomController } from '../rooms/room-controller'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
-import { ensureManagerAgentContractFromController } from '../agent-contract'
+import { ensureManagerAgentContractFromController, managerRuntimeSpecificConfigFileName } from '../agent-contract'
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import { workerController } from '../orchestrator/worker-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -625,6 +625,8 @@ export class ControllerApi {
         matrixIdentity: identity,
         workspaceRoot: workspace.root,
         runtimePath: workspace.runtimePath,
+        runtimeManifestPath: workspace.runtimeManifestPath,
+        runtimeSpecificConfigPath: `${workspace.root}/${managerRuntimeSpecificConfigFileName(runtimeType)}`,
         soulPath: workspace.soulPath,
         agentsPath: workspace.agentsPath,
         skillsDir: workspace.skillsDir,

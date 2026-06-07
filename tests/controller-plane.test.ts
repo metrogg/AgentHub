@@ -847,6 +847,8 @@ describe('Controller Plane', () => {
     const managerResult = result.applied[0]!.result as { snapshot: Record<string, string> }
     const snapshot = managerResult.snapshot
     expect(existsSync(snapshot.runtimePath)).toBe(true)
+    expect(existsSync(snapshot.runtimeManifestPath)).toBe(true)
+    expect(existsSync(snapshot.runtimeSpecificConfigPath)).toBe(true)
     expect(existsSync(snapshot.soulPath)).toBe(true)
     expect(existsSync(snapshot.agentsPath)).toBe(true)
     expect(existsSync(snapshot.skillsDir)).toBe(true)
@@ -854,6 +856,9 @@ describe('Controller Plane', () => {
     expect(runtime.runtimeFamily).toBe('manager')
     expect(runtime.runtimeType).toBe('openclaw')
     expect(runtime.controllerUrl).toBe('http://127.0.0.1:8000')
+    const runtimeManifest = JSON.parse(readFileSync(snapshot.runtimeManifestPath, 'utf8'))
+    expect(runtimeManifest.roleContract).toBe('manager')
+    expect(runtimeManifest.controller.url).toBe('http://127.0.0.1:8000')
   })
 
   test('controller reconcile handles Manager resources through Manager contract sync', async () => {
@@ -870,6 +875,8 @@ describe('Controller Plane', () => {
     expect(result.phase).toBe('manager-contract-synced')
     expect(result.ref).toMatchObject({ kind: 'Manager', id: managerId })
     expect(result.snapshot).toMatchObject({ managerId, runtimeType: 'qwenpaw' })
+    expect(existsSync((result.snapshot as Record<string, string>).runtimeManifestPath)).toBe(true)
+    expect((result.snapshot as Record<string, string>).runtimeSpecificConfigPath).toContain('qwenpaw.manager.json')
   })
 
   test('controller apply can declaratively start and stop Manager runtime providers', async () => {
