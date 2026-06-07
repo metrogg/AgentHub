@@ -76,8 +76,22 @@ export function mergeRoomTimelineStreamMessages(messages: Message[], incoming: M
       continue
     }
 
-    const previous = output[output.length - 1]
     const streamKey = roomTimelineStreamKey(message)
+    if (streamKey) {
+      // search backward for a message with the same streamKey (not just the last element)
+      let targetIndex = -1
+      for (let i = output.length - 1; i >= 0; i--) {
+        if (roomTimelineStreamKey(output[i]!) === streamKey) { targetIndex = i; break }
+      }
+      if (targetIndex >= 0) {
+        output = output.map((item, index) =>
+          index === targetIndex ? mergeTimelineStreamMessage(item, message) : item,
+        )
+        continue
+      }
+    }
+
+    const previous = output[output.length - 1]
     if (previous && streamKey && roomTimelineStreamKey(previous) === streamKey) {
       output = [
         ...output.slice(0, -1),
