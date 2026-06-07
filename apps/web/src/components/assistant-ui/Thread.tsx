@@ -6624,20 +6624,20 @@ const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) =
             <CodeAgentProcessRows data={detailsData} />
             {diagnostics && <CodeAgentFailureNotice data={detailsData} />}
           </FlowRail>
+          {artifacts.length > 0 && (
+            <div className="mt-3">
+              <div className="mb-1.5 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-neutral-400">
+                <Blocks className="h-3.5 w-3.5" />
+                过程产物 · {artifacts.length}
+              </div>
+              <FlowRail>
+                {artifacts.map((item) => (
+                  <ArtifactCard key={item.id} artifact={item} />
+                ))}
+              </FlowRail>
+            </div>
+          )}
         </>
-      )}
-      {artifacts.length > 0 && (
-        <div className="mt-3">
-          <div className="mb-1.5 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-neutral-400">
-            <Blocks className="h-3.5 w-3.5" />
-            过程产物 · {artifacts.length}
-          </div>
-          <FlowRail>
-            {artifacts.map((item) => (
-              <ArtifactCard key={item.id} artifact={item} />
-            ))}
-          </FlowRail>
-        </div>
       )}
     </div>
   )

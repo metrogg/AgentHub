@@ -1283,7 +1283,7 @@ function applyRoomRuntimeProjection(
   return {
     ...clearRuntimeActivity(),
     streamingMessage: {
-      id: `room-runtime:${input.event.id}`,
+      id: current.streamingMessage?.id ?? `room-runtime:${input.event.id}`,
       content: '',
       agentId:
         asString(metadata?.workspaceAgentId) ??

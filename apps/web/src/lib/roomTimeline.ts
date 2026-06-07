@@ -485,9 +485,9 @@ function timelineEventToMessage(
     : undefined
   const senderType = senderTypeFromTimeline(event)
   const senderName = displayNameForEvent(event, participant)
-  const content = visibleBodyForEvent(event)
-  if (!content.trim()) return null
   const codeAgentRun = codeAgentRunFromWorkerRuntimeEvent(event)
+  const content = visibleBodyForEvent(event)
+  if (!content.trim() && !shouldAttachCodeAgentRunToMessage(event, codeAgentRun)) return null
 
   return {
     id: `room:${event.id}`,

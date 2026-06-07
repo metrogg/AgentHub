@@ -332,6 +332,71 @@ describe('room timeline projection', () => {
     })
   })
 
+  test('merges final empty worker runtime card into the streamed text bubble', () => {
+    const projection = projectRoomTimeline({
+      room,
+      participants: [worker],
+      sessionId: 'child-session-1',
+      timeline: [
+        event({
+          id: 'worker-output',
+          type: 'worker.message',
+          sequence: 1,
+          body: '页面已增强，包含数字滚动和深浅色切换。',
+          metadata: {
+            kind: 'worker-runtime.message',
+            traceId: 'runtime-started-1',
+            senderParticipantId: 'participant-worker-1',
+            workspaceAgentId: 'agent-1',
+            runtimeType: 'claude-code',
+          },
+        }),
+        event({
+          id: 'worker-completed',
+          type: 'worker.message',
+          sequence: 2,
+          body: '',
+          metadata: {
+            kind: 'worker-runtime.completed',
+            status: 'completed',
+            traceId: 'runtime-started-1',
+            senderParticipantId: 'participant-worker-1',
+            workspaceAgentId: 'agent-1',
+            runtimeType: 'claude-code',
+            codeAgentRun: {
+              type: 'code-agent-run',
+              status: 'completed',
+              runtime: 'claude-code',
+              command: 'claude --print',
+              cwd: 'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-06-task-1',
+              durationMs: 21000,
+              exitCode: 0,
+              commands: [],
+              files: [{ path: 'index.html', status: 'modified' }],
+              toolCalls: [],
+              artifacts: [],
+              steps: [{ id: 'step-1', kind: 'file', status: 'completed', title: '修改 index.html' }],
+            },
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(1)
+    expect(projection.messages[0]?.id).toBe('room:worker-output')
+    expect(projection.messages[0]?.content).toBe('页面已增强，包含数字滚动和深浅色切换。')
+    expect(projection.messages[0]?.metadata?.codeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'completed',
+      runtime: 'claude-code',
+      files: [{ path: 'index.html', status: 'modified' }],
+    })
+    expect(projection.messages[0]?.metadata?.roomTimelineStream).toMatchObject({
+      traceId: 'runtime-started-1',
+      eventIds: ['worker-output', 'worker-completed'],
+    })
+  })
+
   test('projects manager/worker timeline into visible messages and task board events', () => {
     const projection = projectRoomTimeline({
       room,

@@ -5,13 +5,21 @@ import {
   ArrowUp,
   AtSign,
   Check,
+  ChevronDown,
   CircleHelp,
+  FileText,
   FolderOpen,
   FolderPlus,
   Loader2,
   Paperclip,
+  Plus,
+  Presentation,
   Search,
+  Sparkles,
+  Table2,
   Trash2,
+  UsersRound,
+  type LucideIcon,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
@@ -40,6 +48,46 @@ import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
 
+type WelcomeStarterAction = {
+  label: string
+  prompt: string
+  icon: LucideIcon
+  iconClassName: string
+}
+
+const welcomeStarterActions: WelcomeStarterAction[] = [
+  {
+    label: '创建 Team',
+    prompt: '请帮我为当前目标设计一个协作 Team，说明需要哪些 Agent、各自负责什么，并先向我确认关键目标。',
+    icon: UsersRound,
+    iconClassName: 'bg-[#EAF4EF] text-[#237A57]',
+  },
+  {
+    label: '幻灯片',
+    prompt: '请帮我制作一份演示文稿，先确认主题、受众、页数和输出风格。',
+    icon: Presentation,
+    iconClassName: 'bg-[#FFF1D8] text-[#9A5D00]',
+  },
+  {
+    label: 'PDF',
+    prompt: '请帮我分析一份 PDF，先告诉我需要提供哪些文件和你会如何提取重点。',
+    icon: FileText,
+    iconClassName: 'bg-[#FFE9E7] text-[#B53A2F]',
+  },
+  {
+    label: '文档',
+    prompt: '请帮我起草一份文档，先确认主题、结构、读者和语气。',
+    icon: FileText,
+    iconClassName: 'bg-[#EAF0FF] text-[#3159B7]',
+  },
+  {
+    label: '表格',
+    prompt: '请帮我整理一张表格，先确认字段、数据来源和最终输出格式。',
+    icon: Table2,
+    iconClassName: 'bg-[#ECE8FF] text-[#5B49B6]',
+  },
+]
+
 export default function ChatPage() {
   const { sessionId } = useParams()
   const navigate = useNavigate()
@@ -49,11 +97,23 @@ export default function ChatPage() {
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [narrowViewport, setNarrowViewport] = useState(false)
   const threadReady = Boolean(sessionId && currentSessionId === sessionId)
+  const effectiveSidebarCollapsed = sidebarCollapsed || narrowViewport
 
   function toggleSidebar() {
     setSidebarCollapsed((current) => !current)
   }
+
+  useEffect(() => {
+    function syncViewport() {
+      setNarrowViewport(window.innerWidth < 720)
+    }
+
+    syncViewport()
+    window.addEventListener('resize', syncViewport)
+    return () => window.removeEventListener('resize', syncViewport)
+  }, [])
 
   useEffect(() => {
     const off = initWebSocket()
@@ -76,14 +136,14 @@ export default function ChatPage() {
       <div
         className="h-full shrink-0 overflow-hidden"
         style={{
-          width: sidebarCollapsed ? 68 : 340,
+          width: effectiveSidebarCollapsed ? 68 : 340,
           transition: 'width 300ms cubic-bezier(0.4,0,0.2,1)',
         }}
       >
         <div
           className="h-full w-[340px] transform-gpu will-change-transform"
         >
-          <SessionList collapsed={sidebarCollapsed} onCollapse={toggleSidebar} />
+          <SessionList collapsed={effectiveSidebarCollapsed} onCollapse={toggleSidebar} />
         </div>
       </div>
       <main className="relative min-w-0 flex-1">
@@ -426,241 +486,306 @@ function Welcome() {
     showHint('将从新工作空间开始')
   }
 
+  function applyStarterPrompt(action: WelcomeStarterAction) {
+    setMessage(action.prompt)
+    closeSkillPanel()
+    closeMentionPanel()
+    setProjectMenuOpen(false)
+    window.requestAnimationFrame(() => {
+      messageInputRef.current?.focus()
+      const cursor = action.prompt.length
+      messageInputRef.current?.setSelectionRange(cursor, cursor)
+    })
+  }
+
   return (
-    <div className="agenthub-welcome-root flex h-full flex-col bg-[#F7F7F7]">
-      <div className="flex flex-1 flex-col items-center px-8">
-        <section className="mt-[16vh] w-full max-w-[960px] text-center">
-          <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
+    <div className="agenthub-welcome-root flex h-full flex-col bg-[#F8F8F6]">
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-4 py-8 sm:px-8">
+        <section className="flex w-full max-w-[860px] flex-1 flex-col items-center justify-center py-6 text-center">
+          <div className="mb-5 grid h-16 w-16 place-items-center rounded-2xl border border-neutral-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
+            <div className="grid h-10 w-10 place-items-center rounded-xl bg-neutral-950 text-white">
+              <Sparkles className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mb-2 inline-flex h-8 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-500 shadow-sm">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            AgentHub 工作台
+          </div>
+          <h2 className="text-[clamp(1.65rem,3vw,2.65rem)] font-semibold leading-tight tracking-normal text-neutral-950">
             <TypewriterHeading text={t('有什么可以帮忙的？')} />
           </h2>
+          <p className="mt-3 max-w-[520px] text-sm leading-6 text-neutral-500">
+            选择工作空间，召集 Agent，或者直接描述目标。
+          </p>
+
+          <div className="agenthub-welcome-composer-dock mt-8 w-full max-w-[760px]">
+            <form
+              onSubmit={handleSubmit}
+              className="relative rounded-[26px] border border-neutral-200 bg-white p-3 text-left shadow-[0_24px_70px_rgba(15,23,42,0.11)]"
+            >
+              {hint && (
+                <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
+                  {hint}
+                </div>
+              )}
+              {skillPanelOpen && (
+                <SkillCommandPanel
+                  query={skillQuery}
+                  skills={skills}
+                  loading={skillsLoading}
+                  onPick={insertSkillReference}
+                  onClose={closeSkillPanel}
+                />
+              )}
+              {mentionPanelOpen && (
+                <WelcomeMentionPanel
+                  agents={libraryAgents}
+                  query={mentionRange?.query ?? ''}
+                  onPick={insertMentionReference}
+                  onClose={closeMentionPanel}
+                />
+              )}
+              {projectMenuOpen && (
+                <div className="absolute bottom-[4.75rem] left-3 z-20 w-[min(20rem,calc(100vw-3rem))] rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl">
+                  <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
+                    <Search className="h-4 w-4 shrink-0" />
+                    <input
+                      value={workspaceQuery}
+                      onChange={(event) => setWorkspaceQuery(event.target.value)}
+                      autoFocus
+                      className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
+                      placeholder={t('搜索工作区')}
+                    />
+                  </div>
+                  <div className="max-h-44 space-y-1 overflow-y-auto py-1">
+                    {filteredWorkspaces.map((workspace) => (
+                      <button
+                        key={workspace.id}
+                        type="button"
+                        onClick={() => void selectWorkspace(workspace.id)}
+                        disabled={workspaceBusy}
+                        className={[
+                          'group/ws flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                          workspace.id === selectedWorkspace?.id ||
+                          workspace.id === openingWorkspaceId
+                            ? 'bg-neutral-100'
+                            : '',
+                        ].join(' ')}
+                      >
+                        <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-neutral-900">{workspace.name}</span>
+                          <span className="block truncate text-[11px] text-neutral-400">
+                            {workspaceSubtitle(workspace)}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(event) => void handleDeleteWorkspace(workspace.id, event)}
+                          disabled={workspaceBusy}
+                          className="hidden h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500 group-hover/ws:inline-flex"
+                          title="删除工作区"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                        {workspace.id === openingWorkspaceId && (
+                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
+                        )}
+                      </button>
+                    ))}
+                    {!workspaceBusy && filteredWorkspaces.length === 0 && (
+                      <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
+                        {t('没有匹配的工作区')}
+                      </div>
+                    )}
+                    {workspaceBusy && (
+                      <div className="px-2.5 py-2 text-xs text-neutral-400">
+                        {t('正在处理工作区...')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-1 border-t border-neutral-200 pt-1.5">
+                    <div
+                      className={[
+                        'flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50',
+                        selectedWorkspace === null ? 'bg-neutral-100' : '',
+                      ].join(' ')}
+                    >
+                      <button
+                        type="button"
+                        onClick={startNewWorkspace}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                      >
+                        <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
+                        <span className="min-w-0 flex-1 truncate text-neutral-900">
+                          从新工作空间开始
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          requestSettingsDialog()
+                        }}
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-200 hover:text-neutral-900"
+                        aria-label="前往系统设置"
+                        title="可前往「系统设置」设置默认工作空间存储路径"
+                      >
+                        <CircleHelp className="h-4 w-4" />
+                      </button>
+                      {selectedWorkspace === null && (
+                        <Check className="h-4 w-4 shrink-0 text-emerald-500" />
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void openFolderWorkspace()}
+                      disabled={workspaceBusy}
+                      className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
+                    >
+                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                      <span className="min-w-0 flex-1 truncate">{t('打开本地工作空间')}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+              <textarea
+                ref={messageInputRef}
+                value={message}
+                onChange={handleMessageChange}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && skillPanelOpen) {
+                    event.preventDefault()
+                    closeSkillPanel()
+                    return
+                  }
+                  if (event.key === 'Escape' && mentionPanelOpen) {
+                    event.preventDefault()
+                    closeMentionPanel()
+                    return
+                  }
+                  if (mentionPanelOpen && event.key === 'Enter') {
+                    event.preventDefault()
+                    return
+                  }
+                  if (skillPanelOpen && event.key === 'Enter') {
+                    event.preventDefault()
+                    return
+                  }
+                  if (sendModeShouldSubmit(sendMode, event)) {
+                    event.preventDefault()
+                    void startThread(message)
+                  }
+                }}
+                className="h-28 w-full resize-none bg-transparent px-3 py-3 text-base leading-6 text-neutral-900 outline-none placeholder:text-neutral-400 sm:h-24"
+                placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
+              />
+              <div className="flex flex-col gap-2 border-t border-neutral-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setProjectMenuOpen((open) => !open)}
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50"
+                    aria-label={t('选择工作区')}
+                    title="选择工作区"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProjectMenuOpen((open) => !open)}
+                    className="inline-flex h-9 max-w-full items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+                    aria-label={t('选择工作区')}
+                    title={
+                      selectedWorkspace
+                        ? `${selectedWorkspace.name} · ${selectedWorkspace.projectPath ?? '本地工作空间'}`
+                        : '选择工作空间 · 默认从新工作空间开始'
+                    }
+                  >
+                    <FolderOpen className="h-4 w-4 shrink-0" />
+                    <span className="max-w-[11rem] truncate">
+                      {selectedWorkspace ? selectedWorkspace.name : '选择工作空间'}
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                  </button>
+                  <span className="inline-flex h-9 items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-50 px-3 text-xs font-medium text-neutral-600">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    多 Agent
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-1.5 sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      requestSettingsDialog()
+                    }}
+                    className="grid h-9 w-9 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
+                    aria-label="前往系统设置"
+                    title="可前往「系统设置」设置默认工作空间存储路径"
+                  >
+                    <CircleHelp className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled
+                    title="暂未实现"
+                    className="grid h-9 w-9 place-items-center rounded-full text-neutral-300"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={insertAtSign}
+                    className="grid h-9 w-9 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
+                    aria-label="提及 Agent"
+                  >
+                    <AtSign className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!message.trim() || submitting}
+                    className="grid h-10 w-10 place-items-center rounded-full bg-neutral-950 text-white shadow-sm hover:bg-neutral-800 disabled:bg-neutral-200 disabled:shadow-none"
+                    aria-label="发送"
+                  >
+                    <ArrowUp className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div className="mt-5 flex w-full max-w-[760px] flex-wrap justify-center gap-2">
+            {welcomeStarterActions.map((action) => {
+              const Icon = action.icon
+              return (
+                <button
+                  key={action.label}
+                  type="button"
+                  onClick={() => applyStarterPrompt(action)}
+                  className="inline-flex h-10 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3.5 text-sm font-medium text-neutral-800 shadow-sm transition hover:-translate-y-0.5 hover:border-neutral-300 hover:shadow-md"
+                >
+                  <span
+                    className={[
+                      'grid h-6 w-6 place-items-center rounded-full',
+                      action.iconClassName,
+                    ].join(' ')}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                  </span>
+                  {action.label}
+                </button>
+              )
+            })}
+          </div>
+
           <QuickPromptBubbles
-            className="mt-8"
+            className="mt-7"
             loading={quickPromptsLoading}
             prompts={quickPrompts}
             onPick={(prompt: string) => void startThread(prompt)}
           />
         </section>
-
-        <div className="agenthub-welcome-composer-dock mt-auto w-full max-w-[704px] pb-5">
-          <form
-            onSubmit={handleSubmit}
-            className="relative rounded-[22px] border border-neutral-200 bg-white p-3"
-          >
-            {hint && (
-              <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
-                {hint}
-              </div>
-            )}
-            {skillPanelOpen && (
-              <SkillCommandPanel
-                query={skillQuery}
-                skills={skills}
-                loading={skillsLoading}
-                onPick={insertSkillReference}
-                onClose={closeSkillPanel}
-              />
-            )}
-            {mentionPanelOpen && (
-              <WelcomeMentionPanel
-                agents={libraryAgents}
-                query={mentionRange?.query ?? ''}
-                onPick={insertMentionReference}
-                onClose={closeMentionPanel}
-              />
-            )}
-            {projectMenuOpen && (
-              <div className="absolute bottom-[4.5rem] left-3 z-20 w-80 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl">
-                <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
-                  <Search className="h-4 w-4 shrink-0" />
-                  <input
-                    value={workspaceQuery}
-                    onChange={(event) => setWorkspaceQuery(event.target.value)}
-                    autoFocus
-                    className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-                    placeholder={t('搜索工作区')}
-                  />
-                </div>
-                <div className="max-h-44 space-y-1 overflow-y-auto py-1">
-                  {filteredWorkspaces.map((workspace) => (
-                    <button
-                      key={workspace.id}
-                      type="button"
-                      onClick={() => void selectWorkspace(workspace.id)}
-                      disabled={workspaceBusy}
-                      className={[
-                        'group/ws flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
-                        workspace.id === selectedWorkspace?.id ||
-                        workspace.id === openingWorkspaceId
-                          ? 'bg-neutral-100'
-                          : '',
-                      ].join(' ')}
-                    >
-                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-neutral-900">{workspace.name}</span>
-                        <span className="block truncate text-[11px] text-neutral-400">
-                          {workspaceSubtitle(workspace)}
-                        </span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={(event) => void handleDeleteWorkspace(workspace.id, event)}
-                        disabled={workspaceBusy}
-                        className="hidden h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500 group-hover/ws:inline-flex"
-                        title="删除工作区"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                      {workspace.id === openingWorkspaceId && (
-                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
-                      )}
-                    </button>
-                  ))}
-                  {!workspaceBusy && filteredWorkspaces.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
-                      {t('没有匹配的工作区')}
-                    </div>
-                  )}
-                  {workspaceBusy && (
-                    <div className="px-2.5 py-2 text-xs text-neutral-400">
-                      {t('正在处理工作区...')}
-                    </div>
-                  )}
-                </div>
-                <div className="mt-1 border-t border-neutral-200 pt-1.5">
-                  <div
-                    className={[
-                      'flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50',
-                      selectedWorkspace === null ? 'bg-neutral-100' : '',
-                    ].join(' ')}
-                  >
-                    <button
-                      type="button"
-                      onClick={startNewWorkspace}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-                    >
-                      <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-neutral-900">
-                        从新工作空间开始
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        requestSettingsDialog()
-                      }}
-                      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-200 hover:text-neutral-900"
-                      aria-label="前往系统设置"
-                      title="可前往「系统设置」设置默认工作空间存储路径"
-                    >
-                      <CircleHelp className="h-4 w-4" />
-                    </button>
-                    {selectedWorkspace === null && (
-                      <Check className="h-4 w-4 shrink-0 text-emerald-500" />
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void openFolderWorkspace()}
-                    disabled={workspaceBusy}
-                    className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
-                  >
-                    <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                    <span className="min-w-0 flex-1 truncate">{t('打开本地工作空间')}</span>
-                  </button>
-                </div>
-              </div>
-            )}
-            <textarea
-              ref={messageInputRef}
-              value={message}
-              onChange={handleMessageChange}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape' && skillPanelOpen) {
-                  event.preventDefault()
-                  closeSkillPanel()
-                  return
-                }
-                if (event.key === 'Escape' && mentionPanelOpen) {
-                  event.preventDefault()
-                  closeMentionPanel()
-                  return
-                }
-                if (mentionPanelOpen && event.key === 'Enter') {
-                  event.preventDefault()
-                  return
-                }
-                if (skillPanelOpen && event.key === 'Enter') {
-                  event.preventDefault()
-                  return
-                }
-                if (sendModeShouldSubmit(sendMode, event)) {
-                  event.preventDefault()
-                  void startThread(message)
-                }
-              }}
-              className="h-14 w-full resize-none bg-transparent px-2 py-2 text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-              placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
-            />
-            <div className="flex items-center justify-between pt-2">
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setProjectMenuOpen((open) => !open)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3 text-xs text-neutral-700 shadow-sm hover:bg-neutral-50"
-                  aria-label={t('选择工作区')}
-                  title={
-                    selectedWorkspace
-                      ? `${selectedWorkspace.name} · ${selectedWorkspace.projectPath ?? '本地工作空间'}`
-                      : '选择工作空间 · 默认从新工作空间开始'
-                  }
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  <span className="max-w-[12rem] truncate">
-                    {selectedWorkspace ? selectedWorkspace.name : '选择工作空间'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    requestSettingsDialog()
-                  }}
-                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                  aria-label="前往系统设置"
-                  title="可前往「系统设置」设置默认工作空间存储路径"
-                >
-                  <CircleHelp className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  disabled
-                  title="暂未实现"
-                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-300"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={insertAtSign}
-                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                >
-                  <AtSign className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="submit"
-                  disabled={!message.trim() || submitting}
-                  className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white disabled:bg-neutral-200"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          </form>
-        </div>
       </div>
     </div>
   )
