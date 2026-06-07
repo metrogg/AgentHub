@@ -15,6 +15,7 @@ describe('Manager config workspace', () => {
 
     expect(existsSync(paths.soulPath)).toBe(true)
     expect(existsSync(paths.agentsPath)).toBe(true)
+    expect(existsSync(paths.runtimeManifestPath)).toBe(true)
     expect(existsSync(paths.toolsPath)).toBe(true)
     expect(existsSync(paths.heartbeatPath)).toBe(true)
     expect(existsSync(paths.workerRegistryPath)).toBe(true)
@@ -28,6 +29,11 @@ describe('Manager config workspace', () => {
     expect(agents).toContain('AGENTHUB:MANAGER-CONTEXT:START')
     expect(agents).toContain('Runtime type: openclaw')
     expect(agents).toContain('Skills operate AgentHub Controller APIs')
+
+    const runtimeManifest = JSON.parse(readFileSync(paths.runtimeManifestPath, 'utf8')) as Record<string, any>
+    expect(runtimeManifest.roleContract).toBe('manager')
+    expect(runtimeManifest.runtimeType).toBe('openclaw')
+    expect(runtimeManifest.registries.workers).toBe('workers-registry.json')
 
     for (const skillName of [
       'worker-management',
@@ -44,6 +50,8 @@ describe('Manager config workspace', () => {
     }
 
     expect(existsSync(join(paths.agentDir, 'SOUL.md'))).toBe(true)
+    expect(existsSync(join(paths.agentDir, 'runtime-manifest.json'))).toBe(true)
+    expect(existsSync(join(paths.agentDir, 'openclaw.manager.json'))).toBe(true)
     expect(existsSync(join(paths.agentDir, 'skills', 'agenthub-controller', 'SKILL.md'))).toBe(true)
   })
 })

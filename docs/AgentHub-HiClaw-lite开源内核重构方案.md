@@ -388,6 +388,8 @@ Worker 必须成为一等运行实体：
 - 独立 runtime lease。
 - 可 ready / busy / idle / sleeping / stopped / failed。
 
+Manager / Worker 的文件化 contract 由 `apps/server/src/services/agent-contract/` 统一生成。Manager workspace 必须包含 `runtime.json / runtime-manifest.json / openclaw.manager.json / qwenpaw.manager.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / registry / state / rooms`；Worker workspace 必须包含 `profile.json / runtime.json / runtime-manifest.json / <base>.worker.json / SOUL.md / AGENTS.md / skills / state / rooms / tasks`。不要在 OpenClaw/QwenPaw provider、CLI bridge 或 launcher 里各自散写这些文件。
+
 Worker 的最小运行时语义要学习 HiClaw：
 
 ```text

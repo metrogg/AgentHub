@@ -24,6 +24,7 @@ const {
   ensureManagerAgentContractFromController,
   ensureWorkerAgentContract,
   ensureWorkerAgentContractFromController,
+  managerRuntimeSpecificConfigFileName,
   runtimeSpecificConfigFileName,
 } = await import('../apps/server/src/services/agent-contract')
 const { projectWorkerContractIntoBridgeCwd } = await import('../apps/server/src/services/worker-runtime/worker-bridge-contract')
@@ -51,6 +52,7 @@ describe('Agent contract generator', () => {
 
     for (const path of [
       ws.runtimePath,
+      ws.runtimeManifestPath,
       ws.soulPath,
       ws.agentsPath,
       ws.toolsPath,
@@ -74,6 +76,8 @@ describe('Agent contract generator', () => {
     expect(existsSync(`${ws.skillsDir}/memory-management/SKILL.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/SOUL.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/AGENTS.md`)).toBe(true)
+    expect(existsSync(`${ws.agentDir}/runtime-manifest.json`)).toBe(true)
+    expect(existsSync(`${ws.agentDir}/openclaw.manager.json`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/memory/MEMORY.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/skills/agenthub-controller/SKILL.md`)).toBe(true)
 
@@ -112,6 +116,7 @@ describe('Agent contract generator', () => {
     const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as Record<string, unknown>
     expect(runtime.runtimeFamily).toBe('manager')
     expect(runtime.runtimeType).toBe('qwenpaw')
+    expect(runtime.runtimeSpecificConfigFileName).toBe('qwenpaw.manager.json')
     const managerRuntimeContract = runtime.runtimeContract as {
       profile: { label: string; language: string; architectureMode: string; referenceMetrics: string }
       parityCapabilities: string[]
@@ -133,6 +138,7 @@ describe('Agent contract generator', () => {
       'reconcile',
     ]))
     expect(managerRuntimeContract.workspaceContract).toContain('memory/')
+    expect(managerRuntimeContract.workspaceContract).toContain('runtime-manifest.json')
     expect(managerRuntimeContract.reconcileContracts.manager).toEqual([
       'EnsureManagerIdentity',
       'EnsureManagerWorkspace',
@@ -154,6 +160,20 @@ describe('Agent contract generator', () => {
       'assign_task',
       'reconcile_resource',
     ]))
+
+    const runtimeManifest = JSON.parse(readFileSync(ws.runtimeManifestPath, 'utf8')) as Record<string, any>
+    expect(runtimeManifest.roleContract).toBe('manager')
+    expect(runtimeManifest.runtimeType).toBe('qwenpaw')
+    expect(runtimeManifest.matrix.listenerOwner).toBe('runtime-native')
+    expect(runtimeManifest.parityCapabilities).toEqual(expect.arrayContaining([
+      'matrix_identity',
+      'controller_api_skills',
+      'worker_registry',
+    ]))
+    expect(existsSync(`${ws.root}/${managerRuntimeSpecificConfigFileName('qwenpaw')}`)).toBe(true)
+    const qwenpawConfig = JSON.parse(readFileSync(`${ws.root}/qwenpaw.manager.json`, 'utf8')) as Record<string, any>
+    expect(qwenpawConfig.adapter.label).toBe('QwenPaw Manager')
+    expect(qwenpawConfig.resident.expectedListener).toContain('QwenPaw')
   })
 
   test('refreshes Manager registries from Controller resources', async () => {

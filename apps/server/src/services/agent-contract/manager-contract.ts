@@ -63,6 +63,7 @@ const WORKER_RECONCILE_STAGES = [
 export interface ManagerAgentContractWorkspace {
   root: string
   runtimePath: string
+  runtimeManifestPath: string
   soulPath: string
   agentsPath: string
   toolsPath: string
@@ -154,6 +155,7 @@ export function resolveManagerAgentContractWorkspace(managerId?: string | null):
   return {
     root,
     runtimePath: join(root, 'runtime.json'),
+    runtimeManifestPath: join(root, 'runtime-manifest.json'),
     soulPath: join(root, 'SOUL.md'),
     agentsPath: join(root, 'AGENTS.md'),
     toolsPath: join(root, 'TOOLS.md'),
@@ -189,6 +191,8 @@ export function ensureManagerAgentContract(
   syncManagerSkills(ws.skillsDir)
 
   writeJson(ws.runtimePath, buildRuntime(input))
+  writeJson(ws.runtimeManifestPath, buildRuntimeManifest(input))
+  writeRuntimeSpecificConfig(ws.root, input)
   if (input.currentWorkers) {
     writeJson(ws.workerRegistryPath, {
       schemaVersion: 1,
@@ -268,11 +272,14 @@ export function readManagerPromptContract(managerId?: string | null) {
 
 function buildRuntime(input: EnsureManagerAgentContractInput) {
   const runtimeType = normalizeManagerRuntimeType(input.runtimeType)
+  const runtimeSpecificConfigFileName = managerRuntimeSpecificConfigFileName(runtimeType)
   return {
     schemaVersion: 1,
     runtimeFamily: 'manager',
     runtimeType,
     runtimeContract: managerRuntimeContract(runtimeType),
+    runtimeSpecificConfigFileName,
+    runtimeSpecificConfigPath: runtimeSpecificConfigFileName,
     matrixUserId: input.matrixUserId ?? null,
     participantId: input.participantId ?? null,
     runtimeConfigPath: input.runtimeConfigPath ?? null,
@@ -284,6 +291,129 @@ function buildRuntime(input: EnsureManagerAgentContractInput) {
   }
 }
 
+function buildRuntimeManifest(input: EnsureManagerAgentContractInput) {
+  const runtimeType = normalizeManagerRuntimeType(input.runtimeType)
+  const contract = managerRuntimeContract(runtimeType)
+  return {
+    schemaVersion: 1,
+    source: 'agenthub-controller',
+    generatedAt: new Date().toISOString(),
+    roleContract: 'manager',
+    managerId: input.managerId ?? 'global',
+    runtimeType,
+    matrix: {
+      userId: input.matrixUserId ?? null,
+      participantId: input.participantId ?? null,
+      homeserverUrl: input.matrixHomeserverUrl ?? null,
+      serverName: input.matrixServerName ?? null,
+      listenerOwner: 'runtime-native',
+      pattern: contract.profile.matrixIntegration,
+    },
+    controller: {
+      url: input.controllerUrl ?? null,
+      skillSchema: 'agenthub-controller-v1',
+      controllerSkillSurface: contract.controllerSkillSurface,
+    },
+    sharedStorage: {
+      root: input.sharedStorageRoot ?? null,
+    },
+    runtimeImplementation: contract.profile,
+    workspaceContract: contract.workspaceContract,
+    parityCapabilities: contract.parityCapabilities,
+    reconcileContracts: contract.reconcileContracts,
+    heartbeat: contract.heartbeat,
+    registries: {
+      workers: 'workers-registry.json',
+      teams: 'teams-registry.json',
+      humans: 'humans-registry.json',
+      rooms: 'rooms.json',
+      state: 'state.json',
+    },
+    currentLimits: managerRuntimeCurrentLimits(runtimeType),
+  }
+}
+
+function writeRuntimeSpecificConfig(root: string, input: EnsureManagerAgentContractInput) {
+  const runtimeType = normalizeManagerRuntimeType(input.runtimeType)
+  const contract = managerRuntimeContract(runtimeType)
+  writeJson(join(root, managerRuntimeSpecificConfigFileName(runtimeType)), {
+    schemaVersion: 1,
+    source: 'agenthub-controller',
+    generatedAt: new Date().toISOString(),
+    roleContract: 'manager',
+    runtimeType,
+    managerId: input.managerId ?? 'global',
+    displayName: 'AgentHub Manager',
+    matrix: {
+      userId: input.matrixUserId ?? null,
+      participantId: input.participantId ?? null,
+      homeserverUrl: input.matrixHomeserverUrl ?? null,
+      serverName: input.matrixServerName ?? 'agenthub.local',
+      roomsPath: 'rooms.json',
+      mentionProtocol: 'Coordinate through Matrix Room timeline and use @mentions only for actionable work, questions, or approvals.',
+    },
+    controller: {
+      url: input.controllerUrl ?? null,
+      cli: 'agenthub',
+      skillsPath: 'skills/',
+      statePath: 'state.json',
+      workerRegistryPath: 'workers-registry.json',
+      teamRegistryPath: 'teams-registry.json',
+      humanRegistryPath: 'humans-registry.json',
+    },
+    files: {
+      soul: 'SOUL.md',
+      agents: 'AGENTS.md',
+      tools: 'TOOLS.md',
+      heartbeat: 'HEARTBEAT.md',
+      skills: 'skills/',
+      memory: 'memory/',
+      runtime: 'runtime.json',
+      runtimeManifest: 'runtime-manifest.json',
+    },
+    adapter: {
+      label: contract.profile.label,
+      implementation: contract.profile,
+      parityCapabilities: contract.parityCapabilities,
+      reconcileContracts: contract.reconcileContracts,
+      currentLimits: managerRuntimeCurrentLimits(runtimeType),
+    },
+    resident: {
+      owner: 'runtime-native',
+      expectedListener: runtimeType === 'openclaw'
+        ? 'OpenClaw gateway Matrix channel'
+        : 'QwenPaw/CoPaw workspace Matrix channel',
+      requiredBeforeListening: [
+        'Matrix identity',
+        'room bindings',
+        'SOUL.md',
+        'AGENTS.md',
+        'TOOLS.md',
+        'HEARTBEAT.md',
+        'skills/',
+        'runtime-manifest.json',
+      ],
+    },
+  })
+}
+
+export function managerRuntimeSpecificConfigFileName(runtimeType?: string | null): string {
+  return normalizeManagerRuntimeType(runtimeType) === 'qwenpaw'
+    ? 'qwenpaw.manager.json'
+    : 'openclaw.manager.json'
+}
+
+export function listManagerRuntimeSpecificConfigFiles(): string[] {
+  return ['openclaw.manager.json', 'qwenpaw.manager.json']
+}
+
+function managerRuntimeCurrentLimits(runtimeType: 'openclaw' | 'qwenpaw'): string[] {
+  if (runtimeType === 'qwenpaw') {
+    return ['AgentHub Manager contract supports QwenPaw, but local QwenPaw provider/e2e must still be verified before treating it as production-ready.']
+  }
+  return ['OpenClaw Manager is the primary resident Manager path; real room bindings, Controller skill loading, and Matrix replies must remain visible in diagnostics.']
+}
+
 export function managerRuntimeContract(runtimeType?: string | null) {
   const normalized = normalizeManagerRuntimeType(runtimeType)
   const profile = managerRuntimeProfile(normalized)
@@ -292,6 +422,8 @@ export function managerRuntimeContract(runtimeType?: string | null) {
     profile,
     workspaceContract: [
       'runtime.json',
+      'runtime-manifest.json',
+      'openclaw.manager.json or qwenpaw.manager.json',
       'SOUL.md',
       'AGENTS.md',
       'TOOLS.md',
@@ -860,10 +992,15 @@ function syncManagerSkills(targetDir: string) {
 }
 
 function mirrorManagerAgentDir(ws: ManagerAgentContractWorkspace) {
-  for (const file of ['SOUL.md', 'AGENTS.md', 'TOOLS.md', 'HEARTBEAT.md']) {
+  for (const file of ['SOUL.md', 'AGENTS.md', 'TOOLS.md', 'HEARTBEAT.md', 'runtime.json', 'runtime-manifest.json']) {
     const src = join(ws.root, file)
     const dst = join(ws.agentDir, file)
     writeFileSync(dst, readFileSync(src, 'utf8'), 'utf8')
+  }
+  for (const file of listManagerRuntimeSpecificConfigFiles()) {
+    const src = join(ws.root, file)
+    if (!existsSync(src)) continue
+    writeFileSync(join(ws.agentDir, file), readFileSync(src, 'utf8'), 'utf8')
   }
   copyDirSync(ws.skillsDir, join(ws.agentDir, 'skills'))
   copyDirSync(ws.memoryDir, join(ws.agentDir, 'memory'))

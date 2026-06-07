@@ -72,7 +72,9 @@ Manager workspace：
 
 ```text
 {AgentHubUserData}/manager/{managerId}/
-  openclaw.json 或 qwenpaw.yaml
+  runtime.json
+  runtime-manifest.json
+  openclaw.manager.json / qwenpaw.manager.json
   SOUL.md
   AGENTS.md
   TOOLS.md
@@ -379,6 +381,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 进展：WorkerRuntime heartbeat 现在会轻量更新 Worker 本地 `state.json.heartbeat.lastHeartbeatAt`，task room start/result 也会写入 `lastTaskStartedAt / lastTaskCompletedAt / lastError`。这让 bridge/service-managed Worker 具备和 resident Worker 更接近的本地 heartbeat mirror，而不是只有 DB 和 Room timeline 有心跳。
    - 进展：WorkerController 的 heartbeat 监督已改成 warning-first。busy Worker 长时间没有 heartbeat 时，Controller 会保留 `busy` 状态、写入 `health.staleHeartbeat/staleReason`，并发 `manager.next_action` warning 让 Manager/Patrol 检查 task room、RuntimeLease、shared result 和 runtime health；不会只因为时间到了就停 listener、stale lease 或发 `task.failed`。
    - Manager contract 已统一生成 `runtime.json`、`SOUL.md`、`AGENTS.md`、`TOOLS.md`、`HEARTBEAT.md`、`skills/`、`memory/`、`workers-registry.json`、`teams-registry.json`、`humans-registry.json`、`state.json`、`rooms.json`、`logs/`，并镜像到 OpenClaw `agentDir`。
+   - 进展：Manager contract 现在也生成 `runtime-manifest.json` 和基底专属 `openclaw.manager.json / qwenpaw.manager.json`，并镜像到 OpenClaw `agentDir`。它们把 Manager role contract、Matrix listener owner、Controller skill surface、registry 路径、reconcile contracts、heartbeat 字段和 current limits 写成 runtime 可读 manifest，让 OpenClaw/QwenPaw 不再只靠 `runtime.json` 或启动参数理解 AgentHub 协作协议。
    - 进展：Manager `runtime.json` 现在同时记录 `runtimeContract`。OpenClaw Manager 被明确描述为 Node.js gateway mode，QwenPaw Manager 被明确描述为 Python workspace mode；两者共享同一组 `SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / registry / state / rooms / heartbeat / reconcile` 能力契约。Manager `AGENTS.md` 注入块会同步写入 runtime profile、Manager Reconcile 5 阶段、Member Reconcile 5 阶段、Worker Reconcile 5 阶段和 Controller skill surface，避免后续再把 OpenClaw/QwenPaw 当成两个互不相干的入口。
    - 新增 `ensureManagerAgentContractFromController()`：Manager 启动前会从 Controller/DB 同步 active rooms、WorkerInstance、WorkspaceAgent、Matrix identity、Room participant、RuntimeLease、Human participant 和 active runs，刷新 `workers-registry.json / humans-registry.json / rooms.json / state.json`，不再只是空 registry 文件。
    - 进展：`workers-registry.json` 现在会为每个 Worker 镜像 `runtimeContract`，包含 runtime mode、base profile、Matrix listener owner、workspace/task contract、heartbeat 字段、parity capabilities 和 current limits。Manager 读 registry 时不再只看到 `runtimeBase=opencode/openclaw` 这种裸字符串，而能按统一能力契约选择、观察和恢复 Worker。
