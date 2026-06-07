@@ -59,6 +59,9 @@ export class LocalCliWorkerBackend implements WorkerBackend {
       .from(workerInstances)
       .where(eq(workerInstances.id, input.workerInstanceId))
       .limit(1)
+    if (isQwenPawRuntimeBase(worker?.runtimeBase)) {
+      return qwenPawWorkerBackendBlocked(input.workerInstanceId, worker?.runtimeBase)
+    }
     if (worker?.runtimeBase === 'openclaw') {
       const opened = openclawLauncher.isAvailable()
       if (!opened) {
@@ -263,6 +266,10 @@ export class LocalCliWorkerBackend implements WorkerBackend {
   }
 
   async inspect(workerInstanceId: string): Promise<WorkerBackendInspectResult> {
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+    if (isQwenPawRuntimeBase(worker?.runtimeBase)) {
+      return qwenPawWorkerBackendBlocked(workerInstanceId, worker?.runtimeBase)
+    }
     const workerStatus = openclawLauncher.getWorkerStatus(workerInstanceId)
     if (workerStatus) {
       return {
@@ -285,6 +292,17 @@ export class LocalCliWorkerBackend implements WorkerBackend {
 
   async syncConfig(workerInstanceId: string): Promise<{ synced: boolean; details?: Record<string, unknown> }> {
     const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+    if (isQwenPawRuntimeBase(worker?.runtimeBase)) {
+      return {
+        synced: false,
+        details: {
+          workerInstanceId,
+          runtimeBase: worker?.runtimeBase ?? null,
+          state: 'resident-backend-not-implemented',
+          error: 'QwenPaw Worker runtime is recognized, but its WorkerBackend/config generator is not implemented yet.',
+        },
+      }
+    }
     if (worker?.runtimeBase === 'openclaw' && openclawLauncher.isAvailable()) {
       const [agent] = worker.workspaceAgentId
         ? await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, worker.workspaceAgentId)).limit(1)
@@ -354,6 +372,26 @@ export class LocalCliWorkerBackend implements WorkerBackend {
 }
 
 export const localCliWorkerBackend = new LocalCliWorkerBackend()
+
+function isQwenPawRuntimeBase(runtimeBase?: string | null) {
+  return runtimeBase === 'qwenpaw' || runtimeBase === 'copaw'
+}
+
+function qwenPawWorkerBackendBlocked(workerInstanceId: string, runtimeBase?: string | null): WorkerBackendInspectResult {
+  return {
+    workerInstanceId,
+    ready: false,
+    state: 'resident-backend-not-implemented',
+    message:
+      'QwenPaw Worker runtime is recognized, but its WorkerBackend is not implemented yet. Use OpenClaw for resident Workers now, or choose OpenCode / Claude Code / Codex / Gemini bridge.',
+    details: {
+      runtimeBase: runtimeBase ?? null,
+      implemented: false,
+      requiredNextStep: 'Implement QwenPaw/CoPaw workspace-mode WorkerBackend with Matrix channel config, process lifecycle, health, syncConfig, and resident self-test support.',
+      fallback: 'No Codex/OpenCode/Claude/Gemini fallback is allowed for a QwenPaw Worker.',
+    },
+  }
+}
 
 async function ensureOpenClawWorkerIdentity(workerInstanceId: string, displayName: string) {
   let [identity] = await db

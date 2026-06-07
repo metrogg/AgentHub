@@ -173,6 +173,68 @@ describe('Controller Plane', () => {
     })).rejects.toThrow(/QwenPaw Worker runtime is recognized but its WorkerBackend is not implemented yet/)
   })
 
+  test('controller diagnostics marks existing QwenPaw resident Workers as blocked until backend exists', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'QwenPaw Diagnostics Workspace',
+        goal: 'Validate qwenpaw diagnostics are explicit',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Legacy QwenPaw Worker',
+        role: 'Resident Worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: null,
+        roleProfile: { workerRuntimeBase: 'qwenpaw' },
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'qwenpaw',
+        modelId: 'test-model',
+        observedState: 'listening',
+        desiredState: 'running',
+      })
+      .returning()
+
+    await db.insert(matrixIdentities).values({
+      ownerType: 'worker',
+      ownerId: worker!.id,
+      serverName: 'agenthub.local',
+      localpart: `qwenpaw-${worker!.id.slice(0, 8)}`,
+      userId: `@qwenpaw-${worker!.id.slice(0, 8)}:agenthub.local`,
+      accessToken: 'qwenpaw-worker-token',
+      displayName: agent!.name,
+    })
+    await ensureWorkerAgentContract({
+      workerInstanceId: worker!.id,
+      agent: agent!,
+      runtimeBase: 'qwenpaw',
+      matrixUserId: `@qwenpaw-${worker!.id.slice(0, 8)}:agenthub.local`,
+      runtimeConfigPath: 'qwenpaw.yaml',
+      currentRooms: [],
+    })
+
+    const diagnostics = await describeControllerPlane()
+    const workerRuntime = diagnostics.workerRuntimes.find((item) => item.workerInstanceId === worker!.id)
+    expect(workerRuntime?.mode).toBe('resident-qwenpaw')
+    expect(workerRuntime?.runtimeHealth.ready).toBe(false)
+    expect(workerRuntime?.runtimeHealth.status).toBe('blocked')
+    expect(workerRuntime?.runtimeHealth.state).toBe('resident-backend-not-implemented')
+    expect(workerRuntime?.runtimeHealth.message).toContain('QwenPaw Worker runtime is recognized')
+    expect(workerRuntime?.runtimeHealth.details?.implemented).toBe(false)
+  })
+
   test('controller apply creates Worker resources from manifest objects', async () => {
     const [workspace] = await db
       .insert(workspaces)
