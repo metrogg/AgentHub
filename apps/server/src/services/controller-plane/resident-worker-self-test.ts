@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { and, db, eq, matrixIdentities, or, roomParticipants, rooms, workerInstances, workspaceAgents } from '@agenthub/db'
-import { ensureWorkerAgentContractFromController, resolveWorkerAgentContractWorkspace } from '../agent-contract'
+import { ensureWorkerAgentContractFromController, resolveWorkerAgentContractWorkspace, runtimeSpecificConfigFileName } from '../agent-contract'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { roomService } from '../rooms'
 import { dockerWorkerBackend } from './docker-worker-backend'
@@ -109,6 +109,8 @@ export async function runResidentWorkerSelfTest(
   const contractFiles = {
     profile: existsSync(contract.profilePath),
     runtime: existsSync(contract.runtimePath),
+    runtimeManifest: existsSync(contract.runtimeManifestPath),
+    runtimeSpecificConfig: existsSync(`${contract.root}/${runtimeSpecificConfigFileName(worker.runtimeBase)}`),
     soul: existsSync(contract.soulPath),
     agents: existsSync(contract.agentsPath),
     state: existsSync(contract.statePath),

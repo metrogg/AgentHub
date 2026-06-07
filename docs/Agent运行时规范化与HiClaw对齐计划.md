@@ -110,7 +110,9 @@ Worker workspace：
 {AgentHubUserData}/workers/{workerInstanceId}/
   profile.json
   runtime.json
-  openclaw.json / qwenpaw.yaml / claude.json / opencode.json / codex.json / gemini.json
+  runtime-manifest.json
+  openclaw.worker.json / qwenpaw.worker.json / claude-code.worker.json
+  opencode.worker.json / codex.worker.json / gemini.worker.json
   SOUL.md
   AGENTS.md
   skills/
@@ -142,6 +144,8 @@ Shared task workspace：
 - `state.json` 是 runtime 本地状态镜像，DB/Controller 仍是控制面事实源。
 - `rooms.json` 记录该 Agent 加入的 Matrix room、room kind、participant id、最近同步位置。
 - `runtime.json` 必须写清 runtime family、runtime base/type、resident/bridge mode、监听所有者、Controller/Matrix/SharedStorage 注入点、模型绑定和 sandbox。
+- `runtime-manifest.json` 是跨基底统一 runtime manifest，写清 role contract、runtime adapter、Matrix listener owner、诊断契约、任务契约和 parity capabilities。
+- `*.worker.json` 是面向具体基底的 adapter manifest。OpenClaw/QwenPaw resident backend 用它对齐监听和健康语义；Claude Code/OpenCode/Codex/Gemini bridge 用它在 CLI 执行目录中恢复同一套 Room/SOUL/AGENTS/skills/task contract。
 
 ## SOUL / AGENTS / Skills 规范
 
@@ -365,6 +369,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - Worker contract 已统一生成 `profile.json`、`runtime.json`、`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`、`tasks.json`，并在 `AGENTS.md` 中幂等注入协作上下文。
    - Worker `SOUL.md` 已写入 runtime adapter identity：OpenClaw/QwenPaw resident、Claude Code/OpenCode/Codex/Gemini bridge 的运行差异会被描述清楚，但都遵守同一 Room/Task/Artifact/Heartbeat contract。
    - Worker `runtime.json` 已写入 `runtimeMode` 和 `adapterContract`，包括 listener owner、workspace contract、task contract 和 heartbeat 字段，便于诊断页和后续 runtime adapter 统一消费。
+   - 进展：Worker contract 现在同时生成 `runtime-manifest.json` 和基底专属 `*.worker.json`：`openclaw.worker.json / qwenpaw.worker.json / claude-code.worker.json / opencode.worker.json / codex.worker.json / gemini.worker.json`。这些文件把同一份 Worker role contract、Matrix listener owner、Controller/SharedStorage 注入点、diagnostic contract、resident/bridge 差异和 current limits 写成可读 manifest，避免后续 adapter 只靠 `runtimeBase` 字符串或一次性 prompt 猜行为。
    - 进展：Worker `runtime.json.adapterContract` 已加入 `reconcileContract`，Worker `state.json` 已加入 `reconcile.stages/currentStage/contract`。这让 OpenClaw/QwenPaw resident Worker 和 Claude Code/OpenCode/Codex/Gemini bridge Worker 都能以同一份文件化状态表达 `EnsureIdentityAndWorkspace -> EnsureRuntimeConfig -> EnsureRuntimeReady -> ObserveHealthAndHeartbeat -> RecoverOrRetire`，而不是只靠代码里的隐式状态流。
    - 进展：`adapterContract.baseProfile` 已细分每个 Worker 基座：OpenClaw 是 Node/gateway/resident、QwenPaw 是 Python/workspace/resident，Claude Code / OpenCode / Codex / Gemini 是 AgentHub-managed CLI bridge。每个 profile 都记录 role eligibility、process model、Matrix integration owner、config strategy、health source、session strategy、current limits，并共享 `matrix_identity / room_timeline_io / mention_dispatch / SOUL.md / AGENTS.md / skills / workspace_contract / shared_task_contract / artifact_refs / heartbeat / stop_or_cancel / clarification_resume / transparent_blockers` 能力清单。
    - 进展：`adapterContract.diagnosticContract` 已写入每个 Worker 基座的标准诊断契约：readiness source、blocking signals、informational signals、probe 列表和 expected native capabilities。resident OpenClaw/QwenPaw 侧重 `WorkerBackend.inspect / Matrix sync / resident self-test`；bridge Claude Code/OpenCode/Codex/Gemini 侧重 `command-installed / native-version-probe / doctor-probe / capability-probe / model-binding / cwd`。这让 Worker 自己、Manager registry、设置页和后续 adapter 对“什么算 ready / 什么只是画像”有同一份文件化依据。
@@ -384,6 +389,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
 2. **Runtime adapter parity**
    - 为 OpenClaw、OpenCode、Claude Code、Codex、Gemini 建立同一组 `inspect / prepare / start / stop / syncConfig / health` 能力。
    - Bridge Worker 执行前已开始投影标准 contract：`EphemeralCodeAgentWorkerRuntime` 会确保 Worker contract 最新，并把 `AGENTS.md`、`SOUL.md`、`profile.json`、`runtime.json`、`state.json`、`rooms.json`、`tasks.json` 和 `skills/` 投影到本次 CLI cwd 的 `.agenthub/worker-contract/`，同时在 cwd 根 `AGENTS.md` 注入 `AGENTHUB:BRIDGE-RUNTIME-CONTEXT`。
+   - 进展：Bridge projection 现在还会投影 `runtime-manifest.json` 和对应的 `*.worker.json`，并在执行目录 `AGENTS.md` 中提示 CLI 读取 runtime manifest。这样 OpenCode / Claude Code / Codex / Gemini 即使还不是 runtime-native Matrix listener，也能按同一份 adapter contract 解释自己的身份、Room 协议、诊断信号和任务交付路径。
    - Controller Plane 诊断已开始暴露每个 Worker 的 runtime mode、runtime base、Matrix identity、Room participant、listener owner、heartbeat、last error 和标准 contract 文件完整性。设置页“控制台 / AgentHub 内部 Controller Plane”可以直接看到 resident OpenClaw/QwenPaw 与 AgentHub-managed bridge 的区别。
    - Bridge Worker 诊断已接入 `inspectCodeAgentRuntime()`：OpenCode / Claude Code / Codex / Gemini 会检查 CLI 是否在 PATH、原生 `--version` probe 是否能真正启动、模型凭据是否可用、执行开关是否开启、cwd 是否有效、当前 blocker 是什么。它不再只是看 SOUL/AGENTS 文件是否存在。
    - 进展：Bridge Worker 诊断新增 `doctorProbe`。已安装的 Claude Code / OpenCode / Codex / Gemini 会尝试各自的 `doctor` 轻量原生命令，返回 `supported / ok / exitCode / timedOut / output`；不支持 doctor 的 CLI 不会被误判为不可执行，但支持且失败的 doctor/test 会进入 blocker。

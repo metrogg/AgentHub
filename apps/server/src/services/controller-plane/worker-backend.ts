@@ -14,7 +14,7 @@ import {
   type WorkerOpenClawRoomBinding,
 } from '../worker-runtime/worker-openclaw-config'
 import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-reporter'
-import { ensureWorkerAgentContractFromController, resolveWorkerAgentContractWorkspace } from '../agent-contract'
+import { ensureWorkerAgentContractFromController, resolveWorkerAgentContractWorkspace, runtimeSpecificConfigFileName } from '../agent-contract'
 import { buildAgentProfile } from '../agents/profile-builder'
 import { inspectCodeAgentRuntime } from '../code-agent-adapter'
 
@@ -571,6 +571,8 @@ async function inspectBridgeWorkerBackend(
   const contractFiles = {
     profile: existsSync(contract.profilePath),
     runtime: existsSync(contract.runtimePath),
+    runtimeManifest: existsSync(contract.runtimeManifestPath),
+    runtimeSpecificConfig: existsSync(`${contract.root}/${runtimeSpecificConfigFileName(worker.runtimeBase)}`),
     soul: existsSync(contract.soulPath),
     agents: existsSync(contract.agentsPath),
     state: existsSync(contract.statePath),

@@ -348,10 +348,10 @@ manager/
 目标结构：
 
 ```text
-CoordinatorRuntime
-  OpenClawCoordinator
-  QwenPawCoordinator
-  LocalLLMCoordinatorFallback
+ManagerRuntime
+  OpenClawManager
+  QwenPawManager
+  blocked/diagnostic when runtime is not configured
 ```
 
 旧路径下线：
@@ -374,7 +374,7 @@ WorkerRuntime
   gemini
   openclaw-worker
   qwenpaw-worker
-  local-llm-worker (仅兜底)
+  blocked/diagnostic when runtime base or model is not configured
 ```
 
 Worker 必须成为一等运行实体：
@@ -384,6 +384,7 @@ Worker 必须成为一等运行实体：
 - 独立 model binding。
 - 独立 skills / MCP scope。
 - 独立 workspace / temp / cache / config / session。
+- 独立 Agent contract：`profile.json / runtime.json / runtime-manifest.json / <base>.worker.json / SOUL.md / AGENTS.md / skills / state.json / rooms.json / tasks.json`。
 - 独立 runtime lease。
 - 可 ready / busy / idle / sleeping / stopped / failed。
 
@@ -413,7 +414,7 @@ AgentHub 的差异化在于 WorkerRuntime 不只支持 OpenClaw/QwenPaw：
 - `gemini` 适合 Gemini CLI 能力。
 - `openclaw-worker` / `qwenpaw-worker` 适合更轻量的对话/工具型 worker。
 
-无论底层 CLI 是否常驻，产品和控制平面都必须表现为一个真实 Worker：有 Room 身份、有状态、有任务、有产物、有可回收生命周期。
+无论底层 CLI 是否常驻，产品和控制平面都必须表现为一个真实 Worker：有 Room 身份、有状态、有任务、有产物、有可回收生命周期。缺 runtime base、模型、身份或授权时必须进入 blocked/diagnostic，不允许回退到内部 LLM 或默认 Codex。
 
 旧路径下线：
 

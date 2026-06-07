@@ -52,6 +52,7 @@ export interface WorkerAgentContractWorkspace {
   root: string
   profilePath: string
   runtimePath: string
+  runtimeManifestPath: string
   soulPath: string
   agentsPath: string
   statePath: string
@@ -109,6 +110,7 @@ export function resolveWorkerAgentContractWorkspace(workerInstanceId: string): W
     root,
     profilePath: join(root, 'profile.json'),
     runtimePath: join(root, 'runtime.json'),
+    runtimeManifestPath: join(root, 'runtime-manifest.json'),
     soulPath: join(root, 'SOUL.md'),
     agentsPath: join(root, 'AGENTS.md'),
     statePath: join(root, 'state.json'),
@@ -128,6 +130,8 @@ export async function ensureWorkerAgentContract(
   const runtimeBase = input.runtimeBase ?? readWorkerRuntimeBase(input.agent.roleProfile) ?? input.agent.codeAgentType ?? null
   writeJson(ws.profilePath, buildProfile(input, runtimeBase))
   writeJson(ws.runtimePath, buildRuntime(input, runtimeBase))
+  writeJson(ws.runtimeManifestPath, buildRuntimeManifest(input, runtimeBase))
+  writeRuntimeSpecificConfig(ws.root, input, runtimeBase)
   writeIfMissing(ws.soulPath, buildWorkerSoul(input.agent, runtimeBase))
   upsertCollaborationContext(ws.agentsPath, buildWorkerAgents(input.agent), buildCollaborationContext(input, runtimeBase))
   const existingState = readJsonIfExists(ws.statePath)
@@ -437,12 +441,15 @@ function buildProfile(input: EnsureWorkerAgentContractInput, runtimeBase: string
 }
 
 function buildRuntime(input: EnsureWorkerAgentContractInput, runtimeBase: string | null) {
+  const specificConfigFileName = runtimeSpecificConfigFileName(runtimeBase)
   return {
     schemaVersion: 1,
     runtimeFamily: 'worker',
     runtimeBase,
     runtimeMode: runtimeModeForBase(runtimeBase),
     adapterContract: runtimeAdapterContract(runtimeBase),
+    runtimeSpecificConfigFileName: specificConfigFileName,
+    runtimeSpecificConfigPath: specificConfigFileName,
     modelId: input.agent.modelId,
     matrixUserId: input.matrixUserId ?? null,
     participantId: input.participantId ?? null,
@@ -451,6 +458,134 @@ function buildRuntime(input: EnsureWorkerAgentContractInput, runtimeBase: string
     sharedStorageRoot: input.sharedStorageRoot ?? null,
     sandboxPolicy: input.agent.sandboxPolicy ?? 'workspace-write',
   }
+}
+
+function buildRuntimeManifest(input: EnsureWorkerAgentContractInput, runtimeBase: string | null) {
+  const adapterContract = runtimeAdapterContract(runtimeBase)
+  return {
+    schemaVersion: 1,
+    source: 'agenthub-controller',
+    generatedAt: new Date().toISOString(),
+    workerInstanceId: input.workerInstanceId,
+    workspaceAgentId: input.agent.id,
+    roleContract: 'worker',
+    runtimeBase: runtimeBase ?? 'unconfigured',
+    runtimeMode: runtimeModeForBase(runtimeBase),
+    modelId: input.agent.modelId ?? null,
+    sandboxPolicy: input.agent.sandboxPolicy ?? 'workspace-write',
+    matrix: {
+      userId: input.matrixUserId ?? null,
+      participantId: input.participantId ?? null,
+      listenerOwner: adapterContract.baseProfile.matrixIntegration.owner,
+      pattern: adapterContract.baseProfile.matrixIntegration.pattern,
+    },
+    controller: {
+      url: input.controllerUrl ?? null,
+      actions: ['prepare', 'inspect', 'health', 'start', 'stop', 'syncConfig'],
+    },
+    sharedStorage: {
+      root: input.sharedStorageRoot ?? null,
+      taskContract: adapterContract.taskContract,
+    },
+    workspaceContract: adapterContract.workspaceContract,
+    runtimeImplementation: adapterContract.baseProfile.implementation,
+    diagnostics: adapterContract.diagnosticContract,
+    parityCapabilities: adapterContract.parityCapabilities,
+    reconcileContract: adapterContract.reconcileContract,
+    currentLimits: adapterContract.baseProfile.currentLimits,
+  }
+}
+
+function writeRuntimeSpecificConfig(
+  root: string,
+  input: EnsureWorkerAgentContractInput,
+  runtimeBase: string | null,
+) {
+  const adapterContract = runtimeAdapterContract(runtimeBase)
+  writeJson(join(root, runtimeSpecificConfigFileName(runtimeBase)), {
+    schemaVersion: 1,
+    source: 'agenthub-controller',
+    generatedAt: new Date().toISOString(),
+    roleContract: 'worker',
+    runtimeBase: runtimeBase ?? 'unconfigured',
+    runtimeMode: runtimeModeForBase(runtimeBase),
+    workerInstanceId: input.workerInstanceId,
+    workspaceAgentId: input.agent.id,
+    displayName: input.agent.name,
+    modelId: input.agent.modelId ?? null,
+    matrix: {
+      userId: input.matrixUserId ?? null,
+      participantId: input.participantId ?? null,
+      roomsPath: 'rooms.json',
+      mentionProtocol: 'Only act on directed @mentions or explicit task-room assignments.',
+    },
+    controller: {
+      url: input.controllerUrl ?? null,
+      statePath: 'state.json',
+      tasksPath: 'tasks.json',
+    },
+    files: {
+      soul: 'SOUL.md',
+      agents: 'AGENTS.md',
+      skills: 'skills/',
+      profile: 'profile.json',
+      runtime: 'runtime.json',
+      runtimeManifest: 'runtime-manifest.json',
+    },
+    adapter: {
+      label: adapterContract.baseProfile.label,
+      implementation: adapterContract.baseProfile.implementation,
+      matrixIntegration: adapterContract.baseProfile.matrixIntegration,
+      diagnostics: adapterContract.diagnosticContract,
+      currentLimits: adapterContract.baseProfile.currentLimits,
+    },
+    bridge: runtimeModeForBase(runtimeBase) === 'bridge'
+      ? {
+          owner: 'agenthub-supervisor',
+          projectionRoot: '.agenthub/worker-contract',
+          requiredBeforeRun: ['SOUL.md', 'AGENTS.md', 'runtime.json', 'runtime-manifest.json', 'rooms.json', 'tasks.json'],
+        }
+      : null,
+    resident: runtimeModeForBase(runtimeBase) === 'resident'
+      ? {
+          owner: 'runtime-native',
+          expectedListener: 'Matrix room sync/channel loop',
+          requiredBeforeListening: ['Matrix identity', 'room binding', 'SOUL.md', 'AGENTS.md', 'skills/', 'runtime-manifest.json'],
+        }
+      : null,
+  })
+}
+
+export function runtimeSpecificConfigFileName(runtimeBase: string | null): string {
+  switch (runtimeBase) {
+    case 'openclaw':
+      return 'openclaw.worker.json'
+    case 'qwenpaw':
+    case 'copaw':
+      return 'qwenpaw.worker.json'
+    case 'claude-code':
+      return 'claude-code.worker.json'
+    case 'opencode':
+      return 'opencode.worker.json'
+    case 'codex':
+      return 'codex.worker.json'
+    case 'gemini':
+      return 'gemini.worker.json'
+    default:
+      return 'unconfigured.worker.json'
+  }
+}
+
+export function listWorkerRuntimeSpecificConfigFiles(): string[] {
+  return [
+    'openclaw.worker.json',
+    'qwenpaw.worker.json',
+    'claude-code.worker.json',
+    'opencode.worker.json',
+    'codex.worker.json',
+    'gemini.worker.json',
+    'unconfigured.worker.json',
+  ]
 }
 
 function buildWorkerSoul(agent: WorkspaceAgentRow, runtimeBase: string | null): string {

@@ -79,7 +79,7 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 - Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源；本地真实 homeserver 默认用 Tuwunel；开发和产品路径必须连接真实 Matrix homeserver，`TestRoomAdapter` 只允许自动化测试使用。
 - 共享存储层：对齐 HiClaw MinIO 章节的“共享任务树/产物引用”思想，但第一阶段默认由本地 filesystem object store 实现；产物、任务契约和 handoff ref 进入 ArtifactStore / SharedStorage，object key 语义保持 S3-compatible，后续可切 MinIO/S3 adapter。
 - 轻量执行可靠性：参考 ClawTeam 的 `FileTaskStore`、`WorkspaceManager`、`NativeCliAdapter`、`LeaderWatcher` 和 `Board`，补齐 Worker claim/lock、git worktree 模式、profile doctor/test、ManagerPatrol snapshot diff、服务端 run/team snapshot；这些只能作为轻量实现手段，不能替代真实 Matrix Room 通信。
-- 运行时规范化：所有 Manager / Worker runtime base 都要逐步具备统一 Agent contract：`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`、workspace、heartbeat、runtime health、Room membership、RuntimeLease、shared task contract 和 ArtifactStore。OpenClaw/QwenPaw、Claude Code、OpenCode、Codex、Gemini 的 adapter 实现可以不同，但 Controller/Room/Manager 看到的能力应尽量对等。当前权威生成层是 `apps/server/src/services/agent-contract/`：Manager 由 `ensureManagerAgentContract()` 生成 `runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / state.json / rooms.json / logs` 并镜像到 OpenClaw `agentDir`；Worker 由 `ensureWorkerAgentContract()` 生成 `profile.json / runtime.json / SOUL.md / AGENTS.md / skills / state.json / rooms.json / tasks.json`。不要再在 runtime provider/launcher 里散写这些文件。详细见 `docs/Agent运行时规范化与HiClaw对齐计划.md`。
+- 运行时规范化：所有 Manager / Worker runtime base 都要逐步具备统一 Agent contract：`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`、workspace、heartbeat、runtime health、Room membership、RuntimeLease、shared task contract 和 ArtifactStore。OpenClaw/QwenPaw、Claude Code、OpenCode、Codex、Gemini 的 adapter 实现可以不同，但 Controller/Room/Manager 看到的能力应尽量对等。当前权威生成层是 `apps/server/src/services/agent-contract/`：Manager 由 `ensureManagerAgentContract()` 生成 `runtime.json / SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / workers-registry.json / teams-registry.json / humans-registry.json / state.json / rooms.json / logs` 并镜像到 OpenClaw `agentDir`；Worker 由 `ensureWorkerAgentContract()` 生成 `profile.json / runtime.json / runtime-manifest.json / <base>.worker.json / SOUL.md / AGENTS.md / skills / state.json / rooms.json / tasks.json`。不要再在 runtime provider/launcher 里散写这些文件。详细见 `docs/Agent运行时规范化与HiClaw对齐计划.md`。
 
 目标资源：
 
@@ -192,7 +192,7 @@ provisioning -> ready -> listening -> assigned -> busy -> waiting_for_human -> r
 - `busy`：CLI 子进程正在执行。
 - `resuming`：人类回答澄清后，Worker 恢复执行前的过渡状态。
 
-Worker 本地 workspace 目录位于 `{agentHubUserDataRoot()}/workers/{workerInstanceId}/`，包含 `profile.json`、`runtime.json`、`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`、`tasks.json`。`WorkerController.ensureReady()` 会通过 `ensureWorkerAgentContract()` 创建该目录并从 DB 同步技能、Room、runtime、Controller API 和共享存储上下文。
+Worker 本地 workspace 目录位于 `{agentHubUserDataRoot()}/workers/{workerInstanceId}/`，包含 `profile.json`、`runtime.json`、`runtime-manifest.json`、`<base>.worker.json`、`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`、`tasks.json`。`WorkerController.ensureReady()` 会通过 `ensureWorkerAgentContract()` 创建该目录并从 DB 同步技能、Room、runtime、Controller API 和共享存储上下文。
 
 ### Worker Runtime Phase 2 能力
 

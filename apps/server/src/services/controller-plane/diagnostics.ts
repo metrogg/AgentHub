@@ -12,7 +12,7 @@ import {
   workspaceTasks,
   workerInstances,
 } from '@agenthub/db'
-import { resolveWorkerAgentContractWorkspace } from '../agent-contract'
+import { resolveWorkerAgentContractWorkspace, runtimeSpecificConfigFileName } from '../agent-contract'
 import { type CodeAgentRuntimeInspection } from '../code-agent-adapter'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { controllerReconcileQueue } from './controller-reconciler'
@@ -43,6 +43,8 @@ export interface WorkerRuntimeDiagnostics {
   contractFiles: {
     profile: boolean
     runtime: boolean
+    runtimeManifest: boolean
+    runtimeSpecificConfig: boolean
     soul: boolean
     agents: boolean
     state: boolean
@@ -205,6 +207,8 @@ async function describeWorkerRuntimes(input: {
       const contractFiles = {
         profile: existsSync(contract.profilePath),
         runtime: existsSync(contract.runtimePath),
+        runtimeManifest: existsSync(contract.runtimeManifestPath),
+        runtimeSpecificConfig: existsSync(`${contract.root}/${runtimeSpecificConfigFileName(worker.runtimeBase)}`),
         soul: existsSync(contract.soulPath),
         agents: existsSync(contract.agentsPath),
         state: existsSync(contract.statePath),

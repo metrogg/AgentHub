@@ -24,6 +24,7 @@ const {
   ensureManagerAgentContractFromController,
   ensureWorkerAgentContract,
   ensureWorkerAgentContractFromController,
+  runtimeSpecificConfigFileName,
 } = await import('../apps/server/src/services/agent-contract')
 const { projectWorkerContractIntoBridgeCwd } = await import('../apps/server/src/services/worker-runtime/worker-bridge-contract')
 
@@ -355,6 +356,7 @@ describe('Agent contract generator', () => {
     for (const path of [
       ws.profilePath,
       ws.runtimePath,
+      ws.runtimeManifestPath,
       ws.soulPath,
       ws.agentsPath,
       ws.statePath,
@@ -396,6 +398,7 @@ describe('Agent contract generator', () => {
     const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as Record<string, unknown>
     expect(runtime.runtimeBase).toBe('opencode')
     expect(runtime.runtimeMode).toBe('bridge')
+    expect(runtime.runtimeSpecificConfigFileName).toBe('opencode.worker.json')
     expect(runtime.modelId).toBe('mimo-v2.5')
     const adapterContract = runtime.adapterContract as Record<string, unknown>
     expect(adapterContract.parityCapabilities).toEqual(expect.arrayContaining([
@@ -416,6 +419,21 @@ describe('Agent contract generator', () => {
     expect(baseProfile.label).toBe('OpenCode Worker')
     expect(baseProfile.implementation.architectureMode).toBe('bridge')
     expect(baseProfile.matrixIntegration.owner).toBe('agenthub-supervisor')
+
+    const runtimeManifest = JSON.parse(readFileSync(ws.runtimeManifestPath, 'utf8')) as Record<string, any>
+    expect(runtimeManifest.roleContract).toBe('worker')
+    expect(runtimeManifest.runtimeBase).toBe('opencode')
+    expect(runtimeManifest.matrix.listenerOwner).toBe('agenthub-supervisor')
+    expect(runtimeManifest.parityCapabilities).toEqual(expect.arrayContaining([
+      'matrix_identity',
+      'shared_task_contract',
+      'runtime_health',
+    ]))
+
+    const opencodeConfig = JSON.parse(readFileSync(join(ws.root, 'opencode.worker.json'), 'utf8')) as Record<string, any>
+    expect(opencodeConfig.adapter.label).toBe('OpenCode Worker')
+    expect(opencodeConfig.bridge.owner).toBe('agenthub-supervisor')
+    expect(opencodeConfig.files.runtimeManifest).toBe('runtime-manifest.json')
 
     const state = JSON.parse(readFileSync(ws.statePath, 'utf8')) as {
       reconcile: { contract: string; stages: Array<{ name: string; status: string }> }
@@ -545,6 +563,7 @@ describe('Agent contract generator', () => {
       const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as {
         runtimeBase: string
         runtimeMode: string
+        runtimeSpecificConfigFileName: string
         adapterContract: {
           mode: string
           parityCapabilities: string[]
@@ -565,6 +584,8 @@ describe('Agent contract generator', () => {
 
       expect(runtime.runtimeBase).toBe(item.base)
       expect(runtime.runtimeMode).toBe(item.mode)
+      expect(runtime.runtimeSpecificConfigFileName).toBe(runtimeSpecificConfigFileName(item.base))
+      expect(existsSync(join(ws.root, runtimeSpecificConfigFileName(item.base)))).toBe(true)
       expect(runtime.adapterContract.mode).toBe(item.mode)
       expect(runtime.adapterContract.diagnosticContract.probes.length).toBeGreaterThan(0)
       expect(runtime.adapterContract.parityCapabilities).toEqual(expect.arrayContaining([
@@ -859,12 +880,15 @@ describe('Agent contract generator', () => {
     expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'SOUL.md'))).toBe(true)
     expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'profile.json'))).toBe(true)
     expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'tasks.json'))).toBe(true)
+    expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'runtime-manifest.json'))).toBe(true)
+    expect(existsSync(join(executionCwd, '.agenthub', 'worker-contract', 'opencode.worker.json'))).toBe(true)
 
     const agentsText = readFileSync(join(executionCwd, 'AGENTS.md'), 'utf8')
     expect(agentsText).toContain('AGENTHUB:BRIDGE-RUNTIME-CONTEXT:START')
     expect(agentsText).toContain('Canonical Worker AGENTS.md')
     expect(agentsText).toContain('Runtime base: opencode')
     expect(agentsText).toContain('Bridge Task Room')
+    expect(agentsText).toContain('runtime-manifest.json')
     const projectedTasks = JSON.parse(
       readFileSync(join(executionCwd, '.agenthub', 'worker-contract', 'tasks.json'), 'utf8'),
     ) as { tasks: Array<{ taskId: string; sharedTaskSpecPath?: string | null; runtimeLeaseId?: string | null }> }

@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import type { workspaceAgents } from '@agenthub/db'
 import {
   ensureWorkerAgentContract,
+  listWorkerRuntimeSpecificConfigFiles,
   type WorkerAgentContractWorkspace,
 } from '../agent-contract'
 
@@ -66,9 +67,13 @@ export async function projectWorkerContractIntoBridgeCwd(input: {
   copyIfExists(contract.soulPath, join(bridgeRoot, 'SOUL.md'))
   copyIfExists(contract.profilePath, join(bridgeRoot, 'profile.json'))
   copyIfExists(contract.runtimePath, join(bridgeRoot, 'runtime.json'))
+  copyIfExists(contract.runtimeManifestPath, join(bridgeRoot, 'runtime-manifest.json'))
   copyIfExists(contract.statePath, join(bridgeRoot, 'state.json'))
   copyIfExists(contract.roomsPath, join(bridgeRoot, 'rooms.json'))
   copyIfExists(contract.tasksPath, join(bridgeRoot, 'tasks.json'))
+  for (const fileName of listWorkerRuntimeSpecificConfigFiles()) {
+    copyIfExists(join(contract.root, fileName), join(bridgeRoot, fileName))
+  }
   if (existsSync(contract.skillsPath)) {
     cpSync(contract.skillsPath, skillsPath, { recursive: true, force: true })
   }
@@ -107,11 +112,13 @@ function buildBridgeContext(input: {
     `- Contract root: ${input.contract.root}`,
     `- Projected contract root: ${input.bridgeRoot}`,
     `- Projected SOUL: ${join(input.bridgeRoot, 'SOUL.md')}`,
+    `- Projected runtime manifest: ${join(input.bridgeRoot, 'runtime-manifest.json')}`,
     `- Projected skills: ${join(input.bridgeRoot, 'skills')}`,
     '',
     '## Runtime Rules',
     '- Treat this AGENTS.md as the local operating contract for the current CLI run.',
     '- Read .agenthub/worker-contract/SOUL.md for identity and long-lived behavior.',
+    '- Read .agenthub/worker-contract/runtime-manifest.json for the runtime adapter contract.',
     '- Use .agenthub/worker-contract/skills/ for assigned AgentHub skills when present.',
     '- Continue to use Matrix Room timeline for communication, progress, clarification, and completion.',
     '',
