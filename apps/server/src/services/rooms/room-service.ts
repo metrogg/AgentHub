@@ -38,9 +38,7 @@ export class RoomService {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })
     if (!shouldSkipAutoDispatch(event.metadata)) {
-      await this.dispatchPlatformTimelineEvent(event.id).catch(() => {
-        // Matrix /sync remains the source of truth for resident runtimes; platform dispatch is a local safety net.
-      })
+      this.schedulePlatformTimelineDispatch(event.id)
     }
     return event
   }
@@ -53,9 +51,7 @@ export class RoomService {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })
     if (!shouldSkipAutoDispatch(event.metadata)) {
-      await this.dispatchPlatformTimelineEvent(event.id).catch(() => {
-        // Matrix /sync remains the source of truth for resident runtimes; platform dispatch is a local safety net.
-      })
+      this.schedulePlatformTimelineDispatch(event.id)
     }
     return event
   }
@@ -177,6 +173,12 @@ export class RoomService {
   private async dispatchPlatformTimelineEvent(eventId: string) {
     const { matrixRoomEventDispatcher } = await import('./matrix-event-dispatcher')
     await matrixRoomEventDispatcher.dispatchTimelineEvent(eventId)
+  }
+
+  private schedulePlatformTimelineDispatch(eventId: string) {
+    void this.dispatchPlatformTimelineEvent(eventId).catch(() => {
+      // Matrix /sync remains the source of truth for resident runtimes; platform dispatch is a local safety net.
+    })
   }
 
   async announceWorkerPresenceInJoinedRooms(

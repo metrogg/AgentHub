@@ -317,6 +317,11 @@ describe('RoomService Matrix room adapter contract', () => {
         type: 'text',
       })
 
+      await waitForCondition(
+        () => directCalls.length,
+        (count) => count === 1,
+        { description: 'direct room dispatch should run after appending the human timeline event' },
+      )
       expect(directCalls).toHaveLength(1)
       expect(directCalls[0]).toMatchObject({
         roomId: room.id,
@@ -689,6 +694,111 @@ describe('RoomService Matrix room adapter contract', () => {
       const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room!.id))
       expect(events[0]?.metadata?.matrix?.usedParticipantToken).toBe(true)
       expect(events[0]?.metadata?.matrix?.senderUserId).toBe('@worker-matrix-agent-1:agenthub.local')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('Matrix adapter rejoins a locally joined sender before sending when homeserver membership drifted to leave', async () => {
+    const calls: Array<{ method: string; path: string; auth: string | null; body: any }> = []
+    const originalFetch = globalThis.fetch
+    let joinsBeforeAppend = 0
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      const auth = init?.headers
+        ? ((init.headers as Record<string, string>).Authorization ?? null)
+        : null
+      calls.push({ method: init?.method ?? 'GET', path: parsed.pathname, auth, body })
+      if (parsed.pathname.endsWith('/register')) {
+        const username = body.username
+        return Response.json({
+          user_id: `@${username}:agenthub.local`,
+          access_token: `token-${username}`,
+        })
+      }
+      if (parsed.pathname.includes('/profile/')) return Response.json({})
+      if (parsed.pathname.includes('/invite')) return Response.json({})
+      if (parsed.pathname.includes('/_matrix/client/v3/join/')) {
+        return Response.json({ room_id: '!drift-room:agenthub.local' })
+      }
+      if (parsed.pathname.includes('/send/m.room.message/')) {
+        const joinCalls = calls.filter((call) => call.path.includes('/join/')).length
+        if (joinCalls <= joinsBeforeAppend) {
+          return Response.json(
+            {
+              errcode: 'M_FORBIDDEN',
+              error: "Auth check failed: sender's membership `leave` is not `join`",
+            },
+            { status: 403 },
+          )
+        }
+        return Response.json({ event_id: '$drift-event-1' })
+      }
+      return Response.json({}, { status: 404 })
+    }) as typeof fetch
+
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Drift Workspace',
+        goal: 'Verify Matrix rejoin before send',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        id: 'matrix-drift-agent-1',
+        workspaceId: workspace!.id,
+        name: 'Drift Worker',
+        role: 'Worker',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!drift-room:agenthub.local',
+        kind: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        title: 'Drift Direct Room',
+      })
+      .returning()
+    const adapter = new MatrixRoomAdapter({
+      homeserverUrl: 'http://matrix.test',
+      accessToken: 'admin-token',
+      serverName: 'agenthub.local',
+      autoInviteParticipants: true,
+      autoJoinParticipants: true,
+    })
+
+    try {
+      const worker = await adapter.addParticipant({
+        roomId: room!.id,
+        participantType: 'worker',
+        workspaceAgentId: agent!.id,
+        displayName: 'Drift Worker',
+        role: 'member',
+      })
+      joinsBeforeAppend = calls.filter((call) => call.path.includes('/join/')).length
+
+      await adapter.appendTimelineEvent({
+        roomId: room!.id,
+        senderParticipantId: worker.id,
+        senderType: 'worker',
+        type: 'worker.message',
+        body: 'still here',
+      })
+
+      const joinCalls = calls.filter((call) => call.path.includes('/join/'))
+      const sendCalls = calls.filter((call) => call.path.includes('/send/m.room.message/'))
+      expect(joinCalls.length).toBeGreaterThan(joinsBeforeAppend)
+      expect(sendCalls).toHaveLength(1)
+      expect(sendCalls[0]?.auth).toContain('worker-matrix-drift-agent-1')
     } finally {
       globalThis.fetch = originalFetch
     }

@@ -319,6 +319,7 @@ function timelineEventToMessage(
   const kind = asString(eventMetadata?.kind)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic') return null
+  if (isDirectWorkerRuntimeRunningStatusEvent(event, room, eventMetadata)) return null
 
   if (
     event.type !== 'human.message' &&
@@ -449,6 +450,17 @@ function isLiveCodeAgentRunMetadataEvent(event: TimelineEvent) {
     asString(metadata?.kind) === 'worker-runtime.progress' &&
     asString(metadata?.type) === 'code-agent-run'
   )
+}
+
+function isDirectWorkerRuntimeRunningStatusEvent(
+  event: TimelineEvent,
+  room: Room,
+  metadata: Record<string, unknown> | null,
+) {
+  if (room.kind !== 'direct' || event.type !== 'task.progress') return false
+  const kind = asString(metadata?.kind)
+  if (kind !== 'worker-runtime.started' && kind !== 'worker-runtime.progress') return false
+  return codeAgentStatusFromWorkerRuntimeEvent(event, metadata) === 'running'
 }
 
 function shouldAttachCodeAgentRunToMessage(

@@ -123,19 +123,47 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         editedAt,
       },
     })
-    return c.json({ ...roomTimelineTargetToMessage(target, sessionId), content })
+    const message = roomTimelineTargetToMessage(target, sessionId)
+    return c.json({
+      ...message,
+      content,
+      metadata: {
+        ...(message.metadata ?? {}),
+        displayContent: content,
+        editedAt,
+      },
+    })
   })
   .post('/:sessionId/:messageId/resend', async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
-    void user
-    void sessionId
-    void messageId
-    throw AppError.fromCode(
-      AppErrorCodes.VALIDATION_FAILED,
-      '重新发送旧消息链路已删除；请在 Room 中发送新的消息触发 Manager/Worker。',
-    )
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub)
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
+
+    const target = await loadRoomTimelineMessageTarget(sessionId, messageId)
+    if (!target || target.event.senderType !== 'human') {
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
+    }
+    const content = await latestHumanMessageContent(target)
+    if (!content) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '原消息为空，无法重新发送。')
+    }
+    const metadata = {
+      resentFromMessageId: messageId,
+      resentFromEventId: target.event.id,
+      source: 'room-first-resend',
+    }
+    const { message } = await appendHumanMessageRoomFirst({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      content,
+      type: 'text',
+      metadata,
+    })
+    return c.json({ removedMessageIds: [], message })
   })
   .patch('/:sessionId/:messageId/pin', async (c) => {
     const user = c.get('user')
@@ -1184,6 +1212,47 @@ async function loadRoomTimelineMessageTarget(
     .limit(1)
   if (!row?.event) return null
   return row
+}
+
+async function latestHumanMessageContent(target: RoomTimelineMessageTarget) {
+  let content = target.event.body.trim()
+  const targetMessageId = `room:${target.event.id}`
+  const updates = await db
+    .select()
+    .from(timelineEvents)
+    .where(and(eq(timelineEvents.roomId, target.room.id), eq(timelineEvents.type, 'system')))
+    .orderBy(asc(timelineEvents.sequence))
+
+  for (const update of updates) {
+    if (update.sequence <= target.event.sequence) continue
+    const metadata =
+      update.metadata && typeof update.metadata === 'object'
+        ? (update.metadata as Record<string, unknown>)
+        : {}
+    if (readString(metadata.kind) !== 'message.edit') continue
+    const targetMessageIds = [
+      readString(metadata.targetMessageId),
+      ...readStringArray(metadata.targetMessageIds),
+      ...readStringArray(metadata.targetEventIds).map((id) => `room:${id}`),
+    ]
+    const targetEventIds = [
+      readString(metadata.targetEventId),
+      ...readStringArray(metadata.targetEventIds),
+    ]
+    if (!targetMessageIds.includes(targetMessageId) && !targetEventIds.includes(target.event.id)) {
+      continue
+    }
+    const nextContent = readString(metadata.content) ?? readString(update.body)
+    if (nextContent) content = nextContent
+  }
+
+  return content.trim() || null
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
 }
 
 function roomTimelineTargetToMessage(

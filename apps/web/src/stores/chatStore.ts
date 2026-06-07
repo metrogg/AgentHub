@@ -3416,6 +3416,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           messages: s.messages.filter((message) => !removed.has(message.id)),
         }))
       }
+      if (result.message) {
+        updateCachedMessages(sessionId, (messages) => upsertMessage(messages, result.message!))
+        set((s) => ({
+          messages: upsertMessage(s.messages, result.message!),
+        }))
+      }
       await get().fetchSessions()
     } catch (error) {
       set({ agentTyping: false })

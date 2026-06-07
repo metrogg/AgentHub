@@ -118,6 +118,7 @@ describe('WorkerRuntime task room integration', () => {
       const startedEvent = events.find((event) => event.metadata?.kind === 'worker-runtime.started')
       expect(startedEvent).toBeTruthy()
       expect(startedEvent?.metadata?.runtimeType).toBe('opencode')
+      expect(startedEvent?.metadata?.hiddenFromChat).toBe(true)
 
       const liveMetadataEvent = events.find(
         (event) =>
@@ -136,6 +137,96 @@ describe('WorkerRuntime task room integration', () => {
         command: 'opencode run',
         finalMessage: 'done',
       })
+    } finally {
+      ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
+        originalExecuteTask
+    }
+  })
+
+  test('direct rooms mark failed code-agent runs as failed terminal events', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Direct Runtime Failure Workspace',
+        goal: 'Run direct room failures',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Direct Failure Worker',
+        role: 'Direct worker',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'claude-code',
+      })
+      .returning()
+    const [directSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Direct Failure Worker',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        metadata: { kind: 'agent-direct' },
+      })
+      .returning()
+    const room = await roomService.ensureRoomForSession(directSession!.id, 'default-user')
+    await roomService.addWorkerParticipant(room.id, agent!.id)
+
+    const originalExecuteTask = localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype.executeTask
+    ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
+      async function* () {
+        yield {
+          type: 'progress',
+          message: 'Worker runtime metadata updated.',
+          metadata: {
+            type: 'code-agent-run',
+            status: 'failed',
+            runtime: 'claude-code',
+            command: 'claude',
+            durationMs: 42,
+            exitCode: 1,
+            commands: [],
+            files: [],
+            logs: [{ id: 'log-1', stream: 'stderr', text: 'ConnectionRefused' }],
+            steps: [{ id: 'step-1', kind: 'status', status: 'failed', title: 'Run Claude Code' }],
+          },
+        }
+        return {
+          runtimeType: 'code-agent',
+          status: 'failed',
+          message: 'API Error: Unable to connect to API (ConnectionRefused)',
+          artifacts: [],
+        }
+      }
+
+    try {
+      const service = new WorkerRuntimeService()
+      await service.runDirectRoom({
+        roomId: room.id,
+        ownerId: 'default-user',
+        workspaceAgentId: agent!.id,
+        prompt: 'please fail',
+      })
+
+      const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+      const failedEvent = events.find((event) => event.metadata?.kind === 'worker-runtime.failed')
+      expect(failedEvent?.type).toBe('task.progress')
+      expect(failedEvent?.metadata?.status).toBe('failed')
+      expect(failedEvent?.metadata?.codeAgentRun).toMatchObject({
+        type: 'code-agent-run',
+        status: 'failed',
+        runtime: 'claude-code',
+        command: 'claude',
+        finalMessage: 'API Error: Unable to connect to API (ConnectionRefused)',
+      })
+      expect(events.filter((event) => event.metadata?.kind === 'worker-runtime.message')).toHaveLength(0)
+      expect(events.filter((event) => event.metadata?.kind === 'worker-runtime.progress' && event.metadata?.hiddenFromChat !== true)).toHaveLength(0)
+      expect(events.find((event) => event.metadata?.kind === 'worker-runtime.completed')).toBeUndefined()
     } finally {
       ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
         originalExecuteTask

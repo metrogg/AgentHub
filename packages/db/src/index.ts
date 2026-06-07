@@ -22,6 +22,7 @@ mkdirSync(pathDirname(dbPath), { recursive: true })
 
 const sqlite = new Database(dbPath, { create: true })
 sqlite.exec('PRAGMA journal_mode = WAL;')
+sqlite.exec('PRAGMA busy_timeout = 10000;')
 sqlite.exec('PRAGMA foreign_keys = ON;')
 if (process.env.AGENTHUB_SKIP_LEGACY_SCHEMA !== '1') {
   ensureLegacySchema(sqlite)
