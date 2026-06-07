@@ -242,6 +242,95 @@ describe('RoomService Matrix room adapter contract', () => {
     expect(events.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
   })
 
+  test('routes direct room human messages to Worker runtime using the session agent over stale room metadata', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Direct Dispatch Workspace',
+        goal: 'Verify direct agent chat dispatch',
+      })
+      .returning()
+    const [staleAgent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Old Direct Worker',
+        role: 'Old worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const [currentAgent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Current Direct Worker',
+        role: 'Current worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'codex',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Current Direct Worker',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: currentAgent!.id,
+        metadata: { kind: 'agent-direct' },
+      })
+      .returning()
+
+    const room = await roomService.ensureRoomForSession(session!.id, 'default-user')
+    await roomService.addWorkerParticipant(room.id, staleAgent!.id)
+    await db
+      .update(rooms)
+      .set({
+        metadata: {
+          ...(room.metadata ?? {}),
+          compatibility: {
+            source: 'session',
+            sessionType: 'direct',
+            workspaceAgentId: staleAgent!.id,
+          },
+        },
+      })
+      .where(eq(rooms.id, room.id))
+
+    const directCalls: any[] = []
+    const originalRunDirectRoom = workerRuntimeService.runDirectRoom
+    ;(workerRuntimeService as any).runDirectRoom = async (input: any) => {
+      directCalls.push(input)
+      return { roomId: input.roomId, appendedEventIds: [] }
+    }
+
+    try {
+      const { event } = await appendHumanMessageRoomFirst({
+        session: session!,
+        userId: 'default-user',
+        userName: 'Tester',
+        content: 'please respond',
+        type: 'text',
+      })
+
+      expect(directCalls).toHaveLength(1)
+      expect(directCalls[0]).toMatchObject({
+        roomId: room.id,
+        ownerId: 'default-user',
+        workspaceAgentId: currentAgent!.id,
+        prompt: 'please respond',
+      })
+      expect(directCalls[0].workspaceAgentId).not.toBe(staleAgent!.id)
+      expect(event.metadata?.kind).toBe('chat.message')
+    } finally {
+      ;(workerRuntimeService as any).runDirectRoom = originalRunDirectRoom
+    }
+  })
+
   test('creates a task room and task.assigned timeline event for a task thread', async () => {
     const [workspace] = await db
       .insert(workspaces)

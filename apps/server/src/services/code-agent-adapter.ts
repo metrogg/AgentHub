@@ -389,7 +389,8 @@ export async function inspectCodeAgentRuntime(
     modelTarget = await resolveRuntimeModelTarget(requestedModelId)
   }
 
-  const installed = await isCommandInstalled(adapter.command)
+  const probesEnabled = process.env.ENABLE_LOCAL_CLI_PROBES !== 'false'
+  const installed = probesEnabled ? await isCommandInstalled(adapter.command) : false
   const [nativeProbe, doctorProbe, capabilityProbe] = installed
     ? await Promise.all([
         probeCodeAgentNativeCli(adapter.command),

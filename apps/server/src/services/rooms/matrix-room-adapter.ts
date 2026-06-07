@@ -239,6 +239,9 @@ export class MatrixRoomAdapter implements RoomAdapter {
     const senderIdentity = input.senderParticipantId
       ? await this.getIdentityForSenderParticipant(input.senderParticipantId)
       : null
+    if (senderIdentity?.accessToken) {
+      await this.ensureSenderJoined(room.providerRoomId, input.senderParticipantId!, senderIdentity.accessToken)
+    }
     const matrixEvent = await this.client().sendTextMessage(
       room.providerRoomId,
       input.body ?? '',
@@ -292,6 +295,9 @@ export class MatrixRoomAdapter implements RoomAdapter {
     const mentionParticipant = await this.getParticipant(input.mentionParticipantId)
     if (!mentionParticipant?.providerUserId) {
       throw new Error(`Matrix mention target participant is not bound to a Matrix user: ${input.mentionParticipantId}`)
+    }
+    if (senderIdentity?.accessToken) {
+      await this.ensureSenderJoined(room.providerRoomId, input.senderParticipantId!, senderIdentity.accessToken)
     }
     const matrixEvent = await this.client().sendMentionMessage(
       room.providerRoomId,
@@ -437,6 +443,19 @@ export class MatrixRoomAdapter implements RoomAdapter {
         updatedAt: new Date(),
       })
       .where(eq(roomParticipants.id, participant.id))
+  }
+
+  private async ensureSenderJoined(providerRoomId: string, participantId: string, accessToken: string) {
+    const [participant] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participantId)).limit(1)
+    if (!participant) return
+    if (participant.status === 'joined') return
+    const client = this.client()
+    try {
+      await client.joinRoom(providerRoomId, accessToken)
+      await db.update(roomParticipants).set({ status: 'joined', updatedAt: new Date() }).where(eq(roomParticipants.id, participantId))
+    } catch {
+      // best-effort: if join fails, the send attempt will surface the real error
+    }
   }
 
   private async getIdentityForSenderParticipant(participantId: string) {
