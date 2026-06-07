@@ -26,12 +26,60 @@ import {
   type WorkerBackendEnsureInput,
   type WorkerBackendHealthResult,
   type WorkerBackendInspectResult,
+  type WorkerBackendPrepareInput,
+  type WorkerBackendPrepareResult,
   type WorkerBackendStartInput,
   type WorkerBackendStopInput,
 } from './worker-backend'
 
 export class DockerWorkerBackend implements WorkerBackend {
   readonly id = 'docker-runtime'
+
+  async prepare(input: WorkerBackendPrepareInput): Promise<WorkerBackendPrepareResult> {
+    if (!workerContainersEnabled()) return localCliWorkerBackend.prepare(input)
+    const [worker] = await db
+      .select()
+      .from(workerInstances)
+      .where(eq(workerInstances.id, input.workerInstanceId))
+      .limit(1)
+    if (!worker) {
+      return {
+        workerInstanceId: input.workerInstanceId,
+        prepared: false,
+        state: 'missing',
+        message: 'WorkerInstance not found.',
+      }
+    }
+    if (worker.runtimeBase !== 'openclaw') return localCliWorkerBackend.prepare(input)
+    if (input.context) {
+      const reconciled = await workerController.reconcile(worker.id, input.context)
+      if (reconciled.error) {
+        return {
+          workerInstanceId: worker.id,
+          prepared: false,
+          state: reconciled.phase,
+          message: reconciled.error,
+          details: { reconcile: reconciled },
+        }
+      }
+    }
+    const synced = await this.syncConfig(worker.id)
+    const image = await ensureOpenClawRuntimeImage()
+    const prepared = synced.synced && image.present
+    return {
+      workerInstanceId: worker.id,
+      prepared,
+      state: prepared ? 'prepared' : image.present ? 'prepare-failed' : 'image-unavailable',
+      message: prepared
+        ? 'OpenClaw Worker container config and image are prepared.'
+        : image.error || `Image ${OPENCLAW_RUNTIME_IMAGE} unavailable.`,
+      details: {
+        runtimeBase: worker.runtimeBase,
+        syncConfig: synced,
+        image,
+      },
+    }
+  }
 
   async ensureRuntime(input: WorkerBackendEnsureInput): Promise<WorkerBackendInspectResult> {
     if (!workerContainersEnabled()) return localCliWorkerBackend.ensureRuntime(input)
@@ -291,9 +339,77 @@ export class DockerWorkerBackend implements WorkerBackend {
   async syncConfig(workerInstanceId: string): Promise<{ synced: boolean; details?: Record<string, unknown> }> {
     const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
     if (worker?.runtimeBase !== 'openclaw') return localCliWorkerBackend.syncConfig(workerInstanceId)
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.id, worker.workspaceAgentId))
+      .limit(1)
+    const workerName = agent?.name ?? worker.id
+    await rebindWorkerRoomParticipants(worker.workspaceAgentId, worker.id)
+    let [identity] = await db
+      .select()
+      .from(matrixIdentities)
+      .where(and(eq(matrixIdentities.ownerType, 'worker'), eq(matrixIdentities.ownerId, worker.id)))
+      .limit(1)
+    if (!identity?.accessToken || !identity.userId) {
+      const client = createMatrixClientFromEnv()
+      const identityService = new MatrixIdentityService(client)
+      identity = await identityService.ensureIdentity({
+        ownerType: 'worker',
+        ownerId: worker.id,
+        displayName: workerName,
+      })
+    }
+    let [managerIdentity] = await db
+      .select()
+      .from(matrixIdentities)
+      .where(and(eq(matrixIdentities.ownerType, 'manager'), eq(matrixIdentities.ownerId, 'manager')))
+      .limit(1)
+    if (!managerIdentity?.accessToken || !managerIdentity.userId) {
+      const client = createMatrixClientFromEnv()
+      const identityService = new MatrixIdentityService(client)
+      managerIdentity = await identityService.ensureIdentity({
+        ownerType: 'manager',
+        ownerId: 'manager',
+        displayName: 'Manager',
+      })
+    }
+    if (!identity?.accessToken || !identity.userId || !managerIdentity?.userId) {
+      return {
+        synced: false,
+        details: {
+          workerInstanceId,
+          error: 'OpenClaw Worker config requires Worker and Manager Matrix identities with access tokens.',
+        },
+      }
+    }
+    const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
+    const gatewayPort = workerGatewayPort(worker.id)
+    const roomBindings = await loadWorkerOpenClawRoomBindings(worker.id)
+    const resolvedLlm = await resolveLlmRuntimeConfig(worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || undefined)
+    const configPath = deployWorkerConfig({
+      workerInstanceId: worker.id,
+      workerName,
+      matrixUrl: containerMatrixUrl(),
+      matrixDomain,
+      matrixUserId: identity.userId,
+      matrixAccessToken: identity.accessToken,
+      managerMatrixUserId: managerIdentity.userId,
+      llmBaseUrl: process.env.AGENTHUB_WORKER_LLM_BASE_URL || containerLlmBaseUrl() || resolvedLlm.baseUrl,
+      llmApiKey: process.env.AGENTHUB_WORKER_LLM_API_KEY || process.env.LLM_API_KEY || resolvedLlm.apiKey || 'agenthub-internal',
+      llmModel: worker.modelId || process.env.AGENTHUB_WORKER_LLM_MODEL || process.env.LLM_MODEL || resolvedLlm.model,
+      gatewayPort,
+      dmAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId],
+      groupAllowFrom: [`@admin:${matrixDomain}`, managerIdentity.userId, ...roomBindings.allowFrom],
+      rooms: roomBindings.rooms,
+      timeoutSeconds: 600,
+      maxConcurrent: 4,
+    })
     const contract = await ensureWorkerAgentContractFromController({
       workerInstanceId,
       runtimeBase: worker.runtimeBase,
+      matrixUserId: identity.userId,
+      runtimeConfigPath: configPath,
       controllerUrl: containerControllerUrl(),
       sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
     })
@@ -302,8 +418,11 @@ export class DockerWorkerBackend implements WorkerBackend {
       details: {
         workerInstanceId,
         workspaceDir: getWorkerWorkspaceDir(workerInstanceId),
-        configPath: `${getWorkerWorkspaceDir(workerInstanceId)}/openclaw.json`,
+        configPath,
         contractRoot: contract.root,
+        gatewayPort,
+        matrixUserId: identity.userId,
+        rooms: roomBindings.rooms,
       },
     }
   }

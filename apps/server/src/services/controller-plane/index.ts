@@ -40,6 +40,8 @@ export {
   type WorkerBackendEnsureInput,
   type WorkerBackendHealthResult,
   type WorkerBackendInspectResult,
+  type WorkerBackendPrepareInput,
+  type WorkerBackendPrepareResult,
   type WorkerBackendStartInput,
   type WorkerBackendStopInput,
 } from './worker-backend'

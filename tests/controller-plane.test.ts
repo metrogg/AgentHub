@@ -341,6 +341,96 @@ describe('Controller Plane', () => {
     expect(health.details?.source).toBe('inspectCodeAgentRuntime')
   }, 15_000)
 
+  test('bridge Worker backend prepare refreshes contract without requiring CLI readiness', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Bridge Prepare Workspace',
+        goal: 'Validate bridge backend prepare',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Bridge Prepare Worker',
+        role: 'Bridge Worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        roleProfile: { workerRuntimeBase: 'opencode' },
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'opencode',
+        modelId: 'test-model',
+        observedState: 'ready',
+        desiredState: 'running',
+      })
+      .returning()
+
+    const prepared = await localCliWorkerBackend.prepare({ workerInstanceId: worker!.id })
+
+    expect(prepared.prepared).toBe(true)
+    expect(prepared.state).toBe('prepared')
+    expect(prepared.details?.runtimeBase).toBe('opencode')
+    expect(prepared.details?.syncConfig).toMatchObject({
+      synced: true,
+      details: expect.objectContaining({
+        source: 'agenthub-worker-contract',
+        runtimeBase: 'opencode',
+      }),
+    })
+  })
+
+  test('QwenPaw Worker backend prepare fails loudly until backend exists', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'QwenPaw Prepare Workspace',
+        goal: 'Validate QwenPaw prepare blocker',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'QwenPaw Prepare Worker',
+        role: 'Resident Worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: null,
+        roleProfile: { workerRuntimeBase: 'qwenpaw' },
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'qwenpaw',
+        modelId: 'test-model',
+        observedState: 'ready',
+        desiredState: 'running',
+      })
+      .returning()
+
+    const prepared = await localCliWorkerBackend.prepare({ workerInstanceId: worker!.id })
+
+    expect(prepared.prepared).toBe(false)
+    expect(prepared.state).toBe('resident-backend-not-implemented')
+    expect(prepared.message).toContain('QwenPaw Worker runtime is recognized')
+    expect(prepared.details?.fallback).toContain('No Codex')
+  })
+
   test('controller apply creates Worker resources from manifest objects', async () => {
     const [workspace] = await db
       .insert(workspaces)
@@ -353,6 +443,9 @@ describe('Controller Plane', () => {
     const api = new ControllerApi({
       workerBackend: {
         id: 'apply-test-worker-backend',
+        async prepare(input) {
+          return { workerInstanceId: input.workerInstanceId, prepared: true, state: 'prepared' }
+        },
         async ensureRuntime(input) {
           return { workerInstanceId: input.workerInstanceId, ready: true, state: 'ready' }
         },
@@ -503,6 +596,9 @@ describe('Controller Plane', () => {
     const api = new ControllerApi({
       workerBackend: {
         id: 'apply-approval-worker-backend',
+        async prepare(input) {
+          return { workerInstanceId: input.workerInstanceId, prepared: true, state: 'prepared' }
+        },
         async ensureRuntime(input) {
           return { workerInstanceId: input.workerInstanceId, ready: true, state: 'ready' }
         },
@@ -892,6 +988,9 @@ describe('Controller Plane', () => {
     const api = new ControllerApi({
       workerBackend: {
         id: 'test-worker-backend',
+        async prepare(input) {
+          return { workerInstanceId: input.workerInstanceId, prepared: true, state: 'prepared' }
+        },
         async ensureRuntime(input) {
           return {
             workerInstanceId: input.workerInstanceId,

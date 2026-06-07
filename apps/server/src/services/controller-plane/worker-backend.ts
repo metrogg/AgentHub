@@ -42,6 +42,19 @@ export interface WorkerBackendEnsureInput {
   context: WorkerReconcileContext
 }
 
+export interface WorkerBackendPrepareInput {
+  workerInstanceId: string
+  context?: WorkerReconcileContext | null
+}
+
+export interface WorkerBackendPrepareResult {
+  workerInstanceId: string
+  prepared: boolean
+  state?: string | null
+  message?: string | null
+  details?: Record<string, unknown>
+}
+
 export interface WorkerBackendStartInput {
   roomId: string
   ownerId: string
@@ -57,6 +70,7 @@ export interface WorkerBackendStopInput {
 
 export interface WorkerBackend {
   readonly id: string
+  prepare(input: WorkerBackendPrepareInput): Promise<WorkerBackendPrepareResult>
   ensureRuntime(input: WorkerBackendEnsureInput): Promise<WorkerBackendInspectResult>
   start(input: WorkerBackendStartInput): Promise<{ started: boolean; details?: Record<string, unknown> }>
   stop(input: WorkerBackendStopInput): Promise<{ stopped: boolean; details?: Record<string, unknown> }>
@@ -67,6 +81,63 @@ export interface WorkerBackend {
 
 export class LocalCliWorkerBackend implements WorkerBackend {
   readonly id = 'local-cli'
+
+  async prepare(input: WorkerBackendPrepareInput): Promise<WorkerBackendPrepareResult> {
+    const [worker] = await db
+      .select()
+      .from(workerInstances)
+      .where(eq(workerInstances.id, input.workerInstanceId))
+      .limit(1)
+    if (!worker) {
+      return {
+        workerInstanceId: input.workerInstanceId,
+        prepared: false,
+        state: 'missing',
+        message: 'WorkerInstance not found.',
+      }
+    }
+    if (isQwenPawRuntimeBase(worker.runtimeBase)) {
+      return {
+        workerInstanceId: worker.id,
+        prepared: false,
+        state: 'resident-backend-not-implemented',
+        message: 'QwenPaw Worker runtime is recognized, but its prepare/config backend is not implemented yet.',
+        details: qwenPawWorkerBackendBlocked(worker.id, worker.runtimeBase).details,
+      }
+    }
+    if (worker.runtimeBase === 'openclaw' && !openclawLauncher.isAvailable()) {
+      return {
+        workerInstanceId: worker.id,
+        prepared: false,
+        state: 'resident-backend-required',
+        message:
+          'OpenClaw Worker prepare requires OpenClaw locally, or AGENTHUB_WORKER_BACKEND=docker / AGENTHUB_CONTAINER_RUNTIME=docker.',
+      }
+    }
+    if (input.context) {
+      const reconciled = await workerController.reconcile(worker.id, input.context)
+      if (reconciled.error) {
+        return {
+          workerInstanceId: worker.id,
+          prepared: false,
+          state: reconciled.phase,
+          message: reconciled.error,
+          details: { reconcile: reconciled },
+        }
+      }
+    }
+    const synced = await this.syncConfig(worker.id)
+    return {
+      workerInstanceId: worker.id,
+      prepared: synced.synced,
+      state: synced.synced ? 'prepared' : 'prepare-failed',
+      message: synced.synced ? 'Worker runtime config and contract are prepared.' : 'Worker runtime prepare failed.',
+      details: {
+        runtimeBase: worker.runtimeBase,
+        syncConfig: synced,
+      },
+    }
+  }
 
   async ensureRuntime(input: WorkerBackendEnsureInput): Promise<WorkerBackendInspectResult> {
     const [worker] = await db
