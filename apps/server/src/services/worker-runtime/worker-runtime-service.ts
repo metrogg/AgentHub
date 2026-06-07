@@ -202,7 +202,6 @@ export class WorkerRuntimeService {
       .limit(1)
     if (!agentRow) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
 
-    // Apply safetyMode overrides if provided
     const agent = input.overrides
       ? {
           ...agentRow,
@@ -222,7 +221,9 @@ export class WorkerRuntimeService {
     const prompt = input.prompt?.trim() || latestHumanMessageBody(timeline) || room.title
 
     const runtime =
-      workerInstance?.runtimeBase === 'openclaw' || workerInstance?.runtimeBase === 'copaw' || workerInstance?.runtimeBase === 'qwenpaw'
+      workerInstance?.runtimeBase === 'openclaw' ||
+      workerInstance?.runtimeBase === 'copaw' ||
+      workerInstance?.runtimeBase === 'qwenpaw'
         ? new ResidentRoomWorkerRuntime({
             runtimeType: workerInstance.runtimeBase === 'openclaw' ? 'openclaw' : 'qwenpaw',
             workerParticipantId: workerParticipant.id,
@@ -242,8 +243,6 @@ export class WorkerRuntimeService {
     this.runningControllers.set(room.id, abortController)
 
     const appendedEventIds: string[] = []
-    let latestCodeAgentRun: CodeAgentRunMetadata | null = null
-    let lastCodeAgentProgressEventAt = 0
     try {
       const startedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
@@ -271,7 +270,7 @@ export class WorkerRuntimeService {
           sessionId: room.sessionId ?? room.id,
           workspaceId: room.workspaceId ?? agent.workspaceId,
           workspaceAgentId: agent.id,
-          workerInstanceId: null,
+          workerInstanceId: workerParticipant.workerInstanceId ?? null,
           taskId: null,
           taskThreadId: null,
           runId: null,
@@ -316,13 +315,9 @@ export class WorkerRuntimeService {
           },
         })
         appendedEventIds.push(timelineEvent.id)
-        if (event.type === 'progress' && isThrottleableCodeAgentProgress(eventCodeAgentRun, event.message)) {
-          lastCodeAgentProgressEventAt = Date.now()
-        }
         next = await iterator.next()
       }
 
-      // Final result event
       const result = next.value
       const resultMetadata = asRecordOrNull(result.metadata)
       const finalCodeAgentRun = finalizeCodeAgentRunMetadata({
@@ -338,18 +333,11 @@ export class WorkerRuntimeService {
         type: hasResultMessage && result.status === 'completed' ? 'worker.message' : 'task.progress',
         body: result.message ?? '',
         metadata: {
-          ...(resultMetadata ?? {}),
           kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
           codeAgentRun: finalCodeAgentRun,
           workspaceAgentId: agent.id,
-          runtimeType:
-            readCodeAgentRuntime(resultMetadata) ??
-            finalCodeAgentRun?.runtime ??
-            codeAgentRuntime ??
-            runtime.runtimeType,
-          workerRuntimeType: runtime.runtimeType,
-          codeAgentType: agent.codeAgentType ?? null,
+          runtimeType: runtime.runtimeType,
           artifacts: result.artifacts ?? [],
           ...(!hasResultMessage || result.status !== 'completed' ? { hiddenFromChat: true } : {}),
         },
