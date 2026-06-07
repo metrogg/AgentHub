@@ -361,11 +361,27 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         },
       }
     }
+    if (!worker) {
+      return {
+        synced: false,
+        details: {
+          workerInstanceId,
+          error: 'WorkerInstance not found.',
+        },
+      }
+    }
     return {
       synced: true,
       details: {
         workerInstanceId,
-        source: 'worker-workspace',
+        source: 'agenthub-worker-contract',
+        runtimeBase: worker.runtimeBase,
+        contractRoot: (await ensureWorkerAgentContractFromController({
+          workerInstanceId: worker.id,
+          runtimeBase: worker.runtimeBase,
+          controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+          sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+        })).root,
       },
     }
   }

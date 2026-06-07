@@ -281,12 +281,21 @@ export class DockerWorkerBackend implements WorkerBackend {
   }
 
   async syncConfig(workerInstanceId: string): Promise<{ synced: boolean; details?: Record<string, unknown> }> {
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+    if (worker?.runtimeBase !== 'openclaw') return localCliWorkerBackend.syncConfig(workerInstanceId)
+    const contract = await ensureWorkerAgentContractFromController({
+      workerInstanceId,
+      runtimeBase: worker.runtimeBase,
+      controllerUrl: containerControllerUrl(),
+      sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+    })
     return {
       synced: true,
       details: {
         workerInstanceId,
         workspaceDir: getWorkerWorkspaceDir(workerInstanceId),
         configPath: `${getWorkerWorkspaceDir(workerInstanceId)}/openclaw.json`,
+        contractRoot: contract.root,
       },
     }
   }

@@ -25,6 +25,7 @@ const {
   condition,
   controllerReconcileQueue,
   describeControllerPlane,
+  localCliWorkerBackend,
   runResidentWorkerSelfTest,
   resourceKey,
   resourceRef,
@@ -233,6 +234,55 @@ describe('Controller Plane', () => {
     expect(workerRuntime?.runtimeHealth.state).toBe('resident-backend-not-implemented')
     expect(workerRuntime?.runtimeHealth.message).toContain('QwenPaw Worker runtime is recognized')
     expect(workerRuntime?.runtimeHealth.details?.implemented).toBe(false)
+  })
+
+  test('bridge Worker backend syncConfig refreshes the normalized Worker contract', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Bridge SyncConfig Workspace',
+        goal: 'Validate bridge contract sync',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Bridge Sync Worker',
+        role: 'Bridge Worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        roleProfile: { workerRuntimeBase: 'opencode' },
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'opencode',
+        modelId: 'test-model',
+        observedState: 'ready',
+        desiredState: 'running',
+      })
+      .returning()
+
+    const result = await localCliWorkerBackend.syncConfig(worker!.id)
+    expect(result.synced).toBe(true)
+    expect(result.details?.source).toBe('agenthub-worker-contract')
+    expect(result.details?.runtimeBase).toBe('opencode')
+
+    const diagnostics = await describeControllerPlane()
+    const workerRuntime = diagnostics.workerRuntimes.find((item) => item.workerInstanceId === worker!.id)
+    expect(workerRuntime?.contractReady).toBe(true)
+    expect(workerRuntime?.contractFiles.soul).toBe(true)
+    expect(workerRuntime?.contractFiles.agents).toBe(true)
+    expect(workerRuntime?.contractFiles.runtime).toBe(true)
+    expect(workerRuntime?.contractFiles.state).toBe(true)
+    expect(workerRuntime?.mode).toBe('bridge')
   })
 
   test('controller apply creates Worker resources from manifest objects', async () => {
