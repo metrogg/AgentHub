@@ -34,7 +34,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type ContainerRuntimeDiagnostics, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
+import { api, friendlyErrorMessage, type ContainerRuntimeDiagnostics, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsConsoleLogsResponse, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -234,6 +234,23 @@ const themeModes = ['跟随系统', '亮色', '暗色']
 const accentOptions = ['黑色', '蓝色', '绿色', '琥珀色']
 const fontOptions = ['默认', 'Aptos', 'Microsoft YaHei UI', 'Noto Sans SC', 'LXGW WenKai', 'JetBrains Mono', 'Cascadia Mono']
 const fontSizeOptions = ['13', '14', '15', '16', '18']
+
+function formatSettingsError(error: unknown, fallback: string) {
+  return friendlyErrorMessage(error, fallback)
+}
+
+function emptySettingsConsoleLogsResponse(): SettingsConsoleLogsResponse {
+  return {
+    items: [],
+    sources: {
+      serverLogPath: '',
+      serverLogExists: false,
+      serverLogEnabled: false,
+      executionTraceCount: 0,
+      runEventCount: 0,
+    },
+  }
+}
 
 export default function SettingsPage() {
   const navigate = useNavigate()
@@ -2546,9 +2563,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               : managerRuntime.activeStatus.available
                 ? 'OpenClaw 已安装，未运行'
                 : 'OpenClaw 未就绪'
-      : managerRuntime.activeRuntimeType === 'qwenpaw'
-        ? 'QwenPaw 尚未接入'
-        : '开发占位 Manager Runtime'
+      : '开发占位 Manager Runtime'
     : '等待刷新'
   const managerRuntimeDetail = managerRuntime
     ? [
@@ -2659,14 +2674,30 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     setBusy('refresh')
     try {
       const [info, consoleLogs, matrix, controller, manager, containers] = await Promise.all([
-        api.getSettingsGeneralInfo(),
-        api.getSettingsConsoleLogs(180),
+        api.getSettingsGeneralInfo().catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'settings/general-info',
+            content: formatSettingsError(error, '基础诊断接口不可用'),
+          })
+          return null
+        }),
+        api.getSettingsConsoleLogs(180).catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'settings/console-logs',
+            content: formatSettingsError(error, '控制台日志接口不可用'),
+          })
+          return emptySettingsConsoleLogsResponse()
+        }),
         api.getMatrixDiagnostics().catch((error) => {
           appendLog({
             level: 'Warn',
             source: '前端',
             module: 'rooms/matrix/diagnostics',
-            content: error?.message || 'Matrix 诊断接口不可用',
+            content: formatSettingsError(error, 'Matrix 诊断接口不可用'),
           })
           return null
         }),
@@ -2675,7 +2706,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             level: 'Warn',
             source: '前端',
             module: 'settings/controller-plane',
-            content: error?.message || 'Controller Plane 诊断接口不可用',
+            content: formatSettingsError(error, 'Controller Plane 诊断接口不可用'),
           })
           return null
         }),
@@ -2684,7 +2715,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             level: 'Warn',
             source: '前端',
             module: 'settings/manager-runtime',
-            content: error?.message || 'Manager Runtime 诊断接口不可用',
+            content: formatSettingsError(error, 'Manager Runtime 诊断接口不可用'),
           })
           return null
         }),
@@ -2693,12 +2724,12 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             level: 'Warn',
             source: '前端',
             module: 'settings/container-runtime',
-            content: error?.message || 'Container Runtime 诊断接口不可用',
+            content: formatSettingsError(error, 'Container Runtime 诊断接口不可用'),
           })
           return null
         }),
       ])
-      setGeneralInfo(info)
+      if (info) setGeneralInfo(info)
       setMatrixDiagnostics(matrix)
       setControllerPlane(controller)
       setManagerRuntime(manager)
@@ -2709,7 +2740,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, controller=${controller?.queue.running ? 'running' : 'stopped'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}, containers=${containers?.enabled ? (containers.docker.available ? 'docker' : 'blocked') : 'disabled'}`,
+        content: `诊断刷新完成：data=${info?.storage.sizeLabel ?? 'n/a'}, debug=${info?.debug.sizeLabel ?? 'n/a'}, git=${info?.git.ok ? 'ok' : 'missing'}, python=${info?.python.ok ? 'ok' : 'missing'}, sandbox=${info?.sandbox.configuredProvider ?? 'n/a'}/${info?.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, controller=${controller?.queue.running ? 'running' : 'stopped'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}, containers=${containers?.enabled ? (containers.docker.available ? 'docker' : 'blocked') : 'disabled'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2717,9 +2748,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Error',
         source: '前端',
         module: 'settings/general-info',
-        content: error?.message || '刷新诊断信息失败',
+        content: formatSettingsError(error, '刷新诊断信息失败'),
       })
-      if (visible) showNotice(error?.message || t('操作失败'))
+      if (visible) showNotice(formatSettingsError(error, '刷新诊断信息失败'))
     } finally {
       setBusy(null)
     }
@@ -2918,6 +2949,13 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
 
   async function prepareLocalRuntime() {
     setBusy('local-runtime-prepare')
+    showNotice('正在准备本机运行环境，请稍候...')
+    appendLog({
+      level: 'Info',
+      source: '前端',
+      module: 'settings/local-runtime/prepare',
+      content: '开始准备本机运行环境：应用 Matrix 配置、启动 Tuwunel / MinIO、检查 OpenClaw runtime 并等待 Manager 健康检查。',
+    })
     try {
       const result = await api.prepareLocalRuntime()
       setMatrixDiagnostics(result.diagnostics.matrix)
@@ -2940,9 +2978,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Error',
         source: '后端',
         module: 'settings/local-runtime/prepare',
-        content: error?.message || '准备本机运行环境失败',
+        content: formatSettingsError(error, '准备本机运行环境失败'),
       })
-      showNotice(error?.message || t('操作失败'))
+      showNotice(formatSettingsError(error, '准备本机运行环境失败'))
     } finally {
       setBusy(null)
     }
@@ -3047,9 +3085,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Error',
         source: '后端',
         module: 'container-runtime/prepare-local',
-        content: error?.message || '准备本地容器运行时失败',
+        content: formatSettingsError(error, '准备本地容器运行时失败'),
       })
-      showNotice(error?.message || t('操作失败'))
+      showNotice(formatSettingsError(error, '准备本地容器运行时失败'))
     } finally {
       setBusy(null)
     }
@@ -3450,6 +3488,24 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                   </>
                 )
               })()}
+              {(() => {
+                const diagnostics = settingsManagerRuntimeDiagnostics(managerRuntime)
+                const contract = settingsAsRecord(diagnostics.contract)
+                const contractFiles = settingsAsRecord(contract?.files)
+                return (
+                  <>
+                    <InfoRow label="SOUL" value={diagnostics.managerPersonaReady === true ? '人格文件就绪' : 'SOUL.md 未完整'} />
+                    <InfoRow label="AGENTS" value={contract?.ready === true ? '协作上下文已生成' : 'AGENTS.md / contract 未完整'} />
+                    <InfoRow label="skills" value={diagnostics.agenthubSkillLoaded === true ? '已注入 agenthub-controller' : '未检测到 Manager skill'} />
+                    <InfoRow label="runtime manifest" value={contractFiles?.runtimeManifest === true ? '已生成' : '缺失'} />
+                    <InfoRow label="workers registry" value={contractFiles?.workerRegistry === true ? '已生成' : '缺失'} />
+                    <InfoRow label="teams registry" value={contractFiles?.teamRegistry === true ? '已生成' : '缺失'} />
+                    <InfoRow label="humans registry" value={contractFiles?.humanRegistry === true ? '已生成' : '缺失'} />
+                    <InfoRow label="state / rooms" value={contractFiles?.state === true && contractFiles?.rooms === true ? '已生成' : '缺失'} />
+                    <InfoRow label="heartbeat" value={contractFiles?.heartbeat === true ? '已生成' : '缺失'} />
+                  </>
+                )
+              })()}
               <InfoRow label="当前主脑" value={managerRuntime.activeRuntimeType} />
               <InfoRow label="配置来源" value={managerRuntime.configuredRuntimeType} />
               <InfoRow
@@ -3511,7 +3567,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             </div>
 
             <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-              OpenClaw 优先作为 Manager / Team Leader runtime，也可以作为 resident Worker 基座。检测到 OpenClaw CLI 只代表可管理生命周期；Worker 侧需要 Docker resident runtime 或等价的常驻后端来监听 Matrix Room。
+              OpenClaw 是 resident runtime，OpenCode / Claude Code / Codex / Gemini 是 bridge runtime。它们都必须读取同一份 SOUL / AGENTS / skills / runtime manifest / state / rooms / tasks contract，只是 adapter 不同。
             </div>
           </div>
         )}
@@ -3833,7 +3889,7 @@ function WorkerRuntimeDiagnosticRow({
     ? 'AgentHub bridge'
     : worker.mode === 'resident-openclaw'
       ? 'OpenClaw resident'
-      : 'QwenPaw resident'
+      : 'resident worker'
   const runtimeDetail = [
     runtimeHealth.inspectedBy,
     runtimeHealth.state,

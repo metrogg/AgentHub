@@ -186,11 +186,30 @@ export class ControllerApi {
 
   async createRun(input: {
     workspaceId: string
-    groupSessionId: string
+    groupSessionId?: string | null
     goal: string
     actor?: { id?: string | null; name?: string | null } | null
   }) {
-    return runController.start(input)
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, input.workspaceId))
+      .limit(1)
+    if (!workspace) throw new Error(`Workspace ${input.workspaceId} not found.`)
+
+    const groupSession = input.groupSessionId
+      ? await this.loadWorkspaceGroupSession(input.groupSessionId, input.workspaceId)
+      : await ensureGroupSession(input.workspaceId, workspace.ownerId)
+    if (!groupSession) {
+      throw new Error(`Group session ${input.groupSessionId} not found in workspace ${input.workspaceId}.`)
+    }
+
+    return runController.start({
+      workspaceId: input.workspaceId,
+      groupSessionId: groupSession.id,
+      goal: input.goal,
+      actor: input.actor ?? null,
+    })
   }
 
   async listRuns(workspaceId: string) {

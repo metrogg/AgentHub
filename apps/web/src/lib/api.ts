@@ -664,7 +664,101 @@ export interface ControllerPlaneDiagnostics {
     managerOwns: string[]
     uiReadsFrom: string[]
   }
+  managerRuntime: ControllerPlaneManagerRuntimeDiagnostics | null
   workerRuntimes: WorkerRuntimeDiagnostic[]
+}
+
+export interface ControllerPlaneManagerRuntimeDiagnostics {
+  configuredRuntimeType: 'openclaw' | 'qwenpaw'
+  activeRuntimeType: 'openclaw' | 'qwenpaw'
+  availableProviders: Array<{
+    type: 'openclaw' | 'qwenpaw'
+    available: boolean
+    running: boolean
+    error: string | null
+  }>
+  status: {
+    available: boolean
+    connectionMode: 'external-endpoint' | 'managed-process' | 'managed-docker' | 'unavailable' | string
+    running: boolean
+    syncReady: boolean
+    endpoint: string | null
+    stepEndpoint: string | null
+    healthEndpoint: string | null
+    error: string | null
+    workspace: string
+    configPath: string | null
+    binaryPath: string | null
+    startedAt: string | null
+    uptime: number | null
+  }
+  health: {
+    healthy: boolean
+    latencyMs?: number
+    error?: string
+  } | null
+  contract: {
+    root: string
+    runtimePath: string
+    runtimeManifestPath: string
+    runtimeSpecificConfigPath: string
+    soulPath: string
+    agentsPath: string
+    toolsPath: string
+    heartbeatPath: string
+    skillsDir: string
+    memoryDir: string
+    workerRegistryPath: string
+    teamRegistryPath: string
+    humanRegistryPath: string
+    statePath: string
+    roomsPath: string
+    logsDir: string
+    agentDir: string
+    ready: boolean
+    files: {
+      runtime: boolean
+      runtimeManifest: boolean
+      runtimeSpecificConfig: boolean
+      soul: boolean
+      agents: boolean
+      tools: boolean
+      heartbeat: boolean
+      skillsDir: boolean
+      memoryDir: boolean
+      workerRegistry: boolean
+      teamRegistry: boolean
+      humanRegistry: boolean
+      state: boolean
+      rooms: boolean
+      logsDir: boolean
+    }
+  }
+  matrix: {
+    userId: string | null
+    hasAccessToken: boolean
+    lastSync: unknown
+  }
+  roomBindings: Array<{
+    roomId: string
+    title: string
+    kind: string
+    providerRoomId: string
+    configured: boolean
+    sessionKey: string
+    managerParticipantId: string | null
+    managerParticipantStatus: string | null
+    managerParticipantUserId: string | null
+    boundToResidentManager: boolean
+  }>
+  controllerReachable: boolean
+  agenthubSkillLoaded: boolean
+  managerPersonaReady: boolean
+  matrixJoinedRooms: number
+  lastManagerReplyAt: string | null
+  lastManagerReplyPreview: string | null
+  lastManagerStatusKind: string | null
+  expectedResidentSessionKeyPrefix: string
 }
 
 export interface WorkerRuntimeDiagnostic {

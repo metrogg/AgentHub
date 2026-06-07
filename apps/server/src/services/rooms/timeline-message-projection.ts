@@ -252,12 +252,17 @@ function timelineEventToMessage(input: {
   const { event, participant, room } = input
   if (!PROJECTABLE_EVENT_TYPES.has(event.type)) return null
 
+  const metadata = asRecord(event.metadata)
+  if (metadata.hiddenFromChat === true) return null
+  const kind = asString(metadata.kind)
+  if (kind?.startsWith('manager.status.')) return null
+  if (kind === 'manager.dispatch.diagnostic') return null
+
   const content = visibleBodyForEvent(event)
   if (!content.trim()) return null
 
   const senderType = senderTypeFromTimeline(event)
   const senderName = displayNameForEvent(event, participant)
-  const metadata = asRecord(event.metadata)
   return {
     id: `room:${event.id}`,
     sessionId: input.sessionId,
@@ -313,6 +318,9 @@ function displayNameForEvent(event: TimelineEventRow, participant?: ParticipantR
 function visibleBodyForEvent(event: TimelineEventRow) {
   if (event.body.trim()) return event.body
   const metadata = asRecord(event.metadata)
+  if (metadata.hiddenFromChat === true) return ''
+  if (typeof metadata.kind === 'string' && metadata.kind.startsWith('manager.status.')) return ''
+  if (metadata.kind === 'manager.dispatch.diagnostic') return ''
   if (event.type === 'approval.requested' && metadata.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
   }

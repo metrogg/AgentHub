@@ -44,6 +44,102 @@ Human / Manager / Worker 都是 Room participant
 - `heartbeat`: runtime 心跳和健康状态。
 - `contract`: `shared/tasks/{taskId}/spec.md / plan.md / result.md / artifacts/`。
 
+## 对等 contract 清单
+
+这一层是 HiClaw 风格“看起来不同，底层对等”的关键。AgentHub 以后不再把 OpenClaw、QwenPaw、Claude Code、OpenCode、Codex、Gemini 当成零散工具，而是当成不同 adapter 下的同一类 Agent Runtime Base。
+
+### SOUL / AGENTS / Skills / Registry / State
+
+- `SOUL.md` 不是装饰文案，而是长期人格和行为边界。它至少要说明：我是谁、我负责什么、不负责什么、和人类怎么协作、什么时候请求确认、什么时候拒绝危险动作。
+- `AGENTS.md` 不是静态说明书，而是 Controller 每次 reconcile 都要注入的当前协作上下文。它必须带上：当前 Room、当前任务、shared task 目录、Controller API、Matrix identity、runtime base、model binding、sandbox、stop / approve / deny 规则、当前 room binding 和 artifact 输出规则。
+- `skills/*/SKILL.md` 是 Manager 的真实可执行能力面。Manager 先理解意图，再选择 skill，再由 skill 调 Controller API；不能只在聊天里“说我已经处理了”。
+- `workers-registry.json / teams-registry.json / humans-registry.json` 是 Manager 的世界镜像。它们从 Controller 同步，不替代 Controller，但 Manager 必须读它们来做成员、能力、健康和限制判断。
+- `state.json / rooms.json / tasks.json` 是 runtime 本地镜像。它们记录 heartbeat、room binding、active task、last error、reconcile stage 和最近一次同步点，便于 resident runtime、bridge runtime、设置页和 Manager 用同一套事实沟通。
+
+### 运行时 contract 应该长什么样
+
+AgentHub 这里要学的不是某一段 prompt，而是整套文件化 contract：
+
+- `SOUL.md`：人格、职责边界、协作风格、确认策略、风险拒绝边界。
+- `AGENTS.md`：Controller 每次 reconcile 注入的当前协作上下文。
+- `skills/`：Manager 真正可执行的能力目录，按 `SKILL.md` 组织。
+- `runtime-manifest.json`：跨基座统一 manifest，说明 runtime 扮演什么角色。
+- `runtime.json`：当前 runtime family/base/mode、监听所有者、模型绑定、沙箱、注入点。
+- `workers-registry.json / teams-registry.json / humans-registry.json`：Manager 的世界镜像。
+- `state.json / rooms.json / tasks.json`：runtime 本地镜像，记录 heartbeat、room binding、active task、last error 和最近 reconcile。
+
+这套 contract 的核心意义是：不同基座可以不同，但 `identity / workspace / persona / operating rules / skills / heartbeat / task contract` 必须对齐。OpenClaw、QwenPaw、Claude Code、OpenCode、Codex、Gemini 都必须能读懂同一份 contract，只是 adapter 不同。
+
+### 双工作区 / 双运行时
+
+- Manager workspace 和 Worker workspace 结构要文件化、标准化、可投影、可审计。
+- OpenClaw / QwenPaw 是 resident runtime，能自己常驻监听 Matrix。
+- Claude Code / OpenCode / Codex / Gemini 是 bridge runtime，AgentHub 托管执行，但它们仍然要吃同一份 contract。
+- 两类 runtime 的差异只允许落在 adapter，不允许落在“能不能被 Room / Controller 理解”这件事上。
+- Manager 可以是 OpenClaw 或 QwenPaw，Worker 也可以是 OpenClaw；但在 UI 和诊断里必须区分 `Manager runtime` 和 `Worker runtime`，不能再把它们混成一个 `code-agent` 选项。
+
+### 五阶段 Reconcile
+
+#### Worker Reconcile 5 阶段
+
+1. `EnsureIdentityAndWorkspace`
+   - 确保 Matrix identity、Room participant、workspace 目录、SOUL/AGENTS/skills/state。
+2. `EnsureRuntimeConfig`
+   - 生成对应基座配置：OpenClaw / QwenPaw / Claude Code / OpenCode / Codex / Gemini。
+   - 注入 Controller API、Matrix、SharedStorage、model binding 和 sandbox。
+3. `EnsureRuntimeReady`
+   - resident runtime 负责启动或确认 gateway / listener。
+   - bridge runtime 负责确认 CLI 安装、模型绑定、auth/config 和可执行性。
+4. `ObserveHealthAndHeartbeat`
+   - 读取 runtime health、heartbeat、lastSync、lastTask、lastError。
+5. `RecoverOrRetire`
+   - 对 stale lease、失败 worker、睡眠 worker、重启恢复、用户可见诊断做收口。
+
+#### Member Reconcile 5 阶段
+
+用于“创建员工并入群”和“补员确认”：
+
+1. `ResolveMemberSpec`
+   - 从 Manager proposal、专家模板、用户选择中得到 name / role / runtime / model / skills / sandbox。
+   - 缺 runtime 或 model 时必须请求确认，不能默认 Codex。
+2. `ApplyWorkspaceAgent`
+   - 创建或更新 `workspace_agents`。
+3. `ApplyWorkerInstance`
+   - 创建或更新 `worker_instances`，绑定 runtime base 和 model。
+   - 先准备 `SOUL.md / AGENTS.md / skills / runtime.json / state.json / rooms.json / tasks.json`，不在创建阶段强行假装 runtime 已经跑起来。
+4. `JoinRooms`
+   - 加入 group room、direct room、必要 task room，确保 Matrix membership。
+5. `AnnounceAndObserve`
+   - 入群后再做一次 room-aware prepare，把最新 Matrix room binding 注入 Worker contract。
+   - Manager 在 room 中自然介绍成员已加入，Worker 进入 listening / ready 后可自我介绍。
+
+#### Manager Reconcile 5 阶段
+
+1. `EnsureManagerIdentity`
+2. `EnsureManagerWorkspace`
+3. `SyncSkillsAndRegistries`
+4. `EnsureRuntimeProcess`
+5. `ObserveRoomBindingsAndHeartbeat`
+
+### Bridge 模式
+
+- Bridge 不是低一等旁路，它只是由 AgentHub 托管执行的 runtime 形态。
+- Bridge 模式仍然必须读取同一份 `SOUL.md / AGENTS.md / runtime.json / rooms.json / tasks.json / skills/`。
+- Bridge 模式仍然必须通过 Matrix timeline 输入输出，不能绕过 Room。
+- Bridge 模式仍然必须创建 `WorkerInstance / RuntimeLease / Artifact`。
+- Bridge 模式失败时，要保留真实 runtime base、model、command、cwd 和 stderr 摘要，不能伪装成“没发生过”。
+
+### 标准 workspace 语义
+
+- `SOUL.md`：seed-only 的人格底座。
+- `AGENTS.md`：reconcile 时注入的协作上下文。
+- `skills/`：Controller 同步的技能目录。
+- `runtime-manifest.json`：跨基座统一 manifest。
+- `*.worker.json` / `*.manager.json`：面向具体基座的 adapter manifest。
+- `rooms.json`：当前加入的 Matrix room。
+- `tasks.json`：当前任务、shared task root 和 runtime lease。
+- `state.json`：当前状态、heartbeat 和 reconcile stage。
+
 ## 必须吸收的 HiClaw 原生规范
 
 这些不是“好看的 prompt 文案”，而是 AgentHub runtime contract 的组成部分：

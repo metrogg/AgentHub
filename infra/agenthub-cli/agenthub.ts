@@ -302,9 +302,10 @@ async function cmdRun(args: string[]) {
     case 'create': {
       const workspaceId = requireFlag(f, 'workspace')
       const goal = requireFlag(f, 'goal')
+      const groupSessionId = f.session?.trim() || undefined
       const result = await api('/api/controller/runs', {
         method: 'POST',
-        body: { workspaceId, goal, groupSessionId: f.session || '' },
+        body: { workspaceId, goal, groupSessionId },
       })
       output(result, f)
       break

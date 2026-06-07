@@ -292,7 +292,7 @@ controllerRoutes.post('/runs', async (c) => {
   const run = await controllerApi.createRun({
     workspaceId: requireP(body, 'workspaceId'),
     goal: requireP(body, 'goal'),
-    groupSessionId: body.groupSessionId || '',
+    groupSessionId: typeof body.groupSessionId === 'string' && body.groupSessionId.trim() ? body.groupSessionId : null,
   })
   return c.json({ success: true, run })
 })

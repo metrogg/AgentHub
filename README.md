@@ -27,7 +27,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - **Matrix 通信主线**：新内核以 Matrix Room / timeline / participant / mention 作为协作事实源。Manager 怎么 @ Worker、Worker 怎么回应、用户怎么插话，都应该在 Room 中可见。
 - **A2A 外部互操作**：A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope；A2A 是协议，不是 Agent 类型。
 - **显式分工**：执行任务只接受 Manager / Orchestrator 的模型选择，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
-- **Agent Runtime / Agent Base 执行**：OpenClaw / QwenPaw 优先作为 Manager / Team Leader 基底；OpenClaw 也可以作为 resident Worker 基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker bridge 基底。自建 Agent 是在这些基底上配置角色、提示词、模型绑定、Skills/MCP 能力和权限。
+- **Agent Runtime / Agent Base 执行**：OpenClaw 是 Manager / Team Leader 的主基底；OpenClaw 也可以作为 resident Worker 基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker bridge 基底。自建 Agent 是在这些基底上配置角色、提示词、模型绑定、Skills/MCP 能力和权限。
 - **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；任务契约优先发布为 `shared/tasks/{taskId}/meta.json|spec.md|plan.md|result.md` 对象引用。默认 SharedStorage 是本地 filesystem object store，但 object key 语义保持 S3-compatible，后续可替换为 MinIO/S3。
 - **产物可见**：文件、网页、diff、诊断产物进入 ArtifactStore，并从主群聊、任务 Room 和产物卡稳定投影。
 - **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
@@ -66,7 +66,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡，并逐步进化为 Space / Task / Asset 工作台 |
 | 编排层 | Manager / Orchestrator 生成团队行动方案，通过任务账本调度、取消、重试、验收和汇总 |
 | 通信层 | Matrix 承载 Room / timeline / participant / mention，A2A 只保留为外部互操作或可选任务语义 envelope |
-| 执行层 | OpenClaw / QwenPaw 为 Manager / Team Leader 优先基底；OpenClaw 可作为 resident Worker；Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Worker bridge 基底；普通内部 LLM 只作非核心 fallback |
+| 执行层 | OpenClaw 为 Manager / Team Leader 主基底；OpenClaw 可作为 resident Worker；Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Worker bridge 基底；普通内部 LLM 只作非核心 fallback |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
 | 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
 | 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + filesystem-first ArtifactStore / SharedStorage；MinIO/S3-compatible adapter 后续可替换接入 |
@@ -76,10 +76,10 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 当前配置真相也分三层：
 
 - `模型管理`：模型目录、双端点、密钥、模型测试。
-- `Agent Runtimes / Agent Bases`：Claude Code、OpenCode、Codex、Gemini、OpenClaw、QwenPaw 等基底的安装状态、原生 auth/config、平台级诊断。旧界面里若仍出现 `Coding Tools`，它只是历史命名，不是架构概念。
+- `Agent Runtimes / Agent Bases`：Claude Code、OpenCode、Codex、Gemini、OpenClaw 等基底的安装状态、原生 auth/config、平台级诊断。旧界面里若仍出现 `Coding Tools`，它只是历史命名，不是架构概念。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、临时诊断或非核心 fallback。Manager / Orchestrator 的目标主路径必须接 OpenClaw / QwenPaw 这类真实 Agent runtime，不能默认回退到内部 LLM 主脑。
+另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、临时诊断或非核心 fallback。Manager / Orchestrator 的目标主路径必须接 OpenClaw 这类真实 Agent runtime，不能默认回退到内部 LLM 主脑。
 
 ## 技术栈
 
@@ -93,7 +93,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 状态 | Zustand |
 | 数据库 | SQLite + Drizzle ORM |
 | LLM | OpenAI-compatible + Anthropic-compatible streaming client，仅用于动态提示、临时诊断和非核心 fallback |
-| Agent Runtime / Agent Base | Manager: OpenClaw / QwenPaw；Worker: OpenClaw resident Worker、Codex CLI / Claude Code / OpenCode / Gemini CLI bridge，后续可补 QwenPaw Worker |
+| Agent Runtime / Agent Base | Manager: OpenClaw；Worker: OpenClaw resident Worker、Codex CLI / Claude Code / OpenCode / Gemini CLI bridge |
 | Agent 通信 | 真实 Matrix / Tuwunel Room timeline 是目标内部事实源；test room adapter 只用于自动化测试；A2A 降为外部互操作 |
 
 ## 项目结构

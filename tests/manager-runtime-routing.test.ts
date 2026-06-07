@@ -53,19 +53,7 @@ describe('ManagerRuntime primary room routing', () => {
 
     const fakeRuntime = new FakeManagerRuntime([
       { type: 'thinking', content: '我先判断这是普通群聊，不创建任务。' },
-      {
-        type: 'tool_call',
-        call: { id: 'call_1', name: 'controller.workers.list', arguments: {} },
-      },
-      {
-        type: 'tool_result',
-        result: {
-          callId: 'call_1',
-          toolName: 'controller.workers.list',
-          success: true,
-          output: 'No workers found.',
-        },
-      },
+      { type: 'room_message', content: '我在，已看到你的消息。', messageType: 'reply' },
     ])
     const service = new ManagerRuntimeService(fakeRuntime)
 
@@ -82,12 +70,12 @@ describe('ManagerRuntime primary room routing', () => {
     const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
     const kinds = events.map((event) => event.metadata?.kind)
     expect(kinds).toContain('manager-runtime.thinking')
-    expect(kinds).toContain('manager-runtime.tool_call')
-    expect(kinds).toContain('manager-runtime.tool_result')
     expect(kinds).toContain('manager-runtime.completed')
-    expect(kinds).toContain('manager.action')
-    expect(events.at(-1)?.type).toBe('manager.message')
-    expect(events.at(-1)?.metadata?.managerRuntimeType).toBe('openclaw')
+    expect(kinds).toContain('manager-runtime.room_message')
+    expect(events.some((event) => event.type === 'manager.message' && event.metadata?.kind === 'manager-runtime.room_message')).toBe(true)
+    expect(events.at(-1)?.type).toBe('system')
+    expect(events.at(-1)?.metadata?.hiddenFromChat).toBe(true)
+    expect(events.some((event) => event.metadata?.kind === 'manager.action')).toBe(false)
   })
 
   test('ManagerRuntime unsupported actions are visible but not converted', async () => {

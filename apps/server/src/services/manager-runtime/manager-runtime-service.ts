@@ -69,6 +69,7 @@ export class ManagerRuntimeService {
     const activeRuntime = roomRuntime ?? runtime
     const workers = await listRoomWorkerCandidates(room.id)
     const appendedEventIds: string[] = []
+    let sawVisibleRoomMessage = false
 
     let step: ManagerStepResult
     try {
@@ -99,6 +100,9 @@ export class ManagerRuntimeService {
           input.signal,
         ),
         async (event) => {
+          if (event.type === 'room_message' && event.messageType !== 'status') {
+            sawVisibleRoomMessage = true
+          }
           const appended = await appendManagerRuntimeEvent(room.id, event, activeRuntime.runtimeType, input.source)
           if (appended) appendedEventIds.push(appended.id)
         },
@@ -118,6 +122,9 @@ export class ManagerRuntimeService {
       (!allowedActionTypes || actions.every((action) => allowedActionTypes.has(action.type)))
     if (shouldAppendActions) {
       for (const action of actions) {
+        if (sawVisibleRoomMessage && (action.type === 'reply' || action.type === 'clarify')) {
+          continue
+        }
         const event = await appendManagerAction(room.id, action, activeRuntime.runtimeType)
         if (event) appendedEventIds.push(event.id)
       }
@@ -176,15 +183,20 @@ async function appendManagerRuntimeEvent(
     kind: `manager-runtime.${event.type}`,
     runtimeType,
     source,
+    hiddenFromChat: true,
+    skipAutoDispatch: true,
   }
   if (event.type === 'thinking') {
     return roomService.appendTimelineEvent({
       roomId,
       senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
-      type: 'manager.message',
+      type: 'system',
       body: event.content,
-      metadata: metadataBase,
+      metadata: {
+        ...metadataBase,
+        uiPresentation: 'room-status',
+      },
     })
   }
   if (event.type === 'tool_call') {
@@ -196,6 +208,7 @@ async function appendManagerRuntimeEvent(
       body: `Manager 调用工具：${event.call.name}`,
       metadata: {
         ...metadataBase,
+        uiPresentation: 'room-status',
         call: event.call,
       },
     })
@@ -209,6 +222,7 @@ async function appendManagerRuntimeEvent(
       body: event.result.output,
       metadata: {
         ...metadataBase,
+        uiPresentation: 'room-status',
         result: event.result,
       },
     })
@@ -218,10 +232,12 @@ async function appendManagerRuntimeEvent(
       roomId,
       senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
-      type: 'manager.message',
+      type: event.messageType === 'status' ? 'system' : 'manager.message',
       body: event.content,
       metadata: {
         ...metadataBase,
+        hiddenFromChat: event.messageType === 'status',
+        uiPresentation: event.messageType === 'status' ? 'room-status' : 'message',
         messageType: event.messageType,
       },
     })
@@ -235,6 +251,7 @@ async function appendManagerRuntimeEvent(
       body: event.taskTitle,
       metadata: {
         ...metadataBase,
+        uiPresentation: 'room-status',
         targetWorkerId: event.targetWorkerId,
         taskTitle: event.taskTitle,
         taskDescription: event.taskDescription,
@@ -250,6 +267,7 @@ async function appendManagerRuntimeEvent(
       body: 'Manager 提出了补员建议。',
       metadata: {
         ...metadataBase,
+        uiPresentation: 'room-status',
         proposals: event.proposals,
       },
     })
@@ -262,7 +280,9 @@ async function appendManagerRuntimeEvent(
     body: `Manager Runtime completed with ${event.actions.length} action(s).`,
     metadata: {
       ...metadataBase,
+      uiPresentation: 'room-status',
       actions: event.actions,
+      hiddenFromChat: true,
     },
   })
 }
@@ -284,6 +304,9 @@ async function appendManagerRuntimeError(
       kind: 'manager-runtime.error',
       runtimeType,
       source,
+      hiddenFromChat: true,
+      skipAutoDispatch: true,
+      uiPresentation: 'room-status',
     },
   })
 }
@@ -338,6 +361,9 @@ async function appendUnsupportedAction(
       runtimeType,
       source,
       action,
+      hiddenFromChat: true,
+      skipAutoDispatch: true,
+      uiPresentation: 'room-status',
     },
   })
 }

@@ -983,7 +983,7 @@ function managerRuntimeStatusMessage(status: {
     return status.error || '未检测到 OpenClaw。请安装（bash infra/setup-openclaw.sh）或检查 PATH。'
   }
   if (status.runtimeType === 'qwenpaw') {
-    return status.error || 'QwenPaw Manager runtime 尚未接入。'
+    return status.error || 'QwenPaw 仅保留兼容占位，不是当前产品主路径。'
   }
   return '未知的 Manager runtime 配置。请检查 AGENTHUB_MANAGER_RUNTIME 环境变量。'
 }

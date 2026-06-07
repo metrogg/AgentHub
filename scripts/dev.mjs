@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:net'
 import { readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { cleanupStaleDevProcesses, root } from './dev-processes.mjs'
@@ -11,9 +12,15 @@ await cleanupStaleDevProcesses()
 await rm(portFile, { force: true }).catch(() => undefined)
 await run('bun', ['run', 'db:migrate'])
 
+const webPort = await findAvailablePort(5644, 5700)
+if (!webPort) {
+  shutdown(1)
+  throw new Error('No available web port found in 5644-5700')
+}
+
 const server = spawnManaged('bun', ['--watch', 'apps/server/src/index.ts'], 'server', {
   AGENTHUB_PORT_FILE: portFile,
-  CORS_ORIGIN: 'http://127.0.0.1:5173,http://localhost:5173',
+  CORS_ORIGIN: `http://127.0.0.1:${webPort},http://localhost:${webPort}`,
   NODE_NO_WARNINGS: '1',
   PORT: '8000',
   PROJECT_ROOT: root,
@@ -24,15 +31,16 @@ console.warn(`[dev] AgentHub server ready on http://127.0.0.1:${serverPort}`)
 
 spawnManaged(
   'bun',
-  ['--filter', '@agenthub/web', 'dev', '--host', '127.0.0.1', '--port', '5173', '--strictPort'],
+  ['--filter', '@agenthub/web', 'dev', '--host', '127.0.0.1', '--port', String(webPort)],
   'web',
   {
     VITE_PROXY_TARGET: `http://127.0.0.1:${serverPort}`,
     VITE_WS_PROXY_TARGET: `ws://127.0.0.1:${serverPort}`,
+    CORS_ORIGIN: `http://127.0.0.1:${webPort},http://localhost:${webPort}`,
   },
 )
 
-console.warn('[dev] AgentHub web ready target: http://127.0.0.1:5173/')
+console.warn(`[dev] AgentHub web ready target: http://127.0.0.1:${webPort}/`)
 await new Promise(() => undefined)
 
 function spawnManaged(command, args, name, envPatch = {}) {
@@ -105,6 +113,31 @@ async function healthCheck(port) {
 
 function sleep(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
+}
+
+async function findAvailablePort(start, end) {
+  for (let port = start; port <= end; port += 1) {
+    if (await canListen(port)) return port
+  }
+  return null
+}
+
+function canListen(port) {
+  return new Promise((resolvePromise) => {
+    const server = createServer()
+    server.unref()
+    server.on('error', () => {
+      try {
+        server.close()
+      } catch {
+        // ignore
+      }
+      resolvePromise(false)
+    })
+    server.listen({ host: '127.0.0.1', port }, () => {
+      server.close(() => resolvePromise(true))
+    })
+  })
 }
 
 function shutdown(code = 0) {

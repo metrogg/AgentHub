@@ -9,6 +9,7 @@ import { getRuntimeServerPort } from '../../lib/runtime-server'
 import { resolveLlmRuntimeConfig } from '../llm-client'
 import { createMatrixClientFromEnv, matrixLocalpart } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
+import { resolveManagerAgentContractWorkspace } from '../agent-contract'
 import { ensureManagerAgentContractFromController } from '../agent-contract'
 import {
   containerControllerUrl,
@@ -468,12 +469,12 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     })
 
     this.process.stdout?.on('data', (data: Buffer) => {
-      for (const line of data.toString().trim().split('\n')) {
+      for (const line of decodeOpenClawLogChunk(data).trim().split('\n')) {
         if (line.trim()) logger.info({ source: 'openclaw-manager' }, line.trim())
       }
     })
     this.process.stderr?.on('data', (data: Buffer) => {
-      for (const line of data.toString().trim().split('\n')) {
+      for (const line of decodeOpenClawLogChunk(data).trim().split('\n')) {
         if (line.trim()) logger.warn({ source: 'openclaw-manager' }, line.trim())
       }
     })
@@ -648,6 +649,24 @@ async function describeOpenClawManagerDiagnostics(input: {
   const soulPath = join(input.workspace, 'SOUL.md')
   const agentsPath = join(input.workspace, 'AGENTS.md')
   const toolsPath = join(input.workspace, 'TOOLS.md')
+  const contract = resolveManagerAgentContractWorkspace('global')
+  const contractFiles = {
+    runtime: existsSync(contract.runtimePath),
+    runtimeManifest: existsSync(contract.runtimeManifestPath),
+    runtimeSpecificConfig: existsSync(input.configPath),
+    soul: existsSync(contract.soulPath),
+    agents: existsSync(contract.agentsPath),
+    tools: existsSync(contract.toolsPath),
+    heartbeat: existsSync(contract.heartbeatPath),
+    skillsDir: existsSync(contract.skillsDir),
+    memoryDir: existsSync(contract.memoryDir),
+    workerRegistry: existsSync(contract.workerRegistryPath),
+    teamRegistry: existsSync(contract.teamRegistryPath),
+    humanRegistry: existsSync(contract.humanRegistryPath),
+    state: existsSync(contract.statePath),
+    rooms: existsSync(contract.roomsPath),
+    logsDir: existsSync(contract.logsDir),
+  }
   const controllerUrl = `http://localhost:${getRuntimeServerPort() ?? Number(process.env.PORT || 3000)}`
   const controllerReachable = await probeControllerHealth(controllerUrl)
 
@@ -679,6 +698,27 @@ async function describeOpenClawManagerDiagnostics(input: {
     controllerReachable,
     matrixJoinedRooms: roomBindings.filter((room) => room.managerParticipantStatus === 'joined').length,
     roomBindings,
+    contract: {
+      root: contract.root,
+      runtimePath: contract.runtimePath,
+      runtimeManifestPath: contract.runtimeManifestPath,
+      runtimeSpecificConfigPath: input.configPath,
+      soulPath: contract.soulPath,
+      agentsPath: contract.agentsPath,
+      toolsPath: contract.toolsPath,
+      heartbeatPath: contract.heartbeatPath,
+      skillsDir: contract.skillsDir,
+      memoryDir: contract.memoryDir,
+      workerRegistryPath: contract.workerRegistryPath,
+      teamRegistryPath: contract.teamRegistryPath,
+      humanRegistryPath: contract.humanRegistryPath,
+      statePath: contract.statePath,
+      roomsPath: contract.roomsPath,
+      logsDir: contract.logsDir,
+      agentDir: contract.agentDir,
+      ready: Object.values(contractFiles).every(Boolean),
+      files: contractFiles,
+    },
     configuredMatrixRooms: input.configInspection.groupKeys,
     lastManagerReplyAt: latestReply ? new Date(latestReply.createdAt).toISOString() : null,
     lastManagerReplyPreview: latestReply?.body?.slice(0, 160) ?? null,
@@ -788,6 +828,26 @@ function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) 
     result.error = err instanceof Error ? err.message : String(err)
   }
   return result
+}
+
+function decodeOpenClawLogChunk(data: Buffer) {
+  const utf8 = data.toString('utf8')
+  if (!utf8.includes('�')) return utf8
+
+  try {
+    const Decoder = TextDecoder as unknown as new (label?: string) => TextDecoder
+    const gb18030 = new Decoder('gb18030').decode(data)
+    return scoreLogText(gb18030) >= scoreLogText(utf8) ? gb18030 : utf8
+  } catch {
+    return utf8
+  }
+}
+
+function scoreLogText(text: string) {
+  const replacement = (text.match(/\uFFFD/g) ?? []).length
+  const cjk = (text.match(/[\u4e00-\u9fff]/g) ?? []).length
+  const printable = (text.match(/[A-Za-z0-9]/g) ?? []).length
+  return cjk * 3 + printable - replacement * 10
 }
 
 function arrayOfStrings(value: unknown) {

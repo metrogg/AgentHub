@@ -24,7 +24,7 @@ The new architecture target is **AgentHub Product Shell + HiClaw-lite Open Kerne
 
 - Keep AgentHub's own product UI: group chat, task rooms, experts, task board, artifact cards, settings, trace/eval.
 - Use Matrix as the internal collaboration source of truth: Room, timeline, participant, and mention are first-class.
-- Learn Manager Runtime from HiClaw OpenClaw/QwenPaw: Manager is a real coordinator runtime, not a one-shot Planner function.
+- Learn Manager Runtime from HiClaw OpenClaw: Manager is a real coordinator runtime, not a one-shot Planner function.
 - Learn Worker Runtime from HiClaw, while keeping AgentHub's coding-agent advantage: Claude Code, OpenCode, Codex, and Gemini are core Worker bases.
 - Use local filesystem SharedStorage as the default lightweight contract store, but keep S3-compatible object key semantics so MinIO/S3 can be swapped in later.
 - Borrow lightweight implementation tactics from ClawTeam: CLI profiles/adapters, git worktree isolation, task claim locks, LeaderWatcher-style snapshot diff, profile doctor/test, and server-side board snapshots.
@@ -50,7 +50,7 @@ Before changing code, identify which layer you are working on:
 - Orchestration: Manager / Orchestrator, Manager actions, WorkLedger / dependency validation, Manager final review, approvals, cancellation, retry, resume.
 - Communication: Matrix for Room/timeline/participant/mention semantics. This is the internal collaboration source of truth, backed by a real Matrix homeserver. Local development defaults to Tuwunel; the test room adapter is only for automated tests, never a development/product fallback.
 - Protocol projection: AG-UI for frontend projections. A2A only for external interoperability or optional task semantic envelopes inside Matrix events.
-- Execution: OpenClaw / QwenPaw are preferred Manager / Team Leader bases. Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary Worker bases. Plain `llm` is not a product-path runtime; keep it only for non-core fallback.
+- Execution: OpenClaw is the preferred Manager / Team Leader base. Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary Worker bases. Plain `llm` is not a product-path runtime; keep it only for non-core fallback.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
 - Collaboration contracts: user-explicit Specs may describe scope, allowed paths, required outputs, and acceptance criteria; they must not be trigger-based scenario templates.
 - Workspace, storage, and state: the system default workspace root, Worker workdirs, filesystem-first ArtifactStore/SharedStorage, optional MinIO/S3 adapter, compatibility-only old `.agenthub/handoff`, resource events, trace events, and persisted task state.
@@ -58,10 +58,10 @@ Before changing code, identify which layer you are working on:
 Configuration truth is split deliberately:
 
 - Model Management: model catalog, endpoints, credentials, model connectivity tests.
-- Agent Runtimes / Agent Bases: Claude Code, OpenCode, Codex, Gemini, OpenClaw, QwenPaw installation status, native auth/config, and platform diagnostics only. Legacy UI may still say `Coding Tools`, but do not treat that as the architecture term.
+- Agent Runtimes / Agent Bases: Claude Code, OpenCode, Codex, Gemini, OpenClaw installation status, native auth/config, and platform diagnostics only. Legacy UI may still say `Coding Tools`, but do not treat that as the architecture term.
 - Agent Configuration: the only place allowed to choose `code agent × model × skills × sandbox`.
 
-Keep the internal default model visible and separate. It is only for welcome prompts, temporary diagnostics, and non-core fallback paths. Manager / Orchestrator should run through OpenClaw / QwenPaw-style runtime and skills, not default to an internal LLM brain.
+Keep the internal default model visible and separate. It is only for welcome prompts, temporary diagnostics, and non-core fallback paths. Manager / Orchestrator should run through OpenClaw-style runtime and skills, not default to an internal LLM brain.
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
@@ -78,7 +78,7 @@ The next architecture direction is a lightweight HiClaw-style open kernel, not m
 - DB: SQLite via `bun:sqlite` + Drizzle ORM
 - LLM: OpenAI-compatible and Anthropic-compatible streaming client
 - Agent communication: internal collaboration uses real Matrix Room/timeline semantics with Tuwunel as the local default homeserver; the in-process room adapter is test-only; A2A is external interoperability only.
-- Agent runtimes / bases: Manager: OpenClaw / QwenPaw. Workers: Codex CLI, Claude Code, OpenCode, Gemini CLI.
+- Agent runtimes / bases: Manager: OpenClaw. Workers: Codex CLI, Claude Code, OpenCode, Gemini CLI.
 - MCP, Skills, and Rules are tool/capability layers for code agents, not agent runtime types.
 
 ## Commands

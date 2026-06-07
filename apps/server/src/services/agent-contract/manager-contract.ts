@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   db,
@@ -1009,8 +1009,43 @@ function mirrorManagerAgentDir(ws: ManagerAgentContractWorkspace) {
 function copyAgentHubCli(root: string) {
   const cliSource = join(process.cwd(), 'infra', 'agenthub-cli', 'agenthub.ts')
   if (!existsSync(cliSource)) return
+  const cliSourceText = readFileSync(cliSource, 'utf8')
+  writeFileSync(join(root, 'agenthub.ts'), cliSourceText, 'utf8')
+
+  const legacyCliDst = join(root, 'agenthub')
+  if (existsSync(legacyCliDst)) {
+    try {
+      unlinkSync(legacyCliDst)
+    } catch {}
+  }
+
+  if (process.platform === 'win32') {
+    writeFileSync(
+      join(root, 'agenthub.cmd'),
+      [
+        '@echo off',
+        'setlocal',
+        'set "DIR=%~dp0"',
+        'bun "%DIR%agenthub.ts" %*',
+        '',
+      ].join('\r\n'),
+      'utf8',
+    )
+    return
+  }
+
   const cliDst = join(root, 'agenthub')
-  writeFileSync(cliDst, readFileSync(cliSource, 'utf8'), 'utf8')
+  writeFileSync(
+    cliDst,
+    [
+      '#!/usr/bin/env sh',
+      'set -e',
+      'DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)',
+      'exec bun "$DIR/agenthub.ts" "$@"',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
   try {
     chmodSync(cliDst, 0o755)
   } catch {}

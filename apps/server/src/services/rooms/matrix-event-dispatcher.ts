@@ -443,7 +443,11 @@ export class MatrixRoomEventDispatcher {
         return true
       }
 
-      if (participant.participantType === 'manager' && (room.kind === 'group' || room.kind === 'manager_dm')) {
+      if (
+        event.senderType === 'human' &&
+        participant.participantType === 'manager' &&
+        (room.kind === 'group' || room.kind === 'manager_dm')
+      ) {
         const pendingEventId = await this.appendManagerPendingStatus(room, event, 'matrix-manager-mention')
         const managerResult = await this.handlers.stepManagerRoom({
           roomId: room.id,
@@ -513,6 +517,7 @@ export class MatrixRoomEventDispatcher {
         sourceEventId: sourceEvent.id,
         sourceEventSequence: sourceEvent.sequence,
         uiPresentation: 'room-status',
+        hiddenFromChat: true,
         skipAutoDispatch: true,
       },
     })
@@ -575,7 +580,8 @@ export class MatrixRoomEventDispatcher {
         sourceEventId: sourceEvent.id,
         sourceEventSequence: sourceEvent.sequence,
         result: payload,
-        hiddenFromChat: false,
+        hiddenFromChat: true,
+        skipAutoDispatch: true,
         uiPresentation: 'room-status',
       },
     })

@@ -174,6 +174,18 @@ describe('Controller Plane', () => {
     })).rejects.toThrow(/QwenPaw Worker runtime is recognized but its WorkerBackend is not implemented yet/)
   })
 
+  test('controller diagnostics exposes manager runtime contract and manifest readiness', async () => {
+    const diagnostics = await describeControllerPlane()
+    expect(diagnostics.managerRuntime).toBeTruthy()
+    expect(diagnostics.managerRuntime?.contract.root).toBeTruthy()
+    expect(diagnostics.managerRuntime?.contract.runtimeManifestPath).toBeTruthy()
+    expect(typeof diagnostics.managerRuntime?.contract.ready).toBe('boolean')
+    expect(Array.isArray(diagnostics.managerRuntime?.availableProviders)).toBe(true)
+    expect(Array.isArray(diagnostics.managerRuntime?.roomBindings)).toBe(true)
+    expect(typeof diagnostics.managerRuntime?.managerPersonaReady).toBe('boolean')
+    expect(typeof diagnostics.managerRuntime?.agenthubSkillLoaded).toBe('boolean')
+  })
+
   test('controller diagnostics marks existing QwenPaw resident Workers as blocked until backend exists', async () => {
     const [workspace] = await db
       .insert(workspaces)
