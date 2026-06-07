@@ -31,7 +31,6 @@ export interface RoomTimelineAgUiEvent {
 }
 
 const INTERNAL_RUNTIME_CHAT_KINDS = new Set([
-  'worker-runtime.started',
   'worker-runtime.progress',
   'worker-runtime.heartbeat',
   'worker-runtime.busy',
@@ -39,9 +38,6 @@ const INTERNAL_RUNTIME_CHAT_KINDS = new Set([
   'worker-runtime.resident-assignment',
   'worker-runtime.group-mention-started',
   'worker-runtime.group-mention-dispatched',
-  'worker-runtime.waiting-for-human',
-  'worker-runtime.waiting-on-human-dependency',
-  'worker-runtime.failed',
 ])
 
 export function projectRoomTimeline(input: {
@@ -454,7 +450,6 @@ function timelineEventToMessage(
   const kind = asString(eventMetadata?.kind)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic') return null
-  if (kind && INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return null
 
   if (
     event.type !== 'human.message' &&
@@ -468,6 +463,8 @@ function timelineEventToMessage(
   ) {
     return null
   }
+
+  if (shouldHideRuntimeStatusMessage(event, room)) return null
 
   const participant = event.senderParticipantId
     ? participantsById.get(event.senderParticipantId)
@@ -585,6 +582,13 @@ function isLiveCodeAgentRunMetadataEvent(event: TimelineEvent) {
     asString(metadata?.kind) === 'worker-runtime.progress' &&
     asString(metadata?.type) === 'code-agent-run'
   )
+}
+
+function shouldHideRuntimeStatusMessage(event: TimelineEvent, room: Room) {
+  const kind = asString(asRecord(event.metadata)?.kind)
+  if (!kind) return false
+  if (INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return true
+  return room.kind === 'direct' && kind === 'worker-runtime.started'
 }
 
 function shouldAttachCodeAgentRunToMessage(

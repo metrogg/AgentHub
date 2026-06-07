@@ -19,7 +19,6 @@ const PROJECTABLE_EVENT_TYPES = new Set([
 
 const INTERNAL_RUNTIME_CHAT_KINDS = new Set([
   'worker-runtime.message',
-  'worker-runtime.started',
   'worker-runtime.progress',
   'worker-runtime.heartbeat',
   'worker-runtime.busy',
@@ -27,9 +26,6 @@ const INTERNAL_RUNTIME_CHAT_KINDS = new Set([
   'worker-runtime.resident-assignment',
   'worker-runtime.group-mention-started',
   'worker-runtime.group-mention-dispatched',
-  'worker-runtime.waiting-for-human',
-  'worker-runtime.waiting-on-human-dependency',
-  'worker-runtime.failed',
 ])
 
 export async function listSessionMessagesRoomFirst(input: {
@@ -371,7 +367,7 @@ function timelineEventToMessage(input: {
   const kind = asString(metadata.kind)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic') return null
-  if (kind && INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return null
+  if (shouldHideRuntimeStatusMessage(event, room, metadata)) return null
 
   const content = visibleBodyForEvent(event)
   if (!content.trim()) return null
@@ -497,6 +493,17 @@ function isDirectWorkerRuntimeRunningStatusEvent(
   const kind = asString(metadata.kind)
   if (kind !== 'worker-runtime.started' && kind !== 'worker-runtime.progress') return false
   return codeAgentStatusFromWorkerRuntimeEvent(event, metadata) === 'running'
+}
+
+function shouldHideRuntimeStatusMessage(
+  event: TimelineEventRow,
+  room: RoomRow,
+  metadata: Record<string, unknown>,
+) {
+  const kind = asString(metadata.kind)
+  if (!kind) return false
+  if (INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return true
+  return isDirectWorkerRuntimeRunningStatusEvent(event, room, metadata)
 }
 
 function shouldAttachCodeAgentRunToMessage(
