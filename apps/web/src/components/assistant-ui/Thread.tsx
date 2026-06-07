@@ -861,9 +861,15 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
   activity,
   onOpenTasks,
 }) => {
+  const workspace = useChatStore((state) => state.currentWorkspace)
   const runningCount = agentTabs.filter((t) => t.status === 'running').length
   const doneCount = agentTabs.filter((t) => t.status === 'done').length
   const failedCount = agentTabs.filter((t) => t.status === 'failed').length
+  const artifacts = useMemo(
+    () => collectRailFiles(taskBoard, workspace).slice(0, 3),
+    [taskBoard, workspace?.projectPath],
+  )
+  const artifactTotal = taskBoard?.tasks.reduce((count, task) => count + (task.artifacts?.length ?? 0), 0) ?? 0
   const title = taskBoard?.title || taskBoard?.goal || 'Manager 正在组织协作'
   const phaseLabel = taskBoard
     ? runStatusLabel[taskBoard.status] ?? taskBoard.status
@@ -912,6 +918,35 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
           </span>
         )}
         <span className="text-xs text-neutral-400">{agentTabs.length} 位协作者</span>
+        {artifacts.length > 0 && (
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
+            <span className="inline-flex items-center gap-1 text-xs text-neutral-500">
+              <Blocks className="h-3.5 w-3.5" />
+              过程产物
+            </span>
+            {artifacts.map((artifact) => (
+              <button
+                key={artifact.id}
+                type="button"
+                onClick={() => requestArtifactPreview(artifact)}
+                className="inline-flex h-7 max-w-[10rem] items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
+                title={artifact.path ?? artifact.url ?? artifact.title}
+              >
+                <FileText className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{artifact.title}</span>
+              </button>
+            ))}
+            {artifactTotal > artifacts.length && (
+              <button
+                type="button"
+                onClick={onOpenTasks}
+                className="inline-flex h-7 items-center rounded-full border border-neutral-200 bg-white px-2.5 text-xs text-neutral-500 transition hover:border-blue-200 hover:text-blue-700"
+              >
+                +{artifactTotal - artifacts.length}
+              </button>
+            )}
+          </div>
+        )}
         <button
           type="button"
           onClick={onOpenTasks}
@@ -6407,14 +6442,9 @@ const CodeAgentRunCard: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
 const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
   const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const detailsData = useMemo(
-    () =>
-      detailsOpen
-        ? (getCachedCodeAgentRunMetadata(data.__agenthubFullRunId) ?? data)
-        : data,
-    [data, detailsOpen],
-  )
-  const artifacts = detailsOpen ? readFlowArtifacts(detailsData.artifacts) : []
+  const fullRun = getCachedCodeAgentRunMetadata(data.__agenthubFullRunId) ?? data
+  const detailsData = useMemo(() => (detailsOpen ? fullRun : data), [data, detailsOpen, fullRun])
+  const artifacts = readFlowArtifacts(fullRun.artifacts)
   const summary = buildCodeAgentRunSummary(data)
   const warning = detailsData.warning ?? data.warning
   const diagnostics = detailsData.diagnostics
@@ -6477,22 +6507,22 @@ const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) =
             <CodeAgentProcessRows data={detailsData} />
             {diagnostics && <CodeAgentFailureNotice data={detailsData} />}
           </FlowRail>
-          {artifacts.length > 0 && (
-            <div className="mt-3">
-              <div className="mb-1.5 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-neutral-400">
-                <Blocks className="h-3.5 w-3.5" />
-                产物 · {artifacts.length}
-              </div>
-              <FlowRail>
-                {artifacts.map((item) => (
-                  <ArtifactCard key={item.id} artifact={item} />
-                ))}
-              </FlowRail>
-            </div>
-          )}
         </>
       )}
-      </div>
+      {artifacts.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1.5 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-neutral-400">
+            <Blocks className="h-3.5 w-3.5" />
+            过程产物 · {artifacts.length}
+          </div>
+          <FlowRail>
+            {artifacts.map((item) => (
+              <ArtifactCard key={item.id} artifact={item} />
+            ))}
+          </FlowRail>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -7810,8 +7840,6 @@ const AssistantActionBar: FC = () => {
     state.messages.find((message) => message.id === messageId),
   )
   const setReplyingTo = useChatStore((state) => state.setReplyingTo)
-  const regenerateMessage = useChatStore((state) => state.regenerateMessage)
-  const [regenerating, setRegenerating] = useState(false)
   const canUseMessage = Boolean(sourceMessage && messageId !== 'agenthub-thinking')
 
   function reply() {
@@ -7824,16 +7852,6 @@ const AssistantActionBar: FC = () => {
     if (!canUseMessage) return
     setReplyingTo(messageId, 'quote')
     focusComposerInput()
-  }
-
-  async function regenerate() {
-    if (messageId === 'agenthub-thinking' || regenerating) return
-    setRegenerating(true)
-    try {
-      await regenerateMessage(messageId)
-    } finally {
-      setRegenerating(false)
-    }
   }
 
   return (
@@ -7861,18 +7879,8 @@ const AssistantActionBar: FC = () => {
       >
         引用
       </MessageActionButton>
-      <MessageActionButton
-        aria-label="重新生成"
-        title="重新生成"
-        onClick={regenerate}
-        disabled={!canUseMessage || regenerating}
-        icon={<RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />}
-      >
-        重新生成
-      </MessageActionButton>
     </ActionBarPrimitive.Root>
   )
-
 }
 
 const MessageActionButton: FC<

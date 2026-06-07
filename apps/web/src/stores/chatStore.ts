@@ -2861,7 +2861,6 @@ interface ChatState {
   editMessage: (messageId: string, content: string) => Promise<void>
   resendMessage: (messageId: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
-  regenerateMessage: (messageId: string) => Promise<void>
   pinMessage: (messageId: string) => Promise<void>
   unpinMessage: (messageId: string) => Promise<void>
   addPendingAttachments: (attachments: ChatAttachment[]) => void
@@ -3356,30 +3355,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch {
       cancelledSessions.delete(sessionId)
       return null
-    }
-  },
-
-  async regenerateMessage(messageId) {
-    const sessionId = get().currentSessionId
-    if (!sessionId) return
-    cancelledSessions.delete(sessionId)
-    clearPendingStream()
-    set({
-      agentTyping: true,
-      agentActivity: null,
-      streamingMessage: null,
-      streamingCodeAgentRun: null,
-    })
-    try {
-      const result = await api.regenerateMessage(sessionId, messageId)
-      updateCachedMessages(sessionId, (messages) =>
-        messages.filter((message) => message.id !== result.removedMessageId),
-      )
-      set((s) => ({
-        messages: s.messages.filter((message) => message.id !== result.removedMessageId),
-      }))
-    } catch {
-      set({ agentTyping: false })
     }
   },
 

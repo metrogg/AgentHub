@@ -1936,10 +1936,6 @@ export const api = {
       `/messages/${sessionId}/${messageId}${data.rollback === false ? '?rollback=false' : ''}`,
       { method: 'DELETE' },
     ),
-  regenerateMessage: (sessionId: string, messageId: string) =>
-    request<{ removedMessageId: string }>(`/messages/${sessionId}/${messageId}/regenerate`, {
-      method: 'POST',
-    }),
   resendMessage: (sessionId: string, messageId: string) =>
     request<{ removedMessageIds: string[]; message?: Message }>(`/messages/${sessionId}/${messageId}/resend`, {
       method: 'POST',

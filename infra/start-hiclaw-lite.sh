@@ -32,10 +32,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log_info() { echo -e "${BLUE}[INFO]${NC}  $1"; }
-log_ok() { echo -e "${GREEN}[OK]${NC}   $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_info() { echo -e "${BLUE}[信息]${NC}  $1"; }
+log_ok() { echo -e "${GREEN}[完成]${NC}  $1"; }
+log_warn() { echo -e "${YELLOW}[警告]${NC}  $1"; }
+log_error() { echo -e "${RED}[错误]${NC}  $1"; }
 
 to_win_path() {
   local path="$1"
@@ -202,9 +202,9 @@ copy_agent_files() {
   fi
 
   if [ "$copied" -eq 1 ]; then
-    log_ok "$(basename "$target_dir") agent files ready"
+    log_ok "$(basename "$target_dir") Agent 文件已就绪"
   else
-    log_info "$(basename "$target_dir") agent files already up to date"
+    log_info "$(basename "$target_dir") Agent 文件已是最新"
   fi
 }
 
@@ -213,11 +213,11 @@ wait_for_tuwunel() {
   for i in $(seq 1 40); do
     code="$(curl -s -o /dev/null -w '%{http_code}' "$TUWUNEL_URL/_matrix/client/versions" 2>/dev/null || echo 000)"
     if [ "$code" = "200" ]; then
-      log_ok "Tuwunel ready ($TUWUNEL_URL)"
+      log_ok "Tuwunel 已就绪 ($TUWUNEL_URL)"
       return 0
     fi
     if [ "$i" -eq 40 ]; then
-      log_error "Tuwunel start timed out. Check: docker logs agenthub-tuwunel"
+      log_error "Tuwunel 启动超时。检查命令：docker logs agenthub-tuwunel"
       return 1
     fi
     echo -n "."
@@ -266,9 +266,9 @@ register_or_login() {
     return 0
   fi
 
-  log_error "Unable to register or log in $user_id"
-  log_error "Register response: $reg_resp"
-  log_error "Login response: $login_resp"
+  log_error "无法注册或登录 $user_id"
+  log_error "注册响应：$reg_resp"
+  log_error "登录响应：$login_resp"
   return 1
 }
 
@@ -291,7 +291,7 @@ start_openclaw() {
 
   local pid=$!
   echo "$pid" > "$pidfile"
-  log_ok "$name PID: $pid"
+  log_ok "$name PID：$pid"
 }
 
 print_process_status() {
@@ -302,12 +302,12 @@ print_process_status() {
 
   pid="$(cat "$pidfile" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    log_ok "$name process running (pid=$pid)"
+    log_ok "$name 进程运行中 (pid=$pid)"
   else
-    log_error "$name process not running"
+    log_error "$name 进程未运行"
   fi
-  echo "  pid file: $pidfile"
-  echo "  log file: $logfile"
+  echo "  PID 文件：$pidfile"
+  echo "  日志文件：$logfile"
 }
 
 print_http_probe() {
@@ -316,10 +316,10 @@ print_http_probe() {
   local output
 
   if output="$(curl -fsS --max-time 3 "$url" 2>&1)"; then
-    log_ok "$label probe: $url"
+    log_ok "$label 探测通过：$url"
     printf '  %s\n' "$output" | head -n 4
   else
-    log_warn "$label probe failed: $url"
+    log_warn "$label 探测失败：$url"
     [ -n "$output" ] && printf '  %s\n' "$output" | head -n 4
   fi
 }
@@ -330,26 +330,26 @@ print_log_preview() {
 
   if [ -f "$logfile" ]; then
     echo ""
-    log_info "$label log preview: $logfile"
+    log_info "$label 日志预览：$logfile"
     tail -n 8 "$logfile" | sed 's/^/  /'
   else
-    log_warn "$label log not found yet: $logfile"
+    log_warn "$label 日志尚未生成：$logfile"
   fi
 }
 
-echo "=== AgentHub HiClaw-lite startup ==="
+echo "=== AgentHub HiClaw-lite 启动 ==="
 echo ""
-log_info "[0/6] Checking prerequisites..."
+log_info "[0/6] 检查前置条件..."
 
 mkdir -p "$PID_DIR" "$MANAGER_WORKSPACE" "$WORKER_WORKSPACE"
 
 if ! command -v docker >/dev/null 2>&1; then
-  log_error "Docker is not installed. Install Docker Desktop first."
+  log_error "未安装 Docker。请先安装 Docker Desktop。"
   exit 1
 fi
 
 if ! docker compose version >/dev/null 2>&1 && ! docker-compose version >/dev/null 2>&1; then
-  log_error "docker compose is not available."
+  log_error "docker compose 不可用。"
   exit 1
 fi
 
@@ -359,7 +359,7 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 if ! detect_openclaw; then
-  log_error "OpenClaw not found. Run: npm install -g openclaw"
+  log_error "未找到 OpenClaw。请运行：npm install -g openclaw"
   exit 1
 fi
 
@@ -374,36 +374,36 @@ if [ "$OPENCLAW_KIND" = "windows" ]; then
   WORKER_RUNTIME_CONFIG="$(to_win_path "$WORKER_CONFIG")"
 fi
 
-OPENCLAW_VERSION="$("${OPENCLAW_CMD[@]}" --version 2>/dev/null || echo unknown)"
-log_ok "OpenClaw: $OPENCLAW_LABEL ($OPENCLAW_VERSION)"
-log_ok "docker compose: $COMPOSE_CMD"
+OPENCLAW_VERSION="$("${OPENCLAW_CMD[@]}" --version 2>/dev/null || echo 未知)"
+log_ok "OpenClaw：$OPENCLAW_LABEL ($OPENCLAW_VERSION)"
+log_ok "docker compose 命令：$COMPOSE_CMD"
 
 echo ""
-log_info "[1/6] Starting Tuwunel + MinIO..."
+log_info "[1/6] 启动 Tuwunel + MinIO..."
 
 cd "$SCRIPT_DIR"
 $COMPOSE_CMD -f docker-compose.hiclaw-lite.yml up -d
 
-log_ok "Docker containers started"
+log_ok "Docker 容器已启动"
 
 echo ""
-log_info "[2/6] Waiting for Tuwunel to become ready (max 20s)..."
+log_info "[2/6] 等待 Tuwunel 就绪（最多 20 秒）..."
 wait_for_tuwunel
 
 echo ""
-log_info "[3/6] Preparing Matrix accounts..."
+log_info "[3/6] 准备 Matrix 账号..."
 
 MANAGER_TOKEN="$(reuse_or_login "$MANAGER_USER" "$MANAGER_PASS")"
-log_ok "Manager account: @$MANAGER_USER:$MATRIX_DOMAIN"
+log_ok "Manager 账号：@$MANAGER_USER:$MATRIX_DOMAIN"
 
 WORKER_TOKEN="$(reuse_or_login "$WORKER_USER" "$WORKER_PASS")"
-log_ok "Worker account: @$WORKER_USER:$MATRIX_DOMAIN"
+log_ok "Worker 账号：@$WORKER_USER:$MATRIX_DOMAIN"
 
 echo ""
-log_info "[3.5/6] Preparing Admin Matrix account..."
+log_info "[3.5/6] 准备管理员 Matrix 账号..."
 
 ADMIN_TOKEN="$(reuse_or_login "$ADMIN_USER" "$ADMIN_PASS")"
-log_ok "Admin account: @$ADMIN_USER:$MATRIX_DOMAIN"
+log_ok "管理员账号：@$ADMIN_USER:$MATRIX_DOMAIN"
 
 ENV_FILE="$PROJECT_ROOT/.env"
 if [ -f "$ENV_FILE" ]; then
@@ -412,9 +412,9 @@ if [ -f "$ENV_FILE" ]; then
   update_env_var "$ENV_FILE" "AGENTHUB_MATRIX_REGISTRATION_TOKEN" "$REG_TOKEN"
   update_env_var "$ENV_FILE" "AGENTHUB_MATRIX_ACCESS_TOKEN" "$ADMIN_TOKEN"
   update_env_var "$ENV_FILE" "AGENTHUB_ROOM_PROVIDER" "matrix"
-  log_ok "Updated $ENV_FILE with Matrix settings"
+  log_ok "已更新 $ENV_FILE 的 Matrix 配置"
 else
-  log_warn "No $ENV_FILE found. Add these settings manually:"
+  log_warn "未找到 $ENV_FILE。请手动添加以下配置："
   echo "  AGENTHUB_MATRIX_HOMESERVER_URL=$TUWUNEL_URL"
   echo "  AGENTHUB_MATRIX_SERVER_NAME=$MATRIX_DOMAIN"
   echo "  AGENTHUB_MATRIX_REGISTRATION_TOKEN=$REG_TOKEN"
@@ -423,7 +423,7 @@ else
 fi
 
 echo ""
-log_info "[4/6] Generating OpenClaw configs..."
+log_info "[4/6] 生成 OpenClaw 配置..."
 
 LLM_BASE_URL="${AGENTHUB_LLM_BASE_URL:-http://localhost:8000/v1}"
 LLM_API_KEY="${AGENTHUB_LLM_API_KEY:-agenthub-internal}"
@@ -442,22 +442,22 @@ fi
 generate_openclaw_config "$MANAGER_TEMPLATE" "$MANAGER_CONFIG" "$MANAGER_TOKEN" "$MANAGER_PORT" "$LLM_BASE_URL" "$LLM_API_KEY" "$LLM_MODEL" "$MANAGER_RUNTIME_HOME"
 generate_openclaw_config "$WORKER_TEMPLATE" "$WORKER_CONFIG" "$WORKER_TOKEN" "$WORKER_PORT" "$LLM_BASE_URL" "$LLM_API_KEY" "$LLM_MODEL" "$WORKER_RUNTIME_HOME"
 
-log_ok "Manager config: $MANAGER_CONFIG (port $MANAGER_PORT)"
-log_ok "Worker config: $WORKER_CONFIG (port $WORKER_PORT)"
+log_ok "Manager 配置：$MANAGER_CONFIG（端口 $MANAGER_PORT）"
+log_ok "Worker 配置：$WORKER_CONFIG（端口 $WORKER_PORT）"
 
 echo ""
-log_info "[5/6] Copying agent files..."
+log_info "[5/6] 复制 Agent 文件..."
 copy_agent_files "$SCRIPT_DIR/manager-agent" "$MANAGER_WORKSPACE"
 copy_agent_files "$SCRIPT_DIR/worker-agent" "$WORKER_WORKSPACE"
 
 echo ""
-log_info "[6/6] Starting OpenClaw Manager + Worker..."
+log_info "[6/6] 启动 OpenClaw Manager + Worker..."
 
 for pidfile in "$PID_DIR"/openclaw-*.pid; do
   [ -f "$pidfile" ] || continue
   old_pid="$(cat "$pidfile" 2>/dev/null || true)"
   if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-    log_warn "Stopping old process PID $old_pid ($pidfile)"
+    log_warn "停止旧进程 PID $old_pid ($pidfile)"
     kill "$old_pid" 2>/dev/null || true
     sleep 1
   fi
@@ -470,64 +470,64 @@ start_openclaw "Worker" "$WORKER_WORKSPACE" "$WORKER_RUNTIME_HOME" "$WORKER_RUNT
 sleep 1
 
 if kill -0 "$(cat "$PID_DIR/openclaw-manager.pid")" 2>/dev/null; then
-  log_ok "Manager running"
+  log_ok "Manager 运行中"
 else
-  log_error "Manager failed to start, see $MANAGER_WORKSPACE/openclaw.log"
+  log_error "Manager 启动失败，请查看 $MANAGER_WORKSPACE/openclaw.log"
 fi
 
 if kill -0 "$(cat "$PID_DIR/openclaw-worker.pid")" 2>/dev/null; then
-  log_ok "Worker running"
+  log_ok "Worker 运行中"
 else
-  log_error "Worker failed to start, see $WORKER_WORKSPACE/openclaw.log"
+  log_error "Worker 启动失败，请查看 $WORKER_WORKSPACE/openclaw.log"
 fi
 
 echo ""
 echo "========================================"
-echo "  AgentHub HiClaw-lite startup complete"
+echo "  AgentHub HiClaw-lite 启动完成"
 echo "========================================"
 echo ""
-log_info "Runtime endpoints"
-echo "  Matrix homeserver: $TUWUNEL_URL ($MATRIX_DOMAIN)"
-echo "  MinIO API:         http://localhost:9000"
-echo "  MinIO Console:     http://localhost:9001 (minioadmin/minioadmin)"
-echo "  Manager Gateway:   http://localhost:$MANAGER_PORT"
-echo "  Worker Gateway:    http://localhost:$WORKER_PORT"
-echo "  LLM Gateway:       $LLM_BASE_URL"
-echo "  LLM Model:         $LLM_MODEL"
+log_info "运行端点"
+echo "  Matrix Homeserver：$TUWUNEL_URL ($MATRIX_DOMAIN)"
+echo "  MinIO API：         http://localhost:9000"
+echo "  MinIO 控制台：      http://localhost:9001 (minioadmin/minioadmin)"
+echo "  Manager 网关：      http://localhost:$MANAGER_PORT"
+echo "  Worker 网关：       http://localhost:$WORKER_PORT"
+echo "  LLM 网关：          $LLM_BASE_URL"
+echo "  LLM 模型：          $LLM_MODEL"
 echo ""
-log_info "Matrix identities"
-echo "  Admin:   @$ADMIN_USER:$MATRIX_DOMAIN"
-echo "  Manager: @$MANAGER_USER:$MATRIX_DOMAIN"
-echo "  Worker:  @$WORKER_USER:$MATRIX_DOMAIN"
-echo "  .env:    $ENV_FILE"
+log_info "Matrix 身份"
+echo "  管理员： @$ADMIN_USER:$MATRIX_DOMAIN"
+echo "  Manager： @$MANAGER_USER:$MATRIX_DOMAIN"
+echo "  Worker：  @$WORKER_USER:$MATRIX_DOMAIN"
+echo "  .env：    $ENV_FILE"
 echo ""
-log_info "OpenClaw runtime"
-echo "  Command:        $OPENCLAW_LABEL"
-echo "  Manager config: $MANAGER_CONFIG"
-echo "  Worker config:  $WORKER_CONFIG"
+log_info "OpenClaw 运行时"
+echo "  命令：       $OPENCLAW_LABEL"
+echo "  Manager 配置：$MANAGER_CONFIG"
+echo "  Worker 配置： $WORKER_CONFIG"
 print_process_status "Manager" "$PID_DIR/openclaw-manager.pid" "$MANAGER_WORKSPACE/openclaw.log"
 print_process_status "Worker" "$PID_DIR/openclaw-worker.pid" "$WORKER_WORKSPACE/openclaw.log"
 echo ""
-log_info "Container status"
+log_info "容器状态"
 (cd "$SCRIPT_DIR" && $COMPOSE_CMD -f docker-compose.hiclaw-lite.yml ps) || true
 echo ""
-log_info "Health probes"
+log_info "健康探测"
 print_http_probe "Tuwunel" "$TUWUNEL_URL/_matrix/client/versions"
-print_http_probe "Manager gateway" "http://localhost:$MANAGER_PORT/health"
-print_http_probe "Worker gateway" "http://localhost:$WORKER_PORT/health"
+print_http_probe "Manager 网关" "http://localhost:$MANAGER_PORT/health"
+print_http_probe "Worker 网关" "http://localhost:$WORKER_PORT/health"
 print_log_preview "Manager" "$MANAGER_WORKSPACE/openclaw.log"
 print_log_preview "Worker" "$WORKER_WORKSPACE/openclaw.log"
 echo ""
-log_info "Useful commands"
-echo "  Start:             bash infra/start-hiclaw-lite.sh"
-echo "  Stop:              bash infra/stop-hiclaw-lite.sh"
-echo "  Matrix logs:       docker logs agenthub-tuwunel"
-echo "  MinIO logs:        docker logs agenthub-minio"
-echo "  Manager log tail:  tail -n 80 \"$MANAGER_WORKSPACE/openclaw.log\""
-echo "  Worker log tail:   tail -n 80 \"$WORKER_WORKSPACE/openclaw.log\""
+log_info "常用命令"
+echo "  启动：             bash infra/start-hiclaw-lite.sh"
+echo "  停止：             bash infra/stop-hiclaw-lite.sh"
+echo "  Matrix 日志：      docker logs agenthub-tuwunel"
+echo "  MinIO 日志：       docker logs agenthub-minio"
+echo "  查看 Manager 日志：tail -n 80 \"$MANAGER_WORKSPACE/openclaw.log\""
+echo "  查看 Worker 日志： tail -n 80 \"$WORKER_WORKSPACE/openclaw.log\""
 echo ""
-log_info "Next steps"
-echo "  1. Start AgentHub Server: bun run dev:server"
-echo "  2. Start AgentHub Web:   bun run dev:web"
-echo "  3. Open the browser and create a group chat, then @manager"
+log_info "下一步"
+echo "  1. 启动 AgentHub Server：bun run dev:server"
+echo "  2. 启动 AgentHub Web：  bun run dev:web"
+echo "  3. 打开浏览器，新建群聊，然后 @manager"
 echo ""
