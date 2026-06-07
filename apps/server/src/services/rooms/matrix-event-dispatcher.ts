@@ -498,9 +498,27 @@ export class MatrixRoomEventDispatcher {
       return true
     }
 
-    // Direct room: Worker picks up human messages via its own /sync loop.
-    // No platform dispatch needed — the Worker's OpenClaw process sees the message
-    // and responds autonomously.
+    if (event.senderType === 'human' && room.kind === 'direct') {
+      const workspaceAgentId = await resolveDirectRoomWorkspaceAgentId(room)
+      if (!workspaceAgentId) {
+        logger.warn(
+          { roomId: room.id, eventId: event.id, sessionId: room.sessionId },
+          'Direct room human message skipped because workspaceAgentId could not be resolved',
+        )
+        return false
+      }
+      logger.info(
+        { roomId: room.id, eventId: event.id, workspaceAgentId },
+        'Direct room human message routed to Worker runtime',
+      )
+      await this.handlers.runDirectRoom?.({
+        roomId: room.id,
+        ownerId: room.ownerId,
+        workspaceAgentId,
+        prompt: event.body,
+      })
+      return true
+    }
 
     return false
   }
@@ -1236,6 +1254,21 @@ function matrixMentionedParticipantIds(metadata: Record<string, unknown> | null 
   const ids = (matrix as Record<string, unknown>).mentionedParticipantIds
   if (!Array.isArray(ids)) return []
   return ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+}
+
+async function resolveDirectRoomWorkspaceAgentId(room: typeof rooms.$inferSelect) {
+  if (room.sessionId) {
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, room.sessionId)).limit(1)
+    if (session?.workspaceAgentId) return session.workspaceAgentId
+  }
+
+  const compatibility = room.metadata?.compatibility
+  if (compatibility && typeof compatibility === 'object' && !Array.isArray(compatibility)) {
+    const workspaceAgentId = (compatibility as Record<string, unknown>).workspaceAgentId
+    if (typeof workspaceAgentId === 'string' && workspaceAgentId.trim()) return workspaceAgentId
+  }
+
+  return null
 }
 
 export const matrixRoomEventDispatcher = new MatrixRoomEventDispatcher()

@@ -142,7 +142,6 @@ if (residentManagerAutoStartEnabled && (provider.runtimeType === 'openclaw' || p
         logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
       }
     }
-    logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
   } else {
     logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
   }
