@@ -68,15 +68,16 @@ spec:
 - Claude Code/OpenCode/Codex/Gemini Workers may currently be AgentHub-managed bridge Workers, but they must still use the same Room timeline, SOUL/AGENTS, skills, RuntimeLease, and shared task contract.
 - If the user says "use what I have installed", list available Worker runtime diagnostics first instead of guessing.
 - Prefer `agenthub apply -f worker.yaml` when creating a real member from a proposal, because it lets Controller record the desired runtime base, skills, sandbox, room join, and reconcile result together.
-- Do not create a Worker by only sending a chat message. A Worker exists only after Controller has created or reconciled the `workspace_agent`, `worker_instance`, Matrix identity, Room participant, workspace contract, and runtime readiness.
+- Do not create a Worker by only sending a chat message. A Worker exists only after Controller has created or reconciled the `workspace_agent`, `worker_instance`, Matrix identity, Room participant, workspace contract, and runtime config.
+- Treat runtime readiness as a separate observed health state. After creation, use Controller status/health, heartbeat, or resident self-test to decide whether the Worker is ready, blocked, listening, or failed.
 
 ## Worker Reconcile Stages
 
 1. ResolveMemberSpec — name, role, runtime base, model, skills, sandbox.
 2. ApplyWorkspaceAgent — persistent Agent profile.
-3. ApplyWorkerInstance — lifecycle resource and runtime binding.
+3. ApplyWorkerInstance — lifecycle resource, runtime binding, and contract/config prepare.
 4. JoinRooms — group room, direct room, task rooms, Matrix identity.
-5. AnnounceAndObserve — Manager announcement and Worker ready/listening status.
+5. AnnounceAndObserve — room-aware contract prepare, Manager announcement, and Worker health/listening observation.
 
 ## Decision Pattern
 

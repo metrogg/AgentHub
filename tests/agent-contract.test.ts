@@ -83,6 +83,8 @@ describe('Agent contract generator', () => {
     expect(soulText).toContain('Current message discipline')
     expect(soulText).toContain('Mention hygiene')
     expect(soulText).toContain('Worker completion is not just a chat message')
+    expect(soulText).toContain('Worker creation is Controller provision first')
+    expect(soulText).toContain('Bridge Workers are still real room members')
 
     const agentsText = readFileSync(ws.agentsPath, 'utf8')
     expect(agentsText).toContain('AGENTHUB:MANAGER-CONTEXT:START')
@@ -287,6 +289,8 @@ describe('Agent contract generator', () => {
       'matrix_identity',
       'room_timeline_io',
       'workspace_contract',
+      'runtime_prepare',
+      'runtime_health',
       'heartbeat',
     ]))
     expect(registryWorker.matrixUserId).toBe('@registry-worker:agenthub.local')
@@ -399,6 +403,8 @@ describe('Agent contract generator', () => {
       'room_timeline_io',
       'SOUL.md',
       'AGENTS.md',
+      'runtime_prepare',
+      'runtime_health',
       'heartbeat',
       'clarification_resume',
     ]))
@@ -567,6 +573,8 @@ describe('Agent contract generator', () => {
         'mention_dispatch',
         'workspace_contract',
         'shared_task_contract',
+        'runtime_prepare',
+        'runtime_health',
         'heartbeat',
         'transparent_blockers',
       ]))

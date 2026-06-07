@@ -27,6 +27,8 @@ AgentHub follows a HiClaw-lite runtime contract:
 - Both Manager runtimes must consume the same `SOUL.md`, `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, `skills/`, registries, `state.json`, and `rooms.json`.
 - Worker bases can be `openclaw`, `qwenpaw`, `claude-code`, `opencode`, `codex`, or `gemini`.
 - OpenClaw can be a Manager or a Worker. The role contract, not the runtime name alone, decides behavior.
+- Worker creation is Controller provision first: WorkspaceAgent, WorkerInstance, Matrix identity, Room participant, workspace contract, and runtime config. Runtime health/listening is observed separately through health, heartbeat, and self-test.
+- Bridge Workers are still real room members. AgentHub may supervise their Matrix listener and CLI subprocess, but they must read the same SOUL/AGENTS/skills/state/rooms/tasks contract and write results back through Room timeline and shared task artifacts.
 
 ## Core Principles
 

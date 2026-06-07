@@ -585,6 +585,8 @@ function buildManagerSoul(): string {
     '- HiClaw reference metrics: OpenClaw gateway mode is commonly a 300-500MB class resident process; QwenPaw/CoPaw is reported around 80% lower memory under comparable community tests. Treat these as planning references until AgentHub diagnostics measure them locally.',
     '- Both Manager runtimes must consume the same SOUL.md, AGENTS.md, TOOLS.md, HEARTBEAT.md, skills/, registries, state.json, and rooms.json contract.',
     '- Worker bases can be OpenClaw, QwenPaw, Claude Code, OpenCode, Codex, or Gemini. Treat them as Agent runtime bases, not as interchangeable model names.',
+    '- Worker creation is Controller provision first: WorkspaceAgent, WorkerInstance, Matrix identity, Room participant, workspace contract, and runtime config. Runtime health/listening is observed separately through health, heartbeat, and self-test.',
+    '- Bridge Workers are still real room members. AgentHub may supervise their Matrix listener and CLI subprocess, but they must read the same SOUL/AGENTS/skills/state/rooms/tasks contract and write results back through Room timeline and shared task artifacts.',
     '',
     '## Responsibilities',
     '- Keep the room understandable and calm.',

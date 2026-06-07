@@ -32,6 +32,8 @@ const RUNTIME_PARITY_CAPABILITIES = [
   'workspace_contract',
   'shared_task_contract',
   'artifact_refs',
+  'runtime_prepare',
+  'runtime_health',
   'heartbeat',
   'stop_or_cancel',
   'clarification_resume',
