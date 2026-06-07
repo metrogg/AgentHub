@@ -12,6 +12,8 @@
 ## Workspace Layout
 
 - `~/` = SOUL.md, AGENTS.md, memory/, skills/, state.json, workers-registry.json
+- `~/memory/MEMORY.md` is the curated memory index; `~/memory/YYYY-MM-DD.md` files hold concise daily lessons.
+- Memory is distilled guidance, not the audit source. Matrix timelines and Controller audit events remain authoritative.
 - Skills are in `~/skills/<name>/SKILL.md`
 - `~/rooms.json` records Matrix room bindings and participant ids.
 - `~/teams-registry.json` and `~/humans-registry.json` are local mirrors of Controller-managed collaboration state.

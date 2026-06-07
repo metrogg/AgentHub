@@ -54,6 +54,7 @@ Human / Manager / Worker 都是 Room participant
 - `workers-registry.json / teams-registry.json / humans-registry.json`：Manager 的本地世界镜像。它们从 Controller 同步，不替代 Controller，但 Manager 必须读它们来判断成员、能力、健康和限制。
 - `state.json / rooms.json / tasks.json`：runtime 本地状态镜像。它们记录 heartbeat、room binding、active tasks、last error 和 reconcile stage，方便 resident runtime、bridge runtime、设置页和 Manager 用同一套事实沟通。
 - `HEARTBEAT.md`：Patrol 行为规范。长任务不能因为“十几秒没回”就判死，必须看 heartbeat、RuntimeLease、task room 和 shared result。
+- `memory/MEMORY.md` 和 `memory/YYYY-MM-DD.md`：Manager 的压缩经验，不是审计事实源。只记录人类偏好、Worker 可靠性、重复 blocker、项目约定和恢复经验；Matrix timeline 与 Controller audit 仍是事实源。
 - `shared/tasks/{taskId}/spec.md / plan.md / result.md / artifacts/`：任务契约。Worker 的完成必须落到 result/artifact/room result，不能只靠一句聊天文本。
 
 AgentHub 的实现原则是“同 contract，多 adapter”：OpenClaw/QwenPaw 可以 runtime-native 常驻监听 Matrix；Claude Code/OpenCode/Codex/Gemini 当前可以由 AgentHub bridge 托管，但它们也必须读取同一份 SOUL/AGENTS/skills/state/rooms/tasks，并通过 Matrix timeline 输入输出。
@@ -92,6 +93,9 @@ Manager workspace：
     hiclaw-find-worker/SKILL.md
     task-coordination/SKILL.md
     review-and-synthesis/SKILL.md
+  memory/
+    MEMORY.md
+    YYYY-MM-DD.md
   workers-registry.json
   teams-registry.json
   humans-registry.json
@@ -362,7 +366,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 进展：`adapterContract.diagnosticContract` 已写入每个 Worker 基座的标准诊断契约：readiness source、blocking signals、informational signals、probe 列表和 expected native capabilities。resident OpenClaw/QwenPaw 侧重 `WorkerBackend.inspect / Matrix sync / resident self-test`；bridge Claude Code/OpenCode/Codex/Gemini 侧重 `command-installed / native-version-probe / doctor-probe / capability-probe / model-binding / cwd`。这让 Worker 自己、Manager registry、设置页和后续 adapter 对“什么算 ready / 什么只是画像”有同一份文件化依据。
    - 进展：Worker `state.json / rooms.json / tasks.json` 已从 seed-only 改成 Controller 可刷新镜像。`SOUL.md` 仍保持人格文件的 seed-only 语义；运行世界观由 reconcile 刷新，显式 `currentRooms/currentTasks` 会写入 generatedAt、source、workerInstanceId，`state.json` 会保留 runtime heartbeat 但同步 identity/runtime/activeTasks/room count。这样创建员工、入群、分配任务之后，Worker 本地 contract 不再停留在旧 room 或空 task 状态。
    - 进展：新增 `ensureWorkerAgentContractFromController()`，Worker 也像 Manager 一样能从 Controller/DB 统一重建 contract 镜像。它会读取 WorkerInstance、WorkspaceAgent、Matrix identity、Room participant、TaskThread、RuntimeLease 和 WorkspaceTask，组装 currentRooms/currentTasks 后刷新 `rooms.json / tasks.json / state.json`。MemberReconciler、本机 OpenClaw backend、Docker OpenClaw backend 已切到这个入口，不再各自从 OpenClaw room config 或局部查询手拼 contract。
-   - Manager contract 已统一生成 `runtime.json`、`SOUL.md`、`AGENTS.md`、`TOOLS.md`、`HEARTBEAT.md`、`skills/`、`workers-registry.json`、`teams-registry.json`、`humans-registry.json`、`state.json`、`rooms.json`、`logs/`，并镜像到 OpenClaw `agentDir`。
+   - Manager contract 已统一生成 `runtime.json`、`SOUL.md`、`AGENTS.md`、`TOOLS.md`、`HEARTBEAT.md`、`skills/`、`memory/`、`workers-registry.json`、`teams-registry.json`、`humans-registry.json`、`state.json`、`rooms.json`、`logs/`，并镜像到 OpenClaw `agentDir`。
    - 进展：Manager `runtime.json` 现在同时记录 `runtimeContract`。OpenClaw Manager 被明确描述为 Node.js gateway mode，QwenPaw Manager 被明确描述为 Python workspace mode；两者共享同一组 `SOUL.md / AGENTS.md / TOOLS.md / HEARTBEAT.md / skills / registry / state / rooms / heartbeat / reconcile` 能力契约。Manager `AGENTS.md` 注入块会同步写入 runtime profile、Manager Reconcile 5 阶段、Member Reconcile 5 阶段、Worker Reconcile 5 阶段和 Controller skill surface，避免后续再把 OpenClaw/QwenPaw 当成两个互不相干的入口。
    - 新增 `ensureManagerAgentContractFromController()`：Manager 启动前会从 Controller/DB 同步 active rooms、WorkerInstance、WorkspaceAgent、Matrix identity、Room participant、RuntimeLease、Human participant 和 active runs，刷新 `workers-registry.json / humans-registry.json / rooms.json / state.json`，不再只是空 registry 文件。
    - 进展：`workers-registry.json` 现在会为每个 Worker 镜像 `runtimeContract`，包含 runtime mode、base profile、Matrix listener owner、workspace/task contract、heartbeat 字段、parity capabilities 和 current limits。Manager 读 registry 时不再只看到 `runtimeBase=opencode/openclaw` 这种裸字符串，而能按统一能力契约选择、观察和恢复 Worker。

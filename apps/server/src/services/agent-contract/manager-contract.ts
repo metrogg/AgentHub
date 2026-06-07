@@ -29,6 +29,7 @@ const MANAGER_RUNTIME_PARITY_CAPABILITIES = [
   'team_registry',
   'human_registry',
   'state_mirror',
+  'memory',
   'controller_api_skills',
   'heartbeat',
   'reconcile',
@@ -67,6 +68,8 @@ export interface ManagerAgentContractWorkspace {
   toolsPath: string
   heartbeatPath: string
   skillsDir: string
+  memoryDir: string
+  memoryIndexPath: string
   workerRegistryPath: string
   teamRegistryPath: string
   humanRegistryPath: string
@@ -156,6 +159,8 @@ export function resolveManagerAgentContractWorkspace(managerId?: string | null):
     toolsPath: join(root, 'TOOLS.md'),
     heartbeatPath: join(root, 'HEARTBEAT.md'),
     skillsDir: join(root, 'skills'),
+    memoryDir: join(root, 'memory'),
+    memoryIndexPath: join(root, 'memory', 'MEMORY.md'),
     workerRegistryPath: join(root, 'workers-registry.json'),
     teamRegistryPath: join(root, 'teams-registry.json'),
     humanRegistryPath: join(root, 'humans-registry.json'),
@@ -172,12 +177,14 @@ export function ensureManagerAgentContract(
   const ws = resolveManagerAgentContractWorkspace(input.managerId)
   mkdirSync(ws.root, { recursive: true })
   mkdirSync(ws.skillsDir, { recursive: true })
+  mkdirSync(ws.memoryDir, { recursive: true })
   mkdirSync(ws.logsDir, { recursive: true })
   mkdirSync(ws.agentDir, { recursive: true })
 
   seedManagerFile(ws.soulPath, 'SOUL.md', buildManagerSoul())
   seedManagerFile(ws.toolsPath, 'TOOLS.md', buildManagerTools())
   seedManagerFile(ws.heartbeatPath, 'HEARTBEAT.md', buildManagerHeartbeat())
+  writeIfMissing(ws.memoryIndexPath, buildManagerMemoryIndex())
   upsertManagerContext(ws.agentsPath, seedText('AGENTS.md', buildManagerAgents()), buildManagerContext(input))
   syncManagerSkills(ws.skillsDir)
 
@@ -290,6 +297,7 @@ export function managerRuntimeContract(runtimeType?: string | null) {
       'TOOLS.md',
       'HEARTBEAT.md',
       'skills/',
+      'memory/',
       'workers-registry.json',
       'teams-registry.json',
       'humans-registry.json',
@@ -635,9 +643,14 @@ function buildManagerAgents(): string {
     '## Session Bootstrap',
     '1. Read SOUL.md.',
     '2. Read AGENTS.md and the Controller-injected context block.',
-    '3. Read workers-registry.json, rooms.json, state.json, and HEARTBEAT.md when coordinating active work.',
+    '3. Read workers-registry.json, rooms.json, state.json, HEARTBEAT.md, and relevant memory/ notes when coordinating active work.',
     '4. Read the relevant skill SKILL.md before changing Controller resources.',
     '5. Read the current room timeline; when a runtime supplies a Current message section, act on that section and use earlier history only as context.',
+    '',
+    '## Memory Contract',
+    '- memory/MEMORY.md is the curated memory index; memory/YYYY-MM-DD.md files hold concise daily lessons.',
+    '- Memory is distilled guidance, not the audit source. Matrix timelines and Controller audit events remain authoritative.',
+    '- Do not store secrets, tokens, or irrelevant chat in memory.',
     '',
     '## Room And Mention Protocol',
     '- Assignment requires a visible room event: @mention the Worker in the group/task room that contains the work context.',
@@ -723,6 +736,23 @@ function buildManagerHeartbeat(): string {
     '- lastTaskCompletedAt',
     '- lastError',
     '- queueDepth',
+  ].join('\n')
+}
+
+function buildManagerMemoryIndex(): string {
+  return [
+    '# Manager Memory',
+    '',
+    'This directory stores distilled coordination memory, not the audit log.',
+    '',
+    '## Rules',
+    '- Do not store secrets, API keys, private tokens, or irrelevant chat.',
+    '- Treat Matrix room timelines and Controller audit events as the source of truth.',
+    '- Store only durable lessons that help future Manager decisions: human preferences, Worker reliability, repeated runtime blockers, project conventions, and recovery notes.',
+    '- Prefer short dated notes in `YYYY-MM-DD.md`; keep this file as the curated index.',
+    '',
+    '## Current Index',
+    '- No durable lessons recorded yet.',
   ].join('\n')
 }
 
@@ -834,6 +864,7 @@ function mirrorManagerAgentDir(ws: ManagerAgentContractWorkspace) {
     writeFileSync(dst, readFileSync(src, 'utf8'), 'utf8')
   }
   copyDirSync(ws.skillsDir, join(ws.agentDir, 'skills'))
+  copyDirSync(ws.memoryDir, join(ws.agentDir, 'memory'))
 }
 
 function copyAgentHubCli(root: string) {

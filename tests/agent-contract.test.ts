@@ -54,6 +54,7 @@ describe('Agent contract generator', () => {
       ws.agentsPath,
       ws.toolsPath,
       ws.heartbeatPath,
+      ws.memoryIndexPath,
       ws.workerRegistryPath,
       ws.teamRegistryPath,
       ws.humanRegistryPath,
@@ -72,6 +73,7 @@ describe('Agent contract generator', () => {
     expect(existsSync(`${ws.skillsDir}/memory-management/SKILL.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/SOUL.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/AGENTS.md`)).toBe(true)
+    expect(existsSync(`${ws.agentDir}/memory/MEMORY.md`)).toBe(true)
     expect(existsSync(`${ws.agentDir}/skills/agenthub-controller/SKILL.md`)).toBe(true)
 
     const soulText = readFileSync(ws.soulPath, 'utf8')
@@ -110,6 +112,7 @@ describe('Agent contract generator', () => {
     const managerRuntimeContract = runtime.runtimeContract as {
       profile: { label: string; language: string; architectureMode: string; referenceMetrics: string }
       parityCapabilities: string[]
+      workspaceContract: string[]
       reconcileContracts: { manager: string[]; member: string[]; worker: string[] }
       controllerSkillSurface: string[]
     }
@@ -122,9 +125,11 @@ describe('Agent contract generator', () => {
       'AGENTS.md',
       'skills',
       'worker_registry',
+      'memory',
       'controller_api_skills',
       'reconcile',
     ]))
+    expect(managerRuntimeContract.workspaceContract).toContain('memory/')
     expect(managerRuntimeContract.reconcileContracts.manager).toEqual([
       'EnsureManagerIdentity',
       'EnsureManagerWorkspace',
