@@ -315,13 +315,19 @@ async function prepareAssignedTask(input: {
     roomId: input.groupRoomId,
     senderType: 'manager',
     type: 'task.assigned',
-    body: input.spec.action.message || `Manager 已将任务「${input.spec.taskTitle}」派给 ${input.spec.worker.name}。`,
-    metadata: assignmentMetadata,
+    body: input.spec.action.message ?? '',
+    metadata: {
+      ...assignmentMetadata,
+      hiddenFromChat: !hasExplicitText(input.spec.action.message),
+    },
   })
   const taskRoomWorkerParticipant = await resolveTaskRoomWorkerParticipant(taskRoom.id, input.spec.worker.id)
   const taskRoomAssignmentBody =
     input.spec.action.message ||
-    `@${input.spec.worker.name} 请接手：${input.spec.taskTitle}\n\n${input.spec.taskDescription}`
+    formatWorkerAssignmentBody({
+      taskTitle: input.spec.taskTitle,
+      taskDescription: input.spec.taskDescription,
+    })
   let mentionEventId: string | null = null
   if (taskRoomWorkerParticipant) {
     const mentionEvent = await roomService.appendMentionTimelineEvent({
@@ -535,6 +541,17 @@ async function resolveTaskRoomWorkerParticipant(roomId: string, workspaceAgentId
     .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.workspaceAgentId, workspaceAgentId)))
     .limit(1)
   return participant ?? null
+}
+
+function hasExplicitText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function formatWorkerAssignmentBody(input: { taskTitle: string; taskDescription: string }) {
+  const title = input.taskTitle.trim()
+  const description = input.taskDescription.trim()
+  if (title && description) return `${title}\n\n${description}`
+  return title || description
 }
 
 async function resolveTargetWorker(input: { workspaceId: string; targetWorkerId?: string | null }) {

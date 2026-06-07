@@ -142,7 +142,11 @@ import {
   type ThreadCodeAgentRunData,
 } from '../../lib/runtime'
 import { useChatStore } from '../../stores/chatStore'
-import { buildHeaderAgentStatusProjection, type HeaderAgentStatusProjection } from '../../stores/chatStore'
+import {
+  buildHeaderAgentStatusProjection,
+  runtimeActivityDetail,
+  type HeaderAgentStatusProjection,
+} from '../../stores/chatStore'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -866,8 +870,9 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
     : activity?.phase === 'synthesizing'
       ? '汇总中'
       : activity?.phase === 'planning'
-        ? '协调中'
+        ? '编排中'
         : '理解中'
+  const activityDetail = activity ? runtimeActivityDetail(activity.phase) : null
 
   return (
     <div className="shrink-0 border-b border-neutral-100 bg-[#fcfcfb] px-6 py-2.5">
@@ -882,6 +887,12 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
         <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">
           {phaseLabel}
         </span>
+        {activityDetail && (
+          <span className="inline-flex items-center gap-1.5 text-xs text-neutral-500">
+            <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
+            {activityDetail}
+          </span>
+        )}
         {runningCount > 0 && (
           <span className="inline-flex items-center gap-1 text-xs text-blue-600">
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -1320,8 +1331,8 @@ function taskProgressStats(taskBoard: LiveTaskBoard | null) {
 }
 
 function activityLabel(activity: LiveAgentActivity | null) {
-  if (activity?.phase === 'thinking') return '理解中'
-  if (activity?.phase === 'planning') return '规划中'
+  if (activity?.phase === 'thinking') return '正在读取上下文'
+  if (activity?.phase === 'planning') return '正在准备分工'
   if (activity?.phase === 'synthesizing') return '汇总中'
   return '未开始'
 }
@@ -1730,7 +1741,7 @@ const RoomTaskDrawer: FC<{
                       </span>
                     </div>
                     <p className="mt-1 text-sm leading-6 text-neutral-600">
-                      Manager 正在理解目标、协调成员并准备线程。正式分发后，这里会出现每位成员的工作线程和对应产物。
+                      {runtimeActivityDetail(activity?.phase)}。正式分发后，这里会出现每位成员的工作线程和对应产物。
                     </p>
                   </div>
                 </div>

@@ -384,17 +384,19 @@ async function appendManagerAction(
 ) {
   const managerParticipant = await ensureManagerParticipantForRoom(roomId)
   if (action.type === 'wait') {
+    const hasMessage = hasExplicitText(action.message)
     return roomService.appendTimelineEvent({
       roomId,
       senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
       type: 'system',
-      body: action.message ?? 'Manager is waiting.',
+      body: action.message ?? '',
       metadata: {
         kind: 'manager.action',
         actionType: action.type,
         reason: action.reason ?? null,
         runtimeType,
+        hiddenFromChat: !hasMessage,
         ...(action.metadata ?? {}),
       },
     })
@@ -408,7 +410,7 @@ async function appendManagerAction(
       senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
       type: 'task.assigned',
-      body: action.message ?? action.taskDescription ?? action.taskTitle ?? 'Manager assigned a task.',
+      body: action.message ?? formatManagerAssignmentBody(action),
       metadata: {
         kind: 'manager.action',
         actionType: action.type,
@@ -417,6 +419,7 @@ async function appendManagerAction(
         taskDescription: action.taskDescription ?? null,
         reason: action.reason ?? null,
         runtimeType,
+        hiddenFromChat: !hasExplicitText(action.message),
         matrixMention: targetParticipant
           ? {
               participantId: targetParticipant.id,
@@ -435,12 +438,13 @@ async function appendManagerAction(
     return roomService.appendTimelineEvent(payload)
   }
   if (action.type === 'propose_members') {
+    const hasMessage = hasExplicitText(action.message)
     return roomService.appendTimelineEvent({
       roomId,
       senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
       type: 'approval.requested',
-      body: action.message ?? 'Manager 建议补充成员，请确认。',
+      body: action.message ?? '',
       metadata: {
         kind: 'manager.action',
         actionType: action.type,
@@ -448,6 +452,7 @@ async function appendManagerAction(
         memberProposalStatus: 'pending',
         reason: action.reason ?? null,
         runtimeType,
+        hiddenFromChat: !hasMessage,
         ...(action.metadata ?? {}),
       },
     })
@@ -469,6 +474,17 @@ async function appendManagerAction(
       ...(action.metadata ?? {}),
     },
   })
+}
+
+function hasExplicitText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function formatManagerAssignmentBody(action: ManagerAction) {
+  const title = action.taskTitle?.trim() ?? ''
+  const description = action.taskDescription?.trim() ?? ''
+  if (title && description) return `${title}\n\n${description}`
+  return title || description
 }
 
 async function applyCreateWorkerAction(
