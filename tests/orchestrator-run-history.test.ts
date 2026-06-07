@@ -116,7 +116,8 @@ describe('run history', () => {
         source?: string
         workspaceName: string
         sessionTitle: string
-        plan?: { tasks?: Array<{ title: string }> }
+        plan?: { tasks?: Array<{ title: string; artifacts?: Array<Record<string, unknown>> }> }
+        tasks?: Array<{ title: string; artifacts?: Array<Record<string, unknown>> }>
       }>
     }
 
@@ -127,5 +128,10 @@ describe('run history', () => {
       sessionTitle: 'Direct Builder',
     })
     expect(directRun?.plan?.tasks?.[0]?.title).toContain('Direct Builder')
+    expect(directRun?.tasks?.[0]?.artifacts?.[0]).toMatchObject({
+      kind: 'file',
+      path: 'index.html',
+      source: 'codeAgentRun.files',
+    })
   })
 })

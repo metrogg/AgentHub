@@ -1593,7 +1593,12 @@ export interface OrchestratorRunArtifactSnapshot {
   visibility: 'private' | 'team' | 'user'
   source: 'artifact-store'
   taskId: string | null
+  roomId?: string | null
   taskThreadId: string | null
+  storageProvider?: string
+  bucket?: string
+  objectKey?: string
+  storagePath?: string
   workspaceAgentId: string | null
   workerInstanceId?: string | null
   metadata: Record<string, unknown>

@@ -2,10 +2,12 @@ import './setup'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
+const appApi = await import('../apps/server/src/app')
 const roomsApi = await import('../apps/server/src/services/rooms')
 const roomLastMessageApi = await import('../apps/server/src/services/rooms/room-last-message')
 
 const { db, eq, rooms, sessions } = dbApi
+const { app } = appApi
 const { roomService } = roomsApi
 const { listRoomLastMessagePreviews } = roomLastMessageApi
 
@@ -101,5 +103,54 @@ describe('mobile Room-first projection', () => {
 
     const previews = await listRoomLastMessagePreviews([session!.id])
     expect(previews[session!.id]?.content).toBe('最终结果')
+  })
+
+  test('mobile sync sorts sessions after Room timeline activity and includes visible preview', async () => {
+    const olderDate = new Date('2026-01-01T00:00:00.000Z')
+    const newerDate = new Date('2026-01-01T00:05:00.000Z')
+    const [staleSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Mobile sync stale session',
+        type: 'direct',
+        ownerId: 'default-user',
+        createdAt: olderDate,
+        updatedAt: olderDate,
+      })
+      .returning()
+    const [previouslyNewerSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Mobile sync previously newer session',
+        type: 'direct',
+        ownerId: 'default-user',
+        createdAt: newerDate,
+        updatedAt: newerDate,
+      })
+      .returning()
+    const room = await roomService.ensureRoomForSession(staleSession!.id, 'default-user')
+
+    await roomService.appendTimelineEvent({
+      roomId: room.id,
+      senderType: 'worker',
+      type: 'worker.message',
+      body: 'Mobile-visible worker result',
+      metadata: { kind: 'worker-runtime.completed', skipAutoDispatch: true },
+    })
+
+    const response = await app.request('/api/mobile/sync')
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      sessions: Array<{ id: string; lastMessage?: { content: string; senderType: string } | null }>
+    }
+    const staleIndex = body.sessions.findIndex((session) => session.id === staleSession!.id)
+    const newerIndex = body.sessions.findIndex((session) => session.id === previouslyNewerSession!.id)
+    expect(staleIndex).toBeGreaterThanOrEqual(0)
+    expect(newerIndex).toBeGreaterThanOrEqual(0)
+    expect(staleIndex).toBeLessThan(newerIndex)
+    expect(body.sessions[staleIndex]?.lastMessage).toEqual({
+      content: 'Mobile-visible worker result',
+      senderType: 'agent',
+    })
   })
 })
