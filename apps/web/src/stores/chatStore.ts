@@ -3075,7 +3075,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 resolvedSnapshot.taskBoard,
               )
             : upsertSessionList(s.sessions, session),
-          messages: normalizedMessages,
+          messages: mergeMessages(normalizedMessages, s.messages.filter((m) => !m.id.startsWith('local-'))),
           loadingMessages: false,
           ...(resolvedSnapshot
               ? {
@@ -3113,7 +3113,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 resolvedSnapshot.taskBoard,
               )
             : upsertSessionList(s.sessions, session),
-          messages: normalizedMessages,
+          messages: mergeMessages(normalizedMessages, s.messages.filter((m) => !m.id.startsWith('local-'))),
           loadingMessages: false,
           ...(resolvedSnapshot
             ? {
