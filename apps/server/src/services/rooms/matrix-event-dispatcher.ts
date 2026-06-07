@@ -510,6 +510,24 @@ export class MatrixRoomEventDispatcher {
         )
         return false
       }
+
+      // Orchestrator agents use the Manager runtime path, not the Worker runtime path.
+      const [agent] = await db.select({ roleType: workspaceAgents.roleType }).from(workspaceAgents).where(eq(workspaceAgents.id, workspaceAgentId)).limit(1)
+      if (agent?.roleType === 'orchestrator') {
+        logger.info({ roomId: room.id, eventId: event.id, workspaceAgentId }, 'Direct room Orchestrator message routed to Manager runtime')
+        const pendingEventId = await this.appendManagerPendingStatus(room, event, 'direct-orchestrator-message')
+        const managerResult = await this.handlers.stepManagerRoom({
+          roomId: room.id,
+          ownerId: room.ownerId,
+          afterSequence: Math.max(0, event.sequence - 1),
+          source: 'direct-orchestrator-message',
+          sourceEventId: event.id,
+        })
+        this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
+        await this.appendManagerDispatchDiagnostic(room, event, managerResult)
+        return true
+      }
+
       logger.info(
         { roomId: room.id, eventId: event.id, workspaceAgentId },
         'Direct room human message routed to Worker runtime',
