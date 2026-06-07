@@ -83,6 +83,13 @@ export default function OrchestratorRunsPage() {
   async function loadRunDetail(runId: string) {
     setDetailLoading(true)
     try {
+      if (runId.startsWith('direct-runtime:')) {
+        setLogs([])
+        setConflicts([])
+        setEvents([])
+        setBlackboardEntries([])
+        return
+      }
       const [logsResult, conflictsResult, eventsResult, blackboardResult] = await Promise.all([
         api.getOrchestratorRunLogs(runId),
         api.getOrchestratorRunConflicts(runId),
@@ -436,7 +443,8 @@ export default function OrchestratorRunsPage() {
                                               ? 'blocked'
                                               : 'pending'
                                     const canRetry =
-                                      taskStatus === 'failed' || taskStatus === 'cancelled'
+                                      selectedRun.source !== 'direct-runtime' &&
+                                      (taskStatus === 'failed' || taskStatus === 'cancelled')
                                     return (
                                       <div
                                         key={task.id}

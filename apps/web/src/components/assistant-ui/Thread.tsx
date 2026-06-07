@@ -1378,7 +1378,7 @@ const RailCard: FC<{
   onToggle: () => void
   children: ReactNode
 }> = ({ title, subtitle, open, onToggle, children }) => (
-  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 shadow-[0_14px_40px_rgba(15,23,42,0.08)] backdrop-blur">
+  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 backdrop-blur">
     <button
       type="button"
       className="flex w-full items-start justify-between gap-3 text-left"

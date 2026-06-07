@@ -2,26 +2,28 @@ import { defineConfig, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { readFileSync } from 'fs'
+import { spawnSync } from 'child_process'
+
+let cachedProxyTarget: { target: string; expiresAt: number } | null = null
 
 function resolveProxyTarget(): string {
   if (process.env.VITE_PROXY_TARGET) return process.env.VITE_PROXY_TARGET
+  const now = Date.now()
+  if (cachedProxyTarget && cachedProxyTarget.expiresAt > now) return cachedProxyTarget.target
+
   try {
     const portFile = path.resolve(__dirname, '../../.agenthub-port')
     const raw = readFileSync(portFile, 'utf8').trim()
     const parsed = JSON.parse(raw) as { port?: unknown; pid?: unknown }
-    if (
-      typeof parsed.port === 'number' &&
-      Number.isInteger(parsed.port) &&
-      parsed.port > 0 &&
-      typeof parsed.pid === 'number' &&
-      isProcessAlive(parsed.pid)
-    ) {
-      return `http://127.0.0.1:${parsed.port}`
+    if (typeof parsed.port === 'number' && Number.isInteger(parsed.port) && parsed.port > 0) {
+      if (serverHealthOk(parsed.port)) {
+        return cacheProxyTarget(`http://127.0.0.1:${parsed.port}`)
+      }
     }
   } catch {
     // Port file not found, stale, or from an older build; fall back to the default dev port.
   }
-  return 'http://127.0.0.1:8000'
+  return cacheProxyTarget(findLiveServerTarget() ?? 'http://127.0.0.1:8000')
 }
 
 function resolveWsProxyTarget(): string {
@@ -65,13 +67,46 @@ function useDynamicProxyTarget(isWebSocket = false): NonNullable<ProxyOptions['c
   }
 }
 
-function isProcessAlive(pid: number) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
+function cacheProxyTarget(target: string) {
+  cachedProxyTarget = {
+    target,
+    expiresAt: Date.now() + 2_000,
   }
+  return target
+}
+
+function findLiveServerTarget() {
+  for (let port = 8000; port < 8010; port += 1) {
+    if (serverHealthOk(port)) return `http://127.0.0.1:${port}`
+  }
+  return null
+}
+
+function serverHealthOk(port: number) {
+  const probe = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      [
+        'const http = require("node:http");',
+        'const port = Number(process.argv[1]);',
+        'const req = http.get({ hostname: "127.0.0.1", port, path: "/health", timeout: 350 }, (res) => {',
+        '  let body = "";',
+        '  res.setEncoding("utf8");',
+        '  res.on("data", (chunk) => body += chunk);',
+        '  res.on("end", () => process.exit(res.statusCode === 200 && body.includes("\"status\":\"ok\"") ? 0 : 1));',
+        '});',
+        'req.on("timeout", () => req.destroy(new Error("timeout")));',
+        'req.on("error", () => process.exit(1));',
+      ].join(''),
+      String(port),
+    ],
+    {
+      stdio: 'ignore',
+      timeout: 700,
+    },
+  )
+  return probe.status === 0
 }
 
 const apiProxyTarget = resolveProxyTarget()

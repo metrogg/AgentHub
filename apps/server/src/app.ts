@@ -21,6 +21,7 @@ import { translateRoutes } from './routes/translate'
 import { agentConfigRoutes } from './routes/agent-config'
 import { roomRoutes } from './routes/rooms'
 import { controllerRoutes } from './routes/controller'
+import { gitRoutes } from './routes/git'
 import { requestContextMiddleware } from './middleware/request-context'
 import { formatErrorResponse } from './lib/error'
 import { APP_VERSION } from '@agenthub/shared'
@@ -57,6 +58,7 @@ const routes = app
   .route('/api/agent-config', agentConfigRoutes)
   .route('/api/rooms', roomRoutes)
   .route('/api/controller', controllerRoutes)
+  .route('/api/git', gitRoutes)
 
 app.get('/deploy/:workspaceId/*', async (c) => {
   const workspaceId = c.req.param('workspaceId')
