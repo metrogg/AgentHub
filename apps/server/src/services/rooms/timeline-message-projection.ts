@@ -254,9 +254,6 @@ function timelineEventToMessage(input: {
   const metadata = asRecord(event.metadata)
   if (metadata?.hiddenFromChat === true) return null
   if (isDirectRuntimeInternalEvent(event, room, metadata)) return null
-
-  const metadata = asRecord(event.metadata)
-  if (metadata.hiddenFromChat === true) return null
   const kind = asString(metadata.kind)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic') return null
