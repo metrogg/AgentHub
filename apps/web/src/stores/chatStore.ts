@@ -1256,7 +1256,7 @@ function applyRoomRuntimeProjection(
     participantsById: Map<string, RoomParticipant>
   },
 ): LiveRuntimeProjection {
-  if (input.room.kind !== 'direct' && input.room.kind !== 'task') return current
+  if (input.room.kind !== 'direct' && input.room.kind !== 'task' && input.room.kind !== 'group') return current
   const run = codeAgentRunFromWorkerRuntimeEvent(input.event)
   if (!run) return current
   if (run.status !== 'running') return clearLiveRuntimeProjection()
@@ -1270,6 +1270,15 @@ function applyRoomRuntimeProjection(
     asString(metadata?.senderName) ??
     participant?.displayName ??
     'Agent'
+
+  // group room: only update the execution progress card, text arrives via room timeline messages
+  if (input.room.kind === 'group') {
+    return {
+      ...clearRuntimeActivity(),
+      streamingMessage: current.streamingMessage,
+      streamingCodeAgentRun: mergeCodeAgentRuns(current.streamingCodeAgentRun, run),
+    }
+  }
 
   return {
     ...clearRuntimeActivity(),

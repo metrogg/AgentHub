@@ -255,6 +255,83 @@ describe('room timeline projection', () => {
     })
   })
 
+  test('projects task room code-agent process metadata without live metadata bubbles', () => {
+    const liveMetadataEvent = event({
+      id: 'task-live-metadata',
+      type: 'task.progress',
+      sequence: 1,
+      body: 'Worker runtime metadata updated.',
+      metadata: {
+        kind: 'worker-runtime.progress',
+        hiddenFromChat: true,
+        type: 'code-agent-run',
+        status: 'running',
+        runtime: 'claude-code',
+        command: 'claude --print',
+        durationMs: 50,
+        exitCode: 0,
+        commands: [{ id: 'cmd-1', command: 'bun run build' }],
+        files: [{ path: 'index.html', status: 'modified', diff: '@@ -1 +1 @@\n-old\n+new' }],
+        artifacts: [
+          {
+            id: 'preview:index.html',
+            type: 'preview',
+            title: '预览: index.html',
+            url: 'file:///F:/demo/index.html',
+            previewKind: 'static-html',
+          },
+        ],
+        logs: [{ id: 'log-1', stream: 'stdout', text: '静态发布: index.html' }],
+        steps: [{ id: 'step-1', kind: 'file', status: 'completed', title: 'index.html 修改' }],
+      },
+    })
+    const liveRun = codeAgentRunFromWorkerRuntimeEvent(liveMetadataEvent)
+    expect(liveRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: 'claude-code',
+      command: 'claude --print',
+    })
+    expect(liveRun?.files).toHaveLength(1)
+    expect(liveRun?.artifacts).toHaveLength(1)
+
+    const projection = projectRoomTimeline({
+      room,
+      participants: [worker],
+      sessionId: 'child-session-1',
+      timeline: [
+        liveMetadataEvent,
+        event({
+          id: 'task-completed',
+          type: 'worker.message',
+          sequence: 2,
+          body: '页面已完成。',
+          metadata: {
+            kind: 'worker-runtime.completed',
+            status: 'completed',
+            runtimeType: 'claude-code',
+            workspaceAgentId: 'agent-1',
+            codeAgentRun: {
+              ...liveRun,
+              status: 'completed',
+              finalMessage: '页面已完成。',
+            },
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages.map((message) => message.id)).toEqual(['room:task-completed'])
+    expect(projection.messages[0]?.metadata?.codeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'completed',
+      runtime: 'claude-code',
+      files: [{ path: 'index.html', status: 'modified' }],
+      artifacts: [{ id: 'preview:index.html', type: 'preview' }],
+      logs: [{ id: 'log-1', stream: 'stdout' }],
+    })
+  })
+
   test('projects manager/worker timeline into visible messages and task board events', () => {
     const projection = projectRoomTimeline({
       room,

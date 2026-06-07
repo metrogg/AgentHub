@@ -13,6 +13,7 @@ const taskThreadApi = await import('../apps/server/src/services/orchestrator/tas
 const workerRuntimeResourcesApi = await import('../apps/server/src/services/orchestrator/worker-runtime-resources')
 const workerProtocolApi = await import('../apps/server/src/services/worker-runtime/worker-result-listener')
 const agentContractApi = await import('../apps/server/src/services/agent-contract')
+const runtimeApi = await import('../apps/server/src/services/runtime')
 
 const {
   artifacts,
@@ -39,12 +40,166 @@ const { ensureTaskThread } = taskThreadApi
 const { ensureWorkerInstance } = workerRuntimeResourcesApi
 const { handleWorkerProtocolMessage } = workerProtocolApi
 const { resolveWorkerAgentContractWorkspace } = agentContractApi
+const { runtimeRegistry } = runtimeApi
 type WorkerRuntime = workerRuntimeApi.WorkerRuntime
 type WorkerRuntimeContext = workerRuntimeApi.WorkerRuntimeContext
 type WorkerRuntimeEvent = workerRuntimeApi.WorkerRuntimeEvent
 type WorkerRuntimeResult = workerRuntimeApi.WorkerRuntimeResult
 
 describe('WorkerRuntime task room integration', () => {
+  test('ephemeral code-agent runtime preserves process metadata when session metadata arrives last', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Process Metadata Workspace',
+        goal: 'Preserve process output',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Process Builder',
+        role: 'Code worker',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'claude-code',
+      })
+      .returning()
+
+    const originalRuntime = runtimeRegistry
+      .list()
+      .find((runtime) => runtime.runtimeType === 'code-agent')
+    runtimeRegistry.register({
+      runtimeType: 'code-agent',
+      displayName: 'Fake Code Agent',
+      async *execute() {
+        yield {
+          kind: 'metadata',
+          metadata: {
+            type: 'code-agent-run',
+            status: 'completed',
+            runtime: 'claude-code',
+            command: 'claude --print',
+            cwd: 'F:/demo',
+            durationMs: 1234,
+            exitCode: 0,
+            commands: [{ id: 'cmd-1', command: 'bash infra/start-hiclaw-lite.sh' }],
+            files: [
+              {
+                path: 'index.html',
+                status: 'modified',
+                diff: '@@ -1 +1 @@\n-old\n+new',
+              },
+            ],
+            artifacts: [
+              {
+                id: 'preview-1',
+                kind: 'preview',
+                title: 'index.html',
+                url: 'file:///F:/demo/index.html',
+              },
+            ],
+            logs: [{ id: 'log-1', stream: 'stdout', text: '静态发布: index.html' }],
+            steps: [
+              {
+                id: 'step-1',
+                kind: 'file',
+                status: 'completed',
+                title: 'index.html 修改',
+                path: 'index.html',
+                fileStatus: 'modified',
+              },
+            ],
+          },
+        }
+        yield {
+          kind: 'metadata',
+          metadata: { sessionId: 'claude-session-1' },
+        }
+      },
+    })
+
+    try {
+      const runtime = new localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime(agent!)
+      const iterator = runtime.executeTask({
+        roomId: 'room-process-metadata',
+        sessionId: 'session-process-metadata',
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        prompt: '生成页面',
+        history: [],
+      })
+      let result = await iterator.next()
+      const progressEvents: WorkerRuntimeEvent[] = []
+      while (!result.done) {
+        progressEvents.push(result.value)
+        result = await iterator.next()
+      }
+
+      expect(progressEvents.some((event) => event.metadata?.type === 'code-agent-run')).toBe(true)
+      expect(result.value.sessionId).toBe('claude-session-1')
+      expect(result.value.metadata).toMatchObject({
+        type: 'code-agent-run',
+        status: 'completed',
+        runtime: 'claude-code',
+        command: 'claude --print',
+        sessionId: 'claude-session-1',
+      })
+      expect(result.value.metadata?.files).toHaveLength(1)
+      expect(result.value.metadata?.steps).toHaveLength(1)
+      expect(result.value.metadata?.artifacts).toHaveLength(1)
+      expect(result.value.metadata?.logs).toHaveLength(1)
+    } finally {
+      if (originalRuntime) runtimeRegistry.register(originalRuntime)
+    }
+  })
+
+  test('task room writes live and final code-agent process metadata to timeline', async () => {
+    const { room } = await createTaskRoomFixture()
+    const runtime = new ProcessMetadataWorkerRuntime()
+    const service = new WorkerRuntimeService()
+
+    const result = await service.runTaskRoom({
+      roomId: room.id,
+      ownerId: 'default-user',
+      runtime,
+    })
+
+    expect(result.status).toBe('completed')
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    const liveProcessEvent = events.find(
+      (event) =>
+        event.metadata?.kind === 'worker-runtime.progress' &&
+        event.metadata?.type === 'code-agent-run',
+    )
+    expect(liveProcessEvent?.metadata).toMatchObject({
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: 'claude-code',
+      command: 'claude --print',
+      hiddenFromChat: true,
+    })
+    expect(liveProcessEvent?.metadata?.files).toHaveLength(1)
+    expect(liveProcessEvent?.metadata?.steps).toHaveLength(1)
+
+    const completedEvent = [...events]
+      .reverse()
+      .find((event) => event.metadata?.kind === 'worker-runtime.completed')
+    expect(completedEvent?.metadata).toMatchObject({
+      type: 'code-agent-run',
+      status: 'completed',
+      runtime: 'claude-code',
+      command: 'claude --print',
+      sessionId: 'claude-session-2',
+    })
+    expect(completedEvent?.metadata?.files).toHaveLength(1)
+    expect(completedEvent?.metadata?.steps).toHaveLength(1)
+    expect(completedEvent?.metadata?.artifacts).toHaveLength(1)
+    expect(completedEvent?.metadata?.logs).toHaveLength(1)
+  })
+
   test('direct rooms emit started and final code-agent run metadata without showing live metadata bubbles', async () => {
     const [workspace] = await db
       .insert(workspaces)
@@ -1002,6 +1157,69 @@ class DeferredWorkerRuntime implements WorkerRuntime {
       runtimeType: this.runtimeType,
       status: 'completed',
       message: '长任务已完成。',
+    }
+  }
+}
+
+class ProcessMetadataWorkerRuntime implements WorkerRuntime {
+  readonly runtimeType = 'code-agent' as const
+  readonly kind = 'ephemeral-code-agent' as const
+
+  async *executeTask(): AsyncGenerator<WorkerRuntimeEvent, WorkerRuntimeResult, unknown> {
+    const metadata = {
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: 'claude-code',
+      command: 'claude --print',
+      cwd: 'F:/demo',
+      durationMs: 500,
+      exitCode: 0,
+      commands: [{ id: 'cmd-1', command: 'bun run build' }],
+      files: [
+        {
+          path: 'index.html',
+          status: 'modified',
+          diff: '@@ -1 +1 @@\n-old\n+new',
+        },
+      ],
+      artifacts: [
+        {
+          id: 'preview-1',
+          kind: 'preview',
+          title: 'index.html',
+          url: 'file:///F:/demo/index.html',
+        },
+      ],
+      logs: [{ id: 'log-1', stream: 'stdout', text: '静态发布: index.html' }],
+      steps: [
+        {
+          id: 'step-1',
+          kind: 'file',
+          status: 'completed',
+          title: 'index.html 修改',
+          path: 'index.html',
+          fileStatus: 'modified',
+        },
+      ],
+    }
+    yield {
+      type: 'progress',
+      message: 'Worker runtime metadata updated.',
+      metadata,
+    }
+    return {
+      runtimeType: this.runtimeType,
+      kind: this.kind,
+      status: 'completed',
+      message: '页面已完成。',
+      metadata: {
+        ...metadata,
+        status: 'completed',
+        durationMs: 1000,
+        finalMessage: '页面已完成。',
+        sessionId: 'claude-session-2',
+      },
+      sessionId: 'claude-session-2',
     }
   }
 }

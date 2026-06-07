@@ -16,7 +16,9 @@ import {
   workspaces,
 } from '@agenthub/db'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
+import { WsEvent } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../../lib/error'
+import { broadcastSessionEvent } from '../agent-runner'
 import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
@@ -243,6 +245,7 @@ export class WorkerRuntimeService {
     this.runningControllers.set(room.id, abortController)
 
     const appendedEventIds: string[] = []
+    let latestCodeAgentRun: CodeAgentRunMetadata | null = null
     try {
       const startedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
@@ -337,7 +340,8 @@ export class WorkerRuntimeService {
           status: result.status,
           codeAgentRun: finalCodeAgentRun,
           workspaceAgentId: agent.id,
-          runtimeType: runtime.runtimeType,
+          runtimeType: finalCodeAgentRun?.runtime ?? codeAgentRuntime ?? runtime.runtimeType,
+          workerRuntimeType: runtime.runtimeType,
           artifacts: result.artifacts ?? [],
           ...(!hasResultMessage || result.status !== 'completed' ? { hiddenFromChat: true } : {}),
         },
@@ -457,6 +461,22 @@ export class WorkerRuntimeService {
       })
       appendedEventIds.push(startedEvent.id)
 
+      // 通知前端 agent 已开始处理，立即显示"正在处理"状态
+      if (room.sessionId) {
+        broadcastSessionEvent(room.sessionId, {
+          type: WsEvent.AgentTyping,
+          payload: {
+            sessionId: room.sessionId,
+            agentId: agent.id,
+            agentName: agent.name,
+            phase: 'executing',
+          },
+        })
+      }
+
+      // 用于流式消息 merge 的 traceId（同一 agent 同一 mention 的所有 chunk 合并为一条气泡）
+      const streamingTraceId = startedEvent.id
+
       const iterator = runtime.executeTask(
         {
           roomId: room.id,
@@ -482,6 +502,26 @@ export class WorkerRuntimeService {
       while (!next.done) {
         const runtimeEvent = next.value
         if (runtimeEvent.type === 'message') {
+          // 流式文本 chunk：写入 timeline 并以 traceId 合并为同一气泡
+          const event = await roomService.appendTimelineEvent({
+            roomId: room.id,
+            senderParticipantId: workerParticipant.id,
+            senderType: 'worker',
+            type: 'worker.message',
+            body: runtimeEvent.message,
+            metadata: {
+              kind: 'worker-runtime.group-mention-streaming',
+              sourceEventId: input.sourceEventId,
+              workspaceAgentId: agent.id,
+              workerInstanceId: workerParticipant.workerInstanceId ?? null,
+              runtimeType: runtime.runtimeType,
+              traceId: streamingTraceId,
+              senderParticipantId: workerParticipant.id,
+              agentName: agent.name,
+              skipAutoDispatch: true,
+            },
+          })
+          appendedEventIds.push(event.id)
           next = await iterator.next()
           continue
         }
@@ -495,6 +535,32 @@ export class WorkerRuntimeService {
               progressPercent: runtimeEvent.type === 'progress' ? runtimeEvent.progressPercent ?? null : null,
             },
           })
+          // code-agent-run metadata：写入 timeline 让前端更新执行过程卡片
+          const codeAgentRunMeta = runtimeEvent.type === 'progress' && runtimeEvent.metadata?.type === 'code-agent-run'
+            ? runtimeEvent.metadata
+            : null
+          if (codeAgentRunMeta) {
+            const event = await roomService.appendTimelineEvent({
+              roomId: room.id,
+              senderParticipantId: workerParticipant.id,
+              senderType: 'worker',
+              type: 'task.progress',
+              body: '',
+              metadata: {
+                kind: 'worker-runtime.progress',
+                sourceEventId: input.sourceEventId,
+                workspaceAgentId: agent.id,
+                workerInstanceId: workerParticipant.workerInstanceId ?? null,
+                runtimeType: runtime.runtimeType,
+                traceId: streamingTraceId,
+                senderParticipantId: workerParticipant.id,
+                ...codeAgentRunMeta,
+                skipAutoDispatch: true,
+                hiddenFromChat: true,
+              },
+            })
+            appendedEventIds.push(event.id)
+          }
           next = await iterator.next()
           continue
         }
@@ -513,7 +579,8 @@ export class WorkerRuntimeService {
 
       const result = next.value
       finalStatus = result.status
-      const hasResultMessage = hasExplicitText(result.message)
+      // text was streamed incrementally — completed event is a status marker only
+      const hasResultMessage = result.status !== 'completed' && hasExplicitText(result.message)
       const completedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
         senderParticipantId: hasResultMessage ? workerParticipant.id : null,

@@ -637,6 +637,181 @@ function useHeaderAgentStatus(): HeaderAgentStatusProjection {
   })
 }
 
+function useWorkspaceMenuController({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose?: () => void
+}) {
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const setSessionWorkspace = useChatStore((state) => state.setSessionWorkspace)
+  const sendMessage = useChatStore((state) => state.sendMessage)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
+  const currentProjectWorkspace =
+    currentWorkspace && isProjectWorkspace(currentWorkspace) ? currentWorkspace : null
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setWorkspaceBusy(true)
+    api
+      .listWorkspaces()
+      .then(({ items }) => {
+        if (!cancelled) setWorkspaces(items.filter(isProjectWorkspace))
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaces([])
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceBusy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  function showHint(text: string) {
+    setHint(text)
+    window.setTimeout(() => setHint(null), 1800)
+  }
+
+  async function openWorkspace(workspaceId: string) {
+    if (workspaceBusy || !currentSessionId) return
+    setWorkspaceBusy(true)
+    setOpeningWorkspaceId(workspaceId)
+    showHint('正在选择工作区...')
+    try {
+      await setSessionWorkspace(currentSessionId, workspaceId)
+      onClose?.()
+      await fetchSessions()
+      showHint('工作区已应用到当前会话')
+    } catch (err) {
+      showHint(friendlyErrorMessage(err, '选择工作区失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
+  async function createBlankWorkspace() {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    try {
+      const full = await api.createAutoWorkspace({
+        name: '新工作空间',
+        goal: '',
+      })
+      setWorkspaces((items) => [
+        full.workspace,
+        ...items.filter((item) => item.id !== full.workspace.id),
+      ])
+      setOpeningWorkspaceId(full.workspace.id)
+      if (currentSessionId) await setSessionWorkspace(currentSessionId, full.workspace.id)
+      onClose?.()
+      await fetchSessions()
+      showHint('已创建并应用工作区')
+    } catch (err) {
+      showHint(friendlyErrorMessage(err, '创建工作区失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
+  async function openFolderWorkspace() {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    showHint('正在打开文件夹选择器...')
+    try {
+      const nativePath = await pickWorkspaceFolder().catch(() => null)
+      const result = await api.openWorkspaceFolder(nativePath)
+      if (result.cancelled || !result.projectPath) {
+        showHint('已取消选择文件夹')
+        return
+      }
+      showHint('已选择文件夹，正在处理工作区...')
+      const workspace =
+        result.workspace ??
+        (
+          await api.createWorkspace({
+            name: workspaceNameFromPath(result.projectPath),
+            goal: '',
+            projectPath: result.projectPath,
+          })
+        ).workspace
+      setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
+      setOpeningWorkspaceId(workspace.id)
+      if (currentSessionId) await setSessionWorkspace(currentSessionId, workspace.id)
+      onClose?.()
+      await fetchSessions()
+      showHint('工作区已应用到当前会话')
+    } catch (err) {
+      showHint(friendlyErrorMessage(err, '处理工作区失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
+  async function cloneGithubWorkspace(repoUrl: string, deployAfterClone: boolean) {
+    if (workspaceBusy) return
+    if (!currentSessionId) {
+      showHint('请先选择或新建一个会话')
+      return
+    }
+    const normalizedRepoUrl = repoUrl.trim()
+    if (!normalizedRepoUrl) {
+      showHint('请粘贴 GitHub 仓库地址')
+      return
+    }
+
+    setWorkspaceBusy(true)
+    showHint('正在从 GitHub 拉取...')
+    try {
+      const full = await api.cloneGithubWorkspace({
+        repoUrl: normalizedRepoUrl,
+        goal: '',
+      })
+      setWorkspaces((items) => [
+        full.workspace,
+        ...items.filter((item) => item.id !== full.workspace.id),
+      ])
+      setOpeningWorkspaceId(full.workspace.id)
+      await setSessionWorkspace(currentSessionId, full.workspace.id)
+      onClose?.()
+      await fetchSessions()
+      showHint(deployAfterClone ? '已拉取，正在部署...' : 'GitHub 仓库已应用到当前会话')
+      if (deployAfterClone) {
+        await sendMessage('部署', { usePendingAttachments: false })
+      }
+    } catch (err) {
+      showHint(friendlyErrorMessage(err, 'GitHub 拉取失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
+  return {
+    workspaces,
+    currentProjectWorkspace,
+    workspaceBusy,
+    openingWorkspaceId,
+    hint,
+    showHint,
+    openWorkspace,
+    createBlankWorkspace,
+    openFolderWorkspace,
+    cloneGithubWorkspace,
+  }
+}
+
 const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
   onToggleDetails,
   previewCollapsed,
@@ -648,6 +823,11 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const clearMessages = useChatStore((state) => state.clearMessages)
   const navigate = useNavigate()
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
+  const workspaceMenu = useWorkspaceMenuController({
+    open: workspaceMenuOpen,
+    onClose: () => setWorkspaceMenuOpen(false),
+  })
   const title = groupChatDisplayTitle(session?.title, workspace?.name)
   const memberCount = agents.length + 1
 
@@ -668,6 +848,52 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
       </div>
       <div className="flex items-center gap-1">
         <HeaderAgentStatusIndicator />
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setWorkspaceMenuOpen((open) => !open)}
+            className={cn(
+              'grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950',
+              workspaceMenuOpen && 'bg-neutral-100 text-neutral-950',
+            )}
+            title={
+              workspaceMenu.currentProjectWorkspace
+                ? `${workspaceMenu.currentProjectWorkspace.name} · ${
+                    workspaceMenu.currentProjectWorkspace.projectPath ?? '本地工作空间'
+                  }`
+                : '选择工作区'
+            }
+            aria-label="选择工作区"
+          >
+            <FolderOpen className="h-4 w-4" />
+          </button>
+          {workspaceMenuOpen && (
+            <ComposerMenu
+              type="workspace"
+              agents={agents}
+              workspaces={workspaceMenu.workspaces}
+              currentWorkspaceId={workspaceMenu.currentProjectWorkspace?.id ?? null}
+              openingWorkspaceId={workspaceMenu.openingWorkspaceId}
+              workspaceBusy={workspaceMenu.workspaceBusy}
+              planMode={false}
+              onOpenWorkspace={(workspaceId) => void workspaceMenu.openWorkspace(workspaceId)}
+              onCreateBlankWorkspace={() => void workspaceMenu.createBlankWorkspace()}
+              onOpenFolderWorkspace={() => void workspaceMenu.openFolderWorkspace()}
+              onCloneGithubWorkspace={(repoUrl, deployAfterClone) =>
+                void workspaceMenu.cloneGithubWorkspace(repoUrl, deployAfterClone)
+              }
+              onPlanMode={() => undefined}
+              onPick={() => undefined}
+              onClose={() => setWorkspaceMenuOpen(false)}
+              className="absolute right-0 top-[calc(100%+0.5rem)] z-50"
+            />
+          )}
+          {workspaceMenu.hint && !workspaceMenuOpen && (
+            <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 whitespace-nowrap rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
+              {workspaceMenu.hint}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={onToggleDetails}
@@ -3111,10 +3337,7 @@ const Composer: FC = () => {
   const { t } = useI18n()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
-  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
-  const fetchSessions = useChatStore((state) => state.fetchSessions)
-  const setSessionWorkspace = useChatStore((state) => state.setSessionWorkspace)
   const pendingAttachments = useChatStore((state) => state.pendingAttachments)
   const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
   const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
@@ -3141,38 +3364,16 @@ const Composer: FC = () => {
     end: number
     query: string
   } | null>(null)
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  const [workspaceBusy, setWorkspaceBusy] = useState(false)
-  const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
-  const [hint, setHint] = useState<string | null>(null)
+  const workspaceMenu = useWorkspaceMenuController({
+    open: menu === 'workspace',
+    onClose: () => setMenu(null),
+  })
   const [planMode, setPlanMode] = useState(false)
   const [composerText, setComposerText] = useState('')
   const [composerScrollTop, setComposerScrollTop] = useState(0)
   const [dragActive, setDragActive] = useState(false)
   const [composerSubmitting, setComposerSubmitting] = useState(false)
   const composerRunning = agentTyping || Boolean(streamingMessage)
-  const currentProjectWorkspace =
-    currentWorkspace && isProjectWorkspace(currentWorkspace) ? currentWorkspace : null
-
-  useEffect(() => {
-    if (menu !== 'workspace') return
-    let cancelled = false
-    setWorkspaceBusy(true)
-    api
-      .listWorkspaces()
-      .then(({ items }) => {
-        if (!cancelled) setWorkspaces(items.filter(isProjectWorkspace))
-      })
-      .catch(() => {
-        if (!cancelled) setWorkspaces([])
-      })
-      .finally(() => {
-        if (!cancelled) setWorkspaceBusy(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [menu])
 
   useEffect(() => {
     if (!skillPanelOpen || skills.length) return
@@ -3194,10 +3395,7 @@ const Composer: FC = () => {
     }
   }, [skillPanelOpen, skills.length])
 
-  function showHint(text: string) {
-    setHint(text)
-    window.setTimeout(() => setHint(null), 1800)
-  }
+  const { hint, showHint } = workspaceMenu
 
   async function handleFiles(files: FileList | File[] | null) {
     const list = Array.from(files ?? [])
@@ -3397,123 +3595,6 @@ const Composer: FC = () => {
     showHint(`已选择 Skill：${skill.name || skill.id}`)
   }
 
-  async function openWorkspace(workspaceId: string) {
-    if (workspaceBusy || !currentSessionId) return
-    setWorkspaceBusy(true)
-    setOpeningWorkspaceId(workspaceId)
-    showHint('正在选择工作区...')
-    try {
-      await setSessionWorkspace(currentSessionId, workspaceId)
-      setMenu(null)
-      await fetchSessions()
-      showHint('工作区已应用到当前会话')
-    } catch (err) {
-      showHint(friendlyErrorMessage(err, '选择工作区失败'))
-    } finally {
-      setWorkspaceBusy(false)
-      setOpeningWorkspaceId(null)
-    }
-  }
-
-  async function createBlankWorkspace() {
-    if (workspaceBusy) return
-    setWorkspaceBusy(true)
-    try {
-      const full = await api.createAutoWorkspace({
-        name: '新工作空间',
-        goal: '',
-      })
-      setWorkspaces((items) => [
-        full.workspace,
-        ...items.filter((item) => item.id !== full.workspace.id),
-      ])
-      setOpeningWorkspaceId(full.workspace.id)
-      if (currentSessionId) await setSessionWorkspace(currentSessionId, full.workspace.id)
-      setMenu(null)
-      await fetchSessions()
-      showHint('已创建并应用工作区')
-    } catch (err) {
-      showHint(friendlyErrorMessage(err, '创建工作区失败'))
-    } finally {
-      setWorkspaceBusy(false)
-      setOpeningWorkspaceId(null)
-    }
-  }
-
-  async function openFolderFromComposer() {
-    if (workspaceBusy) return
-    setWorkspaceBusy(true)
-    showHint('正在打开文件夹选择器...')
-    try {
-      const nativePath = await pickWorkspaceFolder().catch(() => null)
-      const result = await api.openWorkspaceFolder(nativePath)
-      if (result.cancelled || !result.projectPath) {
-        showHint('已取消选择文件夹')
-        return
-      }
-      showHint('已选择文件夹，正在处理工作区...')
-      const workspace =
-        result.workspace ??
-        (
-          await api.createWorkspace({
-            name: workspaceNameFromPath(result.projectPath),
-            goal: '',
-            projectPath: result.projectPath,
-          })
-        ).workspace
-      setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
-      setOpeningWorkspaceId(workspace.id)
-      if (currentSessionId) await setSessionWorkspace(currentSessionId, workspace.id)
-      setMenu(null)
-      await fetchSessions()
-      showHint('工作区已应用到当前会话')
-    } catch (err) {
-      showHint(friendlyErrorMessage(err, '处理工作区失败'))
-    } finally {
-      setWorkspaceBusy(false)
-      setOpeningWorkspaceId(null)
-    }
-  }
-
-  async function cloneGithubWorkspaceFromComposer(repoUrl: string, deployAfterClone: boolean) {
-    if (workspaceBusy) return
-    if (!currentSessionId) {
-      showHint('请先选择或新建一个会话')
-      return
-    }
-    const normalizedRepoUrl = repoUrl.trim()
-    if (!normalizedRepoUrl) {
-      showHint('请粘贴 GitHub 仓库地址')
-      return
-    }
-
-    setWorkspaceBusy(true)
-    showHint('正在从 GitHub 拉取...')
-    try {
-      const full = await api.cloneGithubWorkspace({
-        repoUrl: normalizedRepoUrl,
-        goal: '',
-      })
-      setWorkspaces((items) => [
-        full.workspace,
-        ...items.filter((item) => item.id !== full.workspace.id),
-      ])
-      setOpeningWorkspaceId(full.workspace.id)
-      await setSessionWorkspace(currentSessionId, full.workspace.id)
-      setMenu(null)
-      await fetchSessions()
-      showHint(deployAfterClone ? '已拉取，正在部署...' : 'GitHub 仓库已应用到当前会话')
-      if (deployAfterClone) {
-        await sendMessage('部署', { usePendingAttachments: false })
-      }
-    } catch (err) {
-      showHint(friendlyErrorMessage(err, 'GitHub 拉取失败'))
-    } finally {
-      setWorkspaceBusy(false)
-      setOpeningWorkspaceId(null)
-    }
-  }
-
   function syncComposerTextFromInput() {
     const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
     setComposerText(input?.value ?? '')
@@ -3586,16 +3667,16 @@ const Composer: FC = () => {
               type={menu}
               agents={workspaceAgents}
               agentQuery={agentMenuMode === 'mention' ? (agentMentionRange?.query ?? '') : ''}
-              workspaces={workspaces}
-              currentWorkspaceId={currentProjectWorkspace?.id ?? null}
-              openingWorkspaceId={openingWorkspaceId}
-              workspaceBusy={workspaceBusy}
+              workspaces={workspaceMenu.workspaces}
+              currentWorkspaceId={workspaceMenu.currentProjectWorkspace?.id ?? null}
+              openingWorkspaceId={workspaceMenu.openingWorkspaceId}
+              workspaceBusy={workspaceMenu.workspaceBusy}
               planMode={planMode}
-              onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
-              onCreateBlankWorkspace={() => void createBlankWorkspace()}
-              onOpenFolderWorkspace={() => void openFolderFromComposer()}
+              onOpenWorkspace={(workspaceId) => void workspaceMenu.openWorkspace(workspaceId)}
+              onCreateBlankWorkspace={() => void workspaceMenu.createBlankWorkspace()}
+              onOpenFolderWorkspace={() => void workspaceMenu.openFolderWorkspace()}
               onCloneGithubWorkspace={(repoUrl, deployAfterClone) =>
-                void cloneGithubWorkspaceFromComposer(repoUrl, deployAfterClone)
+                void workspaceMenu.cloneGithubWorkspace(repoUrl, deployAfterClone)
               }
               onPlanMode={(next) => {
                 setPlanMode(next)
@@ -3759,10 +3840,15 @@ const Composer: FC = () => {
               </ComposerToolButton>
               <ComposerToolButton
                 aria-label="选择工作区"
-                title={currentProjectWorkspace ? currentProjectWorkspace.name : '选择工作区'}
+                title={
+                  workspaceMenu.currentProjectWorkspace
+                    ? workspaceMenu.currentProjectWorkspace.name
+                    : '选择工作区'
+                }
                 onClick={() => setMenu(menu === 'workspace' ? null : 'workspace')}
                 className={cn(
-                  (currentProjectWorkspace || menu === 'workspace') && 'agenthub-icon-button-open',
+                  (workspaceMenu.currentProjectWorkspace || menu === 'workspace') &&
+                    'agenthub-icon-button-open',
                 )}
               >
                 <FolderOpen className="h-4 w-4" />
@@ -3926,6 +4012,7 @@ const ComposerMenu: FC<{
   onPlanMode: (enabled: boolean) => void
   onPick: (value: string) => void
   onClose: () => void
+  className?: string
 }> = ({
   type,
   agents,
@@ -3942,6 +4029,7 @@ const ComposerMenu: FC<{
   onPlanMode,
   onPick,
   onClose,
+  className,
 }) => {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [githubRepoUrl, setGithubRepoUrl] = useState('')
@@ -3976,8 +4064,8 @@ const ComposerMenu: FC<{
   return (
     <div
       className={cn(
-        'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
-        'left-3',
+        'agenthub-menu-popover z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
+        className ?? 'absolute bottom-[4.5rem] left-3',
         type === 'workspace' ? 'w-80' : 'w-64',
       )}
     >
@@ -6699,73 +6787,12 @@ function buildCodeAgentProcessRows(data: CodeAgentRunMetadata): FlowRow[] {
         ),
       })
     }
-  } else {
-    if (data.toolCalls?.length) {
-      for (const call of data.toolCalls) {
-        rows.push({
-          key: `tool-${call.id}`,
-          icon: <Blocks className="h-3.5 w-3.5" />,
-          tone: 'blue',
-          title: call.label,
-          subtitle: [call.name, call.target].filter(Boolean).join(' · ') || undefined,
-          detail: call.detail,
-        })
-      }
-    }
-
-    if (data.commands?.length) {
-      for (const command of data.commands) {
-        rows.push({
-          key: `command-${command.id}`,
-          icon: <TerminalSquare className="h-3.5 w-3.5" />,
-          tone: 'neutral',
-          title: command.command,
-          subtitle: command.cwd ?? undefined,
-          detail: command.output ? trimLongText(command.output, 220) : undefined,
-        })
-      }
-    }
-
-    if (data.files?.length) {
-      for (const file of data.files) {
-        rows.push({
-          key: `file-${file.path}`,
-          icon: <FileText className="h-3.5 w-3.5" />,
-          tone: fileTone(file.status),
-          title: file.path,
-          subtitle: file.status ? fileStatusLabel(file.status) : undefined,
-          detail: file.diff ? (
-            <InlineDiffReview diff={file.diff} filePath={file.path} compact />
-          ) : undefined,
-        })
-      }
-    }
-
-    if (data.logs?.length) {
-      const lastLog = data.logs[data.logs.length - 1]
-      rows.push({
-        key: 'log-summary',
-        icon: lastLog.stream === 'stderr' ? <XCircle className="h-3.5 w-3.5" /> : <ListTodo className="h-3.5 w-3.5" />,
-        tone: data.logs.some((log) => log.stream === 'stderr') ? 'red' : 'neutral',
-        title: '过程输出',
-        subtitle: `${data.logs.length} 条运行日志`,
-        detail: trimLongText(lastLog.text, 220),
-      })
-    }
   }
 
-  if (steps.length > 0 && data.files?.some((file) => file.diff)) {
-    for (const file of data.files.filter((item) => item.diff)) {
-      rows.push({
-        key: `file-review-${file.path}`,
-        icon: <FileText className="h-3.5 w-3.5" />,
-        tone: fileTone(file.status),
-        title: file.path,
-        subtitle: `${fileStatusLabel(file.status)} · 代码变更待审查`,
-        detail: <InlineDiffReview diff={file.diff ?? ''} filePath={file.path} compact />,
-      })
-    }
-  }
+  appendCodeAgentToolRows(rows, data)
+  appendCodeAgentCommandRows(rows, data)
+  appendCodeAgentFileRows(rows, data)
+  appendCodeAgentLogRows(rows, data, steps.length > 0)
 
   if (!rows.length) {
     rows.push({
@@ -6778,6 +6805,78 @@ function buildCodeAgentProcessRows(data: CodeAgentRunMetadata): FlowRow[] {
   }
 
   return rows
+}
+
+function appendCodeAgentToolRows(rows: FlowRow[], data: CodeAgentRunMetadata) {
+  if (!data.toolCalls?.length) return
+  const existing = new Set(rows.map((row) => row.key))
+  for (const call of data.toolCalls) {
+    const key = `tool-${call.id}`
+    if (existing.has(key)) continue
+    existing.add(key)
+    rows.push({
+      key,
+      icon: <Blocks className="h-3.5 w-3.5" />,
+      tone: 'blue',
+      title: call.label,
+      subtitle: [call.name, call.target].filter(Boolean).join(' · ') || undefined,
+      detail: call.detail,
+    })
+  }
+}
+
+function appendCodeAgentCommandRows(rows: FlowRow[], data: CodeAgentRunMetadata) {
+  if (!data.commands?.length) return
+  const existing = new Set(rows.map((row) => row.key))
+  for (const command of data.commands) {
+    const key = `command-${command.id}`
+    if (existing.has(key)) continue
+    existing.add(key)
+    rows.push({
+      key,
+      icon: <TerminalSquare className="h-3.5 w-3.5" />,
+      tone: 'neutral',
+      title: command.command,
+      subtitle: command.cwd ?? undefined,
+      detail: command.output ? trimLongText(command.output, 220) : undefined,
+    })
+  }
+}
+
+function appendCodeAgentFileRows(rows: FlowRow[], data: CodeAgentRunMetadata) {
+  if (!data.files?.length) return
+  const existing = new Set(rows.map((row) => row.key))
+  for (const file of data.files) {
+    const key = `file-${file.path}`
+    const reviewKey = `file-review-${file.path}`
+    if (existing.has(key) || existing.has(reviewKey)) continue
+    existing.add(key)
+    rows.push({
+      key,
+      icon: <FileText className="h-3.5 w-3.5" />,
+      tone: fileTone(file.status),
+      title: file.path,
+      subtitle: file.status ? fileStatusLabel(file.status) : undefined,
+      detail: file.diff ? <InlineDiffReview diff={file.diff} filePath={file.path} compact /> : undefined,
+    })
+  }
+}
+
+function appendCodeAgentLogRows(
+  rows: FlowRow[],
+  data: CodeAgentRunMetadata,
+  hasStepLogSummary: boolean,
+) {
+  if (!data.logs?.length || hasStepLogSummary) return
+  const lastLog = data.logs[data.logs.length - 1]
+  rows.push({
+    key: 'log-summary',
+    icon: lastLog.stream === 'stderr' ? <XCircle className="h-3.5 w-3.5" /> : <ListTodo className="h-3.5 w-3.5" />,
+    tone: data.logs.some((log) => log.stream === 'stderr') ? 'red' : 'neutral',
+    title: '过程输出',
+    subtitle: `${data.logs.length} 条运行日志`,
+    detail: trimLongText(lastLog.text, 220),
+  })
 }
 
 function stepToFlowRow(step: NonNullable<CodeAgentRunMetadata['steps']>[number]): FlowRow {
