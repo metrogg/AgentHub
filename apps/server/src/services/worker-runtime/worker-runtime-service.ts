@@ -19,6 +19,7 @@ import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
+import { updateSharedTaskDirectoryStatus } from '../orchestrator/shared-task-directory'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
@@ -580,13 +581,13 @@ export class WorkerRuntimeService {
     let sharedTaskRelativeRoot: string | null = null
     let sharedTaskSpecPath: string | null = null
     if (room.taskId) {
+      sharedTaskRelativeRoot = readString(room.metadata?.sharedTaskRelativeRoot) ?? ['.agenthub', 'shared', 'tasks', room.taskId].join('/')
+      sharedTaskSpecPath = readString(room.metadata?.sharedTaskSpecPath) ?? `${sharedTaskRelativeRoot}/spec.md`
       const projectPath = workspace?.projectPath ?? lease?.cwd ?? null
       if (projectPath) {
-        sharedTaskRelativeRoot = join('.agenthub', 'shared', 'tasks', room.taskId)
         const specPath = join(projectPath, sharedTaskRelativeRoot, 'spec.md')
         try {
           specPrompt = await readFile(specPath, 'utf8')
-          sharedTaskSpecPath = specPath
         } catch (e: any) {
           if (e.code !== 'ENOENT') {
             logger.warn({ err: e, taskId: room.taskId, specPath }, 'Failed to read task spec.md')
@@ -688,6 +689,22 @@ export class WorkerRuntimeService {
       runtimeLeaseId: lease?.id ?? null,
       runtimeType: runtime.runtimeType,
       startedEventId: startedEvent.id,
+    })
+    await syncSharedTaskDirectoryStatus({
+      roomId: room.id,
+      projectPath: workspace?.projectPath ?? lease?.cwd ?? null,
+      sharedTaskRelativeRoot,
+      taskId: room.taskId,
+      status: 'running',
+      workerInstanceId: thread?.workerInstanceId ?? null,
+      runtimeLeaseId: lease?.id ?? null,
+      messageId: startedEvent.id,
+      summary: `${agent.name} 已接单。`,
+      executionConfig: {
+        runtimeType: runtime.runtimeType,
+        source: input.source ?? 'worker-runtime.start',
+      },
+      timestamps: { startedAt: new Date().toISOString() },
     })
     await refreshWorkerContractMirror({
       workerInstanceId: thread?.workerInstanceId ?? null,
@@ -1501,6 +1518,7 @@ async function syncRunControllerAfterTaskRoomResult(input: {
 }) {
   const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
   if (!room.runId || !room.workspaceId || !room.taskId) return
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId)).limit(1)
   const [thread] = room.taskThreadId
     ? await db.select().from(taskThreads).where(eq(taskThreads.id, room.taskThreadId)).limit(1)
     : []
@@ -1511,7 +1529,26 @@ async function syncRunControllerAfterTaskRoomResult(input: {
         .from(runtimeLeases)
         .where(and(eq(runtimeLeases.workerInstanceId, thread.workerInstanceId), eq(runtimeLeases.taskId, room.taskId)))
         .limit(1)
-    : await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, room.taskId)).limit(1)
+      : await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, room.taskId)).limit(1)
+  await syncSharedTaskDirectoryStatus({
+    roomId: room.id,
+    projectPath: workspace?.projectPath ?? lease?.cwd ?? null,
+    sharedTaskRelativeRoot: readString(room.metadata?.sharedTaskRelativeRoot) ?? ['.agenthub', 'shared', 'tasks', room.taskId].join('/'),
+    taskId: room.taskId,
+    status: sharedTaskStatusFromWorkerResult(input.result.status),
+    workerInstanceId: thread?.workerInstanceId ?? null,
+    runtimeLeaseId: lease?.id ?? null,
+    messageId: input.result.appendedEventIds.at(-1) ?? null,
+    error: input.result.status === 'failed' ? input.result.message ?? 'WorkerRuntime failed.' : null,
+    summary: input.result.message ?? null,
+    artifacts: artifactsForRunController(input.result.artifacts),
+    executionConfig: {
+      runtimeType: input.result.runtimeType,
+      source: input.source,
+      sessionId: input.result.sessionId ?? null,
+    },
+    timestamps: terminalSharedTaskTimestamps(input.result.status),
+  })
   const run = {
     runId: room.runId,
     workspaceId: room.workspaceId,
@@ -1591,6 +1628,42 @@ async function syncRunControllerAfterTaskRoomResult(input: {
   })
 }
 
+async function syncSharedTaskDirectoryStatus(input: Parameters<typeof updateSharedTaskDirectoryStatus>[0] & {
+  roomId: string
+}) {
+  try {
+    await updateSharedTaskDirectoryStatus(input)
+  } catch (error: any) {
+    logger.warn(
+      {
+        err: error?.message || String(error),
+        roomId: input.roomId,
+        taskId: input.taskId,
+        sharedTaskRelativeRoot: input.sharedTaskRelativeRoot,
+        status: input.status,
+      },
+      'Failed to update shared task directory status',
+    )
+  }
+}
+
+function sharedTaskStatusFromWorkerResult(
+  status: WorkerRuntimeResult['status'],
+): Parameters<typeof updateSharedTaskDirectoryStatus>[0]['status'] {
+  if (status === 'completed') return 'completed'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'waiting_for_human') return 'blocked'
+  return 'failed'
+}
+
+function terminalSharedTaskTimestamps(status: WorkerRuntimeResult['status']) {
+  const now = new Date().toISOString()
+  if (status === 'completed') return { completedAt: now, updatedAt: now }
+  if (status === 'cancelled') return { cancelledAt: now, updatedAt: now }
+  if (status === 'failed') return { failedAt: now, updatedAt: now }
+  return { updatedAt: now }
+}
+
 async function refreshWorkerContractMirror(input: {
   workerInstanceId: string | null
   source: string
@@ -1616,6 +1689,10 @@ async function refreshWorkerContractMirror(input: {
 
 function artifactsForRunController(value: unknown) {
   return Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
 export const workerRuntimeService = new WorkerRuntimeService()

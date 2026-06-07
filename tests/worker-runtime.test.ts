@@ -1,6 +1,8 @@
 import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
@@ -171,6 +173,25 @@ describe('WorkerRuntime task room integration', () => {
     expect(rows[0]?.objectKey).toContain('/tasks/')
     expect(rows[0]?.storageProvider).toBe('local-filesystem')
     expect(rows[0]?.storagePath).toBeTruthy()
+  })
+
+  test('completed bridge Worker writes shared task result.md', async () => {
+    const projectPath = mkdtempSync(join(tmpdir(), 'agenthub-shared-task-'))
+    const { room } = await createTaskRoomFixture({ projectPath })
+
+    const service = new WorkerRuntimeService()
+    const result = await service.runTaskRoom({
+      roomId: room.id,
+      ownerId: 'default-user',
+      runtime: new FakeWorkerRuntime(),
+    })
+
+    expect(result.status).toBe('completed')
+    const resultPath = join(projectPath, '.agenthub', 'shared', 'tasks', room.taskId!, 'result.md')
+    const resultText = readFileSync(resultPath, 'utf8')
+    expect(resultText).toContain('STATUS: SUCCESS')
+    expect(resultText).toContain('SUMMARY: 报告已完成。')
+    expect(resultText).toContain(`- .agenthub/shared/tasks/${room.taskId}/artifacts/report.html`)
   })
 
   test('worker clarification requests and partial artifacts are preserved in task room timeline', async () => {
@@ -513,7 +534,8 @@ describe('WorkerRuntime task room integration', () => {
   })
 
   test('resident Worker TASK_COMPLETED protocol reconciles task room resources by room id', async () => {
-    const { room, task, thread } = await createTaskRoomFixture()
+    const projectPath = mkdtempSync(join(tmpdir(), 'agenthub-resident-result-'))
+    const { room, task, thread } = await createTaskRoomFixture({ projectPath })
     expect(room.id).not.toBe(thread.sessionId)
     const [workerParticipant] = await db
       .select()
@@ -550,6 +572,9 @@ describe('WorkerRuntime task room integration', () => {
         runtimeLeaseId: lease?.id,
       }),
     ])
+    const resultText = readFileSync(join(projectPath, '.agenthub', 'shared', 'tasks', task.id, 'result.md'), 'utf8')
+    expect(resultText).toContain('STATUS: SUCCESS')
+    expect(resultText).toContain('SUMMARY: 已完成页面和说明。')
   })
 
   test('resident Worker QUESTION protocol creates clarification and waiting resources', async () => {
@@ -597,13 +622,14 @@ describe('WorkerRuntime task room integration', () => {
   })
 })
 
-async function createTaskRoomFixture() {
+async function createTaskRoomFixture(options: { projectPath?: string | null } = {}) {
   const [workspace] = await db
     .insert(workspaces)
     .values({
       ownerId: 'default-user',
       name: 'Worker Runtime Workspace',
       goal: 'Run task rooms',
+      projectPath: options.projectPath ?? null,
     })
     .returning()
   const [agent] = await db

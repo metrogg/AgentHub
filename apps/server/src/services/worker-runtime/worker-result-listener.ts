@@ -8,6 +8,7 @@ import {
   rooms,
   runtimeLeases,
   taskThreads,
+  workspaces,
   workspaceTasks,
   workerInstances,
 } from '@agenthub/db'
@@ -17,6 +18,7 @@ import { roomService } from '../rooms'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
+import { updateSharedTaskDirectoryStatus } from '../orchestrator/shared-task-directory'
 import { updateTaskThreadStatus } from '../orchestrator/task-thread-service'
 import { createTaskClarification } from './task-clarification-store'
 
@@ -114,6 +116,16 @@ async function handleTaskCompleted(input: WorkerProtocolInput, summary: string) 
   ).catch((err) => {
     logger.warn({ err, taskId: context.task.id }, 'Failed to mark task completed via run controller')
   })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'completed',
+    summary,
+    messageId: input.eventId,
+    timestamps: { completedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.task-completed',
+      sourceEventId: input.eventId,
+    },
+  })
 
   await runtimeLeaseController.release(context.lease?.id, {
     workerInstanceId: context.workerInstanceId,
@@ -142,6 +154,17 @@ async function handleTaskBlocked(input: WorkerProtocolInput, reason: string) {
     agentId: context.task.agentId ?? context.thread?.workspaceAgentId ?? null,
     error: reason,
     reason: 'worker_protocol_blocked',
+  })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'blocked',
+    summary: reason,
+    error: reason,
+    messageId: input.eventId,
+    timestamps: { failedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.blocked',
+      sourceEventId: input.eventId,
+    },
   })
 
   await runtimeLeaseController.release(context.lease?.id, {
@@ -189,6 +212,18 @@ async function handleWorkerQuestion(input: WorkerProtocolInput, question: string
       source: 'worker-protocol.question',
       sourceEventId: input.eventId,
       taskRoomId: context.room.id,
+    },
+  })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'blocked',
+    summary: `Waiting for human clarification: ${question}`,
+    error: question,
+    messageId: input.eventId,
+    timestamps: { updatedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.question',
+      sourceEventId: input.eventId,
+      clarificationId: clarification?.id ?? null,
     },
   })
 
@@ -258,6 +293,17 @@ async function handlePhaseCompleted(input: WorkerProtocolInput, phaseNum: string
       taskRoomId: context.room.id,
     },
   })
+  await updateSharedTaskStatusFromProtocol(context, {
+    status: 'running',
+    summary,
+    messageId: input.eventId,
+    timestamps: { updatedAt: new Date().toISOString() },
+    executionConfig: {
+      source: 'worker-protocol.phase-done',
+      sourceEventId: input.eventId,
+      phase: phaseNum,
+    },
+  })
   if (context.thread?.id) {
     await updateTaskThreadStatus(context.thread.id, 'active', input.eventId)
   }
@@ -316,11 +362,14 @@ async function resolveTaskRoomContext(input: WorkerProtocolInput) {
         .orderBy(desc(runtimeLeases.updatedAt))
         .limit(1)
 
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId ?? task.workspaceId)).limit(1)
+
   return {
     room,
     thread: thread ?? null,
     task,
     lease: lease ?? null,
+    workspace: workspace ?? null,
     worker: worker ?? null,
     workerInstanceId: normalizedWorkerInstanceId,
     run: {
@@ -328,6 +377,47 @@ async function resolveTaskRoomContext(input: WorkerProtocolInput) {
       workspaceId: room.workspaceId ?? task.workspaceId,
       groupSessionId,
     },
+  }
+}
+
+async function updateSharedTaskStatusFromProtocol(
+  context: NonNullable<Awaited<ReturnType<typeof resolveTaskRoomContext>>>,
+  input: {
+    status: 'running' | 'completed' | 'blocked'
+    summary: string
+    error?: string | null
+    messageId?: string | null
+    timestamps?: Parameters<typeof updateSharedTaskDirectoryStatus>[0]['timestamps']
+    executionConfig?: Record<string, unknown>
+  },
+) {
+  const sharedTaskRelativeRoot =
+    readString(context.room.metadata?.sharedTaskRelativeRoot) ??
+    ['.agenthub', 'shared', 'tasks', context.task.id].join('/')
+  try {
+    await updateSharedTaskDirectoryStatus({
+      projectPath: context.workspace?.projectPath ?? context.lease?.cwd ?? null,
+      sharedTaskRelativeRoot,
+      taskId: context.task.id,
+      status: input.status,
+      workerInstanceId: context.workerInstanceId,
+      runtimeLeaseId: context.lease?.id ?? null,
+      messageId: input.messageId ?? null,
+      error: input.error ?? null,
+      summary: input.summary,
+      executionConfig: input.executionConfig ?? null,
+      timestamps: input.timestamps,
+    })
+  } catch (error: any) {
+    logger.warn(
+      {
+        err: error?.message || String(error),
+        roomId: context.room.id,
+        taskId: context.task.id,
+        status: input.status,
+      },
+      'Failed to update shared task status from Worker protocol',
+    )
   }
 }
 
