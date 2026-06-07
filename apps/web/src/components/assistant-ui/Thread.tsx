@@ -7697,9 +7697,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
         .filter(Boolean)
         .join(' · ') || fileStatusLabel(artifact.status ?? 'created'),
     title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
-    url: isHtml
-      ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}`
-      : undefined,
+    url: undefined,
   }
 }
 

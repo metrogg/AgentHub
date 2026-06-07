@@ -515,7 +515,7 @@ function Welcome() {
             <TypewriterHeading text={t('有什么可以帮忙的？')} />
           </h2>
           <p className="mt-3 max-w-[520px] text-sm leading-6 text-neutral-500">
-            选择工作空间，召集 Agent，或者直接描述目标。
+            把今天要推进的事放在这里。
           </p>
 
           <div className="agenthub-welcome-composer-dock mt-8 w-full max-w-[760px]">

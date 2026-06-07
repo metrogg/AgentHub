@@ -101,9 +101,7 @@ export function previewItemFromAgentArtifact(
     source: artifact.source,
     subtitle,
     title: artifact.title || fileNameFromPath(artifact.path) || artifact.path,
-    url: isHtml
-      ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}`
-      : undefined,
+    url: undefined,
   }
 }
 
