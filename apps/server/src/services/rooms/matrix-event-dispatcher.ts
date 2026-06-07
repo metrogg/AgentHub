@@ -617,12 +617,13 @@ export class MatrixRoomEventDispatcher {
     const error = typeof payload.error === 'string' ? payload.error : ''
     if (consumed && !error) return
     const reason = typeof payload.reason === 'string' ? payload.reason : 'manager-dispatch-not-consumed'
+    const body = managerDispatchDiagnosticBody(reason, error)
     await roomService.appendTimelineEvent({
       roomId: room.id,
       senderParticipantId: null,
       senderType: 'system',
       type: 'system',
-      body: managerDispatchDiagnosticBody(reason, error),
+      body,
       metadata: {
         kind: 'manager.dispatch.diagnostic',
         reason,
@@ -630,7 +631,8 @@ export class MatrixRoomEventDispatcher {
         sourceEventId: sourceEvent.id,
         sourceEventSequence: sourceEvent.sequence,
         result: payload,
-        hiddenFromChat: true,
+        // visible to the user — they need to know why Manager didn't respond
+        hiddenFromChat: false,
         skipAutoDispatch: true,
         uiPresentation: 'room-status',
       },

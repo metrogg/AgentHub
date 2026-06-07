@@ -463,7 +463,7 @@ function timelineEventToMessage(
   if (isLiveCodeAgentRunMetadataEvent(event)) return null
   const kind = asString(eventMetadata?.kind)
   if (kind?.startsWith('manager.status.')) return null
-  if (kind === 'manager.dispatch.diagnostic') return null
+  // manager.dispatch.diagnostic is now visible (hiddenFromChat=false) — let hiddenFromChat check handle it
 
   if (
     event.type !== 'human.message' &&
@@ -715,7 +715,7 @@ function visibleBodyForEvent(event: TimelineEvent) {
   const metadata = asRecord(event.metadata) ?? {}
   if (metadata.hiddenFromChat === true) return ''
   const kind = asString(metadata.kind)
-  if (event.metadata?.kind === 'manager.dispatch.diagnostic') return ''
+  if (event.metadata?.kind === 'manager.dispatch.diagnostic') return event.body || ''
   if (event.type === 'approval.requested' && event.metadata?.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
   }
