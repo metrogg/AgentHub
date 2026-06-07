@@ -42,6 +42,7 @@ export function previewItemFromAgentArtifact(
       subtitle: options.previewKindName?.(artifact.previewKind) ?? artifact.previewKind,
       title: artifact.title,
       url: artifact.url,
+      path: previewPathFromUrl(artifact.url),
     }
   }
 
@@ -55,6 +56,7 @@ export function previewItemFromAgentArtifact(
       subtitle: `${artifact.provider} · ${statusLabel}`,
       title: artifact.title,
       url: artifact.url,
+      path: previewPathFromUrl(artifact.url),
     }
   }
 
@@ -99,9 +101,7 @@ export function previewItemFromAgentArtifact(
     source: artifact.source,
     subtitle,
     title: artifact.title || fileNameFromPath(artifact.path) || artifact.path,
-    url: isHtml
-      ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}`
-      : undefined,
+    url: undefined,
   }
 }
 
@@ -150,7 +150,7 @@ export function enrichPreviewItem(
   }
   if (!next.workspaceId || !next.path) return next
 
-  if (next.kind === 'web' && isHtmlPreviewItem(next)) {
+  if ((next.kind === 'web' || next.kind === 'deploy') && isHtmlPreviewItem(next)) {
     const url = normalizePreviewUrl(next.url)
     if (!url || url.pathname === '/api/artifacts/preview-file') {
       next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
@@ -293,7 +293,7 @@ export function isDocumentLikeAttachment(mimeType: string, extension?: string) {
 }
 
 export function isHtmlPreviewItem(item: ArtifactPreviewItem) {
-  if (item.kind !== 'web') return false
+  if (item.kind !== 'web' && item.kind !== 'deploy') return false
   const mimeType = item.mimeType?.toLowerCase() ?? ''
   const extension = previewFileExtension(item)
   return (

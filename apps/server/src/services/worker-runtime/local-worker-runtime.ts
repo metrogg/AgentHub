@@ -27,9 +27,9 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
       )
     }
     const runtime = runtimeRegistry.resolveForProfile(profile)
-    const chunks: string[] = []
     const artifacts: WorkerRuntimeResult['artifacts'] = []
-    let latestMetadata: Record<string, unknown> | null = null
+    let latestMetadata: Record<string, unknown> = {}
+    let latestCodeAgentRunMetadata: Record<string, unknown> | null = null
     let terminalStatusFromMetadata: WorkerRuntimeResult['status'] | null = null
 
     yield {
@@ -121,23 +121,42 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
           continue
         }
         if (chunk.kind === 'metadata') {
-          latestMetadata = chunk.metadata
-          terminalStatusFromMetadata = workerStatusFromCodeAgentMetadata(chunk.metadata) ?? terminalStatusFromMetadata
+          const metadata = chunk.metadata
+          if (metadata?.sessionId && typeof metadata.sessionId === 'string') {
+            sessionId = metadata.sessionId
+          }
+          if (isCodeAgentRunMetadata(metadata)) {
+            latestCodeAgentRunMetadata = mergeCodeAgentRunMetadata(
+              latestCodeAgentRunMetadata,
+              metadata,
+              sessionId,
+            )
+            terminalStatusFromMetadata = workerStatusFromCodeAgentMetadata(metadata) ?? terminalStatusFromMetadata
+            yield {
+              type: 'progress',
+              message: 'Worker runtime metadata updated.',
+              metadata: latestCodeAgentRunMetadata,
+            }
+            continue
+          }
+          latestMetadata = {
+            ...latestMetadata,
+            ...metadata,
+          }
           if (chunk.metadata?.sessionId && typeof chunk.metadata.sessionId === 'string') {
             sessionId = chunk.metadata.sessionId
           }
           continue
         }
-        chunks.push(chunk.text)
+        yield { type: 'message', message: chunk.text }
       }
-      const message = chunks.join('').trim()
       const status = terminalStatusFromMetadata ?? 'completed'
       return {
         runtimeType: profile.runtimeType,
         status,
-        message: message || (status === 'completed' ? undefined : 'Worker execution failed.'),
+        message: status === 'completed' ? undefined : 'Worker execution failed.',
         artifacts,
-        metadata: latestMetadata ?? undefined,
+        metadata: buildFinalWorkerMetadata(latestMetadata, latestCodeAgentRunMetadata, sessionId),
         sessionId,
       }
     } catch (error: any) {
@@ -155,6 +174,48 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
       }
     }
   }
+}
+
+function buildFinalWorkerMetadata(
+  latestMetadata: Record<string, unknown>,
+  latestCodeAgentRunMetadata: Record<string, unknown> | null,
+  sessionId?: string,
+) {
+  const sessionMetadata = sessionId ? { sessionId } : {}
+  if (latestCodeAgentRunMetadata) {
+    return {
+      ...latestMetadata,
+      ...mergeCodeAgentRunMetadata(latestCodeAgentRunMetadata, sessionMetadata, sessionId),
+    }
+  }
+  const metadata = { ...latestMetadata, ...sessionMetadata }
+  return Object.keys(metadata).length ? metadata : undefined
+}
+
+function isCodeAgentRunMetadata(metadata: Record<string, unknown>) {
+  return metadata.type === 'code-agent-run'
+}
+
+function mergeCodeAgentRunMetadata(
+  previous: Record<string, unknown> | null,
+  next: Record<string, unknown>,
+  sessionId?: string,
+) {
+  const merged: Record<string, unknown> = {
+    ...(previous ?? {}),
+    ...next,
+    ...(sessionId ? { sessionId } : {}),
+  }
+  for (const key of ['commands', 'files', 'toolCalls', 'artifacts', 'logs', 'steps']) {
+    const nextValue = next[key]
+    const previousValue = previous?.[key]
+    if (Array.isArray(nextValue) && nextValue.length > 0) {
+      merged[key] = nextValue
+    } else if (Array.isArray(previousValue) && previousValue.length > 0) {
+      merged[key] = previousValue
+    }
+  }
+  return merged
 }
 
 function workerStatusFromCodeAgentMetadata(metadata: Record<string, unknown>) {

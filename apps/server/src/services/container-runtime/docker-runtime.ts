@@ -24,6 +24,7 @@ export interface DockerContainerStatus {
   name: string
   exists: boolean
   running: boolean
+  restarting: boolean
   id: string | null
   image: string | null
   status: string | null
@@ -119,7 +120,8 @@ export class DockerRuntime {
       return {
         name,
         exists: true,
-        running: Boolean(parsed?.State?.Running),
+        running: Boolean(parsed?.State?.Running) && !Boolean(parsed?.State?.Restarting),
+        restarting: Boolean(parsed?.State?.Restarting),
         id: typeof parsed?.Id === 'string' ? parsed.Id : null,
         image: typeof parsed?.Config?.Image === 'string' ? parsed.Config.Image : null,
         status: typeof parsed?.State?.Status === 'string' ? parsed.State.Status : null,
@@ -131,6 +133,7 @@ export class DockerRuntime {
         name,
         exists: false,
         running: false,
+        restarting: false,
         id: null,
         image: null,
         status: null,

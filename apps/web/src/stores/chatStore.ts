@@ -1256,7 +1256,7 @@ function applyRoomRuntimeProjection(
     participantsById: Map<string, RoomParticipant>
   },
 ): LiveRuntimeProjection {
-  if (input.room.kind !== 'direct' && input.room.kind !== 'task') return current
+  if (input.room.kind !== 'direct' && input.room.kind !== 'task' && input.room.kind !== 'group') return current
   const run = codeAgentRunFromWorkerRuntimeEvent(input.event)
   if (!run) return current
   if (run.status !== 'running') return clearLiveRuntimeProjection()
@@ -1271,10 +1271,19 @@ function applyRoomRuntimeProjection(
     participant?.displayName ??
     'Agent'
 
+  // group room: only update the execution progress card, text arrives via room timeline messages
+  if (input.room.kind === 'group') {
+    return {
+      ...clearRuntimeActivity(),
+      streamingMessage: current.streamingMessage,
+      streamingCodeAgentRun: mergeCodeAgentRuns(current.streamingCodeAgentRun, run),
+    }
+  }
+
   return {
     ...clearRuntimeActivity(),
     streamingMessage: {
-      id: `room-runtime:${input.event.id}`,
+      id: current.streamingMessage?.id ?? `room-runtime:${input.event.id}`,
       content: '',
       agentId:
         asString(metadata?.workspaceAgentId) ??
@@ -2861,7 +2870,6 @@ interface ChatState {
   editMessage: (messageId: string, content: string) => Promise<void>
   resendMessage: (messageId: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
-  regenerateMessage: (messageId: string) => Promise<void>
   pinMessage: (messageId: string) => Promise<void>
   unpinMessage: (messageId: string) => Promise<void>
   addPendingAttachments: (attachments: ChatAttachment[]) => void
@@ -3356,30 +3364,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch {
       cancelledSessions.delete(sessionId)
       return null
-    }
-  },
-
-  async regenerateMessage(messageId) {
-    const sessionId = get().currentSessionId
-    if (!sessionId) return
-    cancelledSessions.delete(sessionId)
-    clearPendingStream()
-    set({
-      agentTyping: true,
-      agentActivity: null,
-      streamingMessage: null,
-      streamingCodeAgentRun: null,
-    })
-    try {
-      const result = await api.regenerateMessage(sessionId, messageId)
-      updateCachedMessages(sessionId, (messages) =>
-        messages.filter((message) => message.id !== result.removedMessageId),
-      )
-      set((s) => ({
-        messages: s.messages.filter((message) => message.id !== result.removedMessageId),
-      }))
-    } catch {
-      set({ agentTyping: false })
     }
   },
 

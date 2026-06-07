@@ -1046,7 +1046,7 @@ describe('chat store artifact snapshot projection', () => {
     })
   })
 
-  test('group room timeline events do not create a code-agent run preview card', () => {
+  test('group room timeline events update streamingCodeAgentRun but do not create a floating streamingMessage', () => {
     const projection = __chatStoreTestHooks.applyRoomRuntimeProjection(
       {
         agentTyping: false,
@@ -1095,8 +1095,12 @@ describe('chat store artifact snapshot projection', () => {
       },
     )
 
+    // group chat text streams via room timeline messages — no floating streamingMessage bubble
     expect(projection.streamingMessage).toBeNull()
-    expect(projection.streamingCodeAgentRun).toBeNull()
+    // but the execution process card should update live
+    expect(projection.streamingCodeAgentRun).not.toBeNull()
+    expect(projection.streamingCodeAgentRun?.status).toBe('running')
+    expect(projection.streamingCodeAgentRun?.runtime).toBe('claude-code')
   })
 
   test('task status event reprojects sessions and tabs from task thread semantics without resource snapshot', () => {
