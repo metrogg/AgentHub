@@ -36,6 +36,35 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'typ
 }
 
 describe('chat store artifact snapshot projection', () => {
+  test('group manager startup activity exposes concrete thinking details', () => {
+    expect(__chatStoreTestHooks.runtimeActivityLabel('thinking')).toBe('正在读取群聊上下文')
+    expect(__chatStoreTestHooks.runtimeActivityDetail('thinking')).toBe(
+      '读取上下文 / 检查成员 / 准备下一步',
+    )
+
+    const header = __chatStoreTestHooks.buildHeaderAgentStatusProjection({
+      sessionId: 'group-1',
+      taskBoard: null,
+      agentTabs: [],
+      agentTyping: true,
+      agentActivity: {
+        sessionId: 'group-1',
+        agentName: 'Manager',
+        phase: 'thinking',
+        startedAt: '2026-06-03T00:00:00.000Z',
+      },
+      streamingMessage: null,
+      streamingCodeAgentRun: null,
+    })
+
+    expect(header).toMatchObject({
+      label: '理解中',
+      detail: '读取上下文 / 检查成员 / 准备下一步',
+      tone: 'thinking',
+      live: true,
+    })
+  })
+
   test('resource snapshot carries task artifacts into task board directly', () => {
     const taskBoard = __chatStoreTestHooks.taskBoardFromRun(
       run({
@@ -922,6 +951,152 @@ describe('chat store artifact snapshot projection', () => {
       taskThreadId: 'thread-prepared-1',
       taskThreadStatus: 'prepared',
     })
+  })
+
+  test('task room code-agent progress restores the live run preview card', () => {
+    const projection = __chatStoreTestHooks.applyRoomRuntimeProjection(
+      {
+        agentTyping: false,
+        agentActivity: null,
+        streamingMessage: null,
+        streamingCodeAgentRun: null,
+      },
+      {
+        room: {
+          id: 'task-room-1',
+          provider: 'matrix',
+          providerRoomId: '!task-room-1:test',
+          kind: 'task',
+          ownerId: 'user-1',
+          workspaceId: 'workspace-1',
+          sessionId: 'child-session-1',
+          runId: 'run-1',
+          taskId: 'task-1',
+          taskThreadId: 'thread-1',
+          title: '任务：实现页面',
+          topic: null,
+          status: 'active',
+          metadata: {},
+          createdAt: '2026-06-03T00:00:00.000Z',
+          updatedAt: '2026-06-03T00:00:00.000Z',
+        },
+        event: {
+          id: 'event-progress-1',
+          roomId: 'task-room-1',
+          providerEventId: '$event-progress-1',
+          senderParticipantId: 'participant-worker-1',
+          senderType: 'worker',
+          type: 'task.progress',
+          body: '运行命令：bun test',
+          metadata: {
+            kind: 'worker-runtime.progress',
+            type: 'code-agent-run',
+            status: 'running',
+            runtime: 'claude-code',
+            command: 'claude run',
+            durationMs: 1200,
+            exitCode: 0,
+            workspaceAgentId: 'agent-1',
+            steps: [
+              {
+                id: 'step-1',
+                kind: 'command',
+                status: 'running',
+                title: '运行命令',
+                command: 'bun test',
+              },
+            ],
+          },
+          sequence: 8,
+          createdAt: '2026-06-03T00:00:00.000Z',
+        },
+        participantsById: new Map([
+          [
+            'participant-worker-1',
+            {
+              id: 'participant-worker-1',
+              roomId: 'task-room-1',
+              providerUserId: '@worker:agenthub.local',
+              participantType: 'worker',
+              userId: null,
+              workspaceAgentId: 'agent-1',
+              workerInstanceId: 'worker-instance-1',
+              displayName: '全栈工程师',
+              role: 'member',
+              status: 'joined',
+              metadata: {},
+              joinedAt: '2026-06-03T00:00:00.000Z',
+              updatedAt: '2026-06-03T00:00:00.000Z',
+            },
+          ],
+        ]),
+      },
+    )
+
+    expect(projection.streamingMessage).toMatchObject({
+      id: 'room-runtime:event-progress-1',
+      agentId: 'agent-1',
+      agentName: '全栈工程师',
+    })
+    expect(projection.streamingCodeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: 'claude-code',
+      command: 'claude run',
+    })
+  })
+
+  test('group room timeline events do not create a code-agent run preview card', () => {
+    const projection = __chatStoreTestHooks.applyRoomRuntimeProjection(
+      {
+        agentTyping: false,
+        agentActivity: null,
+        streamingMessage: null,
+        streamingCodeAgentRun: null,
+      },
+      {
+        room: {
+          id: 'group-room-1',
+          provider: 'matrix',
+          providerRoomId: '!group-room-1:test',
+          kind: 'group',
+          ownerId: 'user-1',
+          workspaceId: 'workspace-1',
+          sessionId: 'group-session-1',
+          runId: 'run-1',
+          taskId: null,
+          taskThreadId: null,
+          title: 'Project 群聊',
+          topic: null,
+          status: 'active',
+          metadata: {},
+          createdAt: '2026-06-03T00:00:00.000Z',
+          updatedAt: '2026-06-03T00:00:00.000Z',
+        },
+        event: {
+          id: 'event-progress-2',
+          roomId: 'group-room-1',
+          providerEventId: '$event-progress-2',
+          senderParticipantId: 'participant-worker-1',
+          senderType: 'worker',
+          type: 'task.progress',
+          body: '运行命令：bun test',
+          metadata: {
+            kind: 'worker-runtime.progress',
+            type: 'code-agent-run',
+            status: 'running',
+            runtime: 'claude-code',
+            command: 'claude run',
+          },
+          sequence: 9,
+          createdAt: '2026-06-03T00:00:00.000Z',
+        },
+        participantsById: new Map(),
+      },
+    )
+
+    expect(projection.streamingMessage).toBeNull()
+    expect(projection.streamingCodeAgentRun).toBeNull()
   })
 
   test('task status event reprojects sessions and tabs from task thread semantics without resource snapshot', () => {

@@ -627,7 +627,8 @@ export async function* streamCodeAgentReply(
   const finalMessage = stripReasoningTags(finalResult.finalMessage?.trim() || '')
   const cleanedOutput = stripReasoningTags(stripToolNoise(finalResult.output))
   if (finalResult.code === 0 && options?.rawFinalOutput && !streamedText) {
-    yield limitFinalOutput(finalMessage || cleanedOutput || '(Worker 基座没有返回正文)')
+    const rawOutput = finalMessage || cleanedOutput
+    if (rawOutput) yield limitFinalOutput(rawOutput)
     return
   }
   if (finalResult.code === 0 && finalMessage && !streamedText) {
@@ -636,11 +637,7 @@ export async function* streamCodeAgentReply(
   }
 
   if (finalResult.code === 0 && !streamedText) {
-    if (adapter.command === 'opencode') {
-      yield buildCodeAgentCompletionMessage(finalResult.metadata, cleanedOutput)
-      return
-    }
-    yield limitFinalOutput(cleanedOutput || '(Worker 基座没有返回正文)')
+    if (cleanedOutput) yield limitFinalOutput(cleanedOutput)
     return
   }
   if (finalResult.code === 0) return
@@ -3594,56 +3591,6 @@ function formatCodeAgentFailure(adapter: CodeAgentAdapter, result: CodeAgentComm
     lines.push('', `退出码：${result.code}`)
   }
   return lines.join('\n')
-}
-
-function buildCodeAgentCompletionMessage(metadata: CodeAgentRunMetadata, fallback: string) {
-  const files = metadata.files ?? []
-  const commands = metadata.commands ?? []
-  const visibleFallback = sanitizeCodeAgentFallbackText(fallback)
-  if (!files.length && visibleFallback) return limitFinalOutput(visibleFallback)
-
-  const lines = ['Worker 基座已执行完成。']
-  if (metadata.runtime) lines.push(`运行时：${metadata.runtime}`)
-  if (files.length > 0) {
-    lines.push('')
-    lines.push('变更文件：')
-    for (const file of files.slice(0, 12)) {
-      lines.push(`- ${file.status}：${file.path}`)
-    }
-  }
-  if (commands.length > 0) {
-    lines.push('')
-    lines.push('执行过的命令：')
-    for (const command of commands.slice(0, 8)) {
-      lines.push(`- ${command.command}`)
-    }
-  }
-  if (!files.length && !commands.length) {
-    lines.push('')
-    lines.push('没有检测到文件变更或可展示的最终正文。详细过程可展开运行卡片查看。')
-  }
-  return lines.join('\n')
-}
-
-function sanitizeCodeAgentFallbackText(value: string) {
-  const cleaned = stripTerminalControls(value)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !/^(Read|Write|Edit|Bash|TodoWrite|Task|Grep|Glob)\b/i.test(line))
-    .filter((line) => !/^(node|npm|bun|git|powershell|cmd)(\.exe)?\s/i.test(line))
-    .filter(
-      (line) =>
-        !/CommandNotFoundException|ObjectNotFound|CategoryInfo|FullyQualifiedErrorId/i.test(line),
-    )
-    .join('\n')
-    .trim()
-  if (!cleaned) return ''
-  const paragraphs = cleaned
-    .split(/\n{2,}/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-  return paragraphs.at(-1) ?? cleaned
 }
 
 function cleanDiagnosticOutput(output: string) {
