@@ -3300,10 +3300,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           s.messages.filter((message) => message.id !== optimisticId),
           msg,
         ),
-        // Clear typing indicator only if no WS stream has started yet
-        ...(s.streamingMessage || s.streamingCodeAgentRun ? {} : { agentTyping: false, agentActivity: null }),
       }))
       await get().fetchSessions()
+      // Delay clearing agentTyping to let WS streaming events arrive first.
+      // If a WS MessageCompleted/MessageStream arrives before the timeout,
+      // it will handle cleanup. If not (sync reply), this timeout clears it.
+      window.setTimeout(() => {
+        set((s) => {
+          if (s.streamingMessage || s.streamingCodeAgentRun || s.currentSessionId !== sessionId) return {}
+          return { agentTyping: false, agentActivity: null }
+        })
+      }, 3000)
     } catch (error) {
       set((s) => ({
         messages: s.messages.filter((message) => message.id !== optimisticId),
