@@ -1462,6 +1462,9 @@ export interface OrchestratorRunListItem {
   agUiEvents?: AgUiRunEvent[]
   runtimeActivitySnapshot?: OrchestratorRunRuntimeActivitySnapshot
   taskBoardSnapshot?: OrchestratorRunTaskBoardSnapshot
+  source?: 'orchestrator' | 'direct-runtime'
+  roomId?: string
+  eventId?: string
 }
 
 export interface OrchestratorRunRuntimeActivitySnapshot {
@@ -1590,7 +1593,12 @@ export interface OrchestratorRunArtifactSnapshot {
   visibility: 'private' | 'team' | 'user'
   source: 'artifact-store'
   taskId: string | null
+  roomId?: string | null
   taskThreadId: string | null
+  storageProvider?: string
+  bucket?: string
+  objectKey?: string
+  storagePath?: string
   workspaceAgentId: string | null
   workerInstanceId?: string | null
   metadata: Record<string, unknown>
@@ -2269,6 +2277,24 @@ export const api = {
       method: 'POST',
       body: agentIds ? JSON.stringify({ agentIds }) : undefined,
     }),
+
+  // Git
+  gitStatus: (workspaceId: string) =>
+    request<{ branch: string | null; upstream: string | null; ahead: number; behind: number; files: Array<{ path: string; x: string; y: string }> }>(`/git/${workspaceId}/status`),
+  gitDiff: (workspaceId: string, filePath?: string, staged?: boolean) =>
+    request<{ diff: string }>(`/git/${workspaceId}/diff${filePath ? `?path=${encodeURIComponent(filePath)}${staged ? '&staged=true' : ''}` : staged ? '?staged=true' : ''}`),
+  gitLog: (workspaceId: string) =>
+    request<{ commits: Array<{ hash: string; message: string }> }>(`/git/${workspaceId}/log`),
+  gitStage: (workspaceId: string, paths: string[] | 'all') =>
+    request<{ ok: boolean }>(`/git/${workspaceId}/stage`, { method: 'POST', body: JSON.stringify({ paths }) }),
+  gitUnstage: (workspaceId: string, paths: string[] | 'all') =>
+    request<{ ok: boolean }>(`/git/${workspaceId}/unstage`, { method: 'POST', body: JSON.stringify({ paths }) }),
+  gitCommit: (workspaceId: string, message: string) =>
+    request<{ ok: boolean; output: string }>(`/git/${workspaceId}/commit`, { method: 'POST', body: JSON.stringify({ message }) }),
+  gitPush: (workspaceId: string) =>
+    request<{ ok: boolean; output: string }>(`/git/${workspaceId}/push`, { method: 'POST' }),
+  gitPull: (workspaceId: string) =>
+    request<{ ok: boolean; output: string }>(`/git/${workspaceId}/pull`, { method: 'POST' }),
 
   // Artifacts
   deployStatic: (workspaceId: string) =>

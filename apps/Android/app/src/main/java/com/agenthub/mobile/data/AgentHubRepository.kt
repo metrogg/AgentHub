@@ -31,6 +31,7 @@ class AgentHubRepository(
     private var currentSocket: WebSocket? = null
     private var syncJob: Job? = null
     private var messageRefreshJob: Job? = null
+    private val joinedSessionIds = mutableSetOf<String>()
 
     fun connect(config: ConnectionConfig) {
         scope.launch {
@@ -70,6 +71,7 @@ class AgentHubRepository(
         messageRefreshJob = null
         currentSocket?.cancel()
         currentSocket = null
+        clearJoinedSessions()
         _uiState.update {
             MobileUiState()
         }
@@ -263,7 +265,7 @@ class AgentHubRepository(
                 agentTyping = false,
             )
         }
-        currentSocket?.let { client.joinSession(it, sessionId) }
+        joinKnownSession(sessionId)
         scope.launch {
             runCatching { client.listMessages(config, sessionId) }
                 .onSuccess { messages -> _uiState.update { it.copy(messages = messages, error = null) } }
@@ -476,8 +478,10 @@ class AgentHubRepository(
 
     private fun socketListener(config: ConnectionConfig) = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            currentSocket = webSocket
+            clearJoinedSessions()
             _uiState.update { it.copy(connected = true, connecting = false, error = null) }
-            _uiState.value.selectedSessionId?.let { client.joinSession(webSocket, it) }
+            joinSyncedSessions()
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -495,6 +499,34 @@ class AgentHubRepository(
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             _uiState.update { it.copy(connected = false) }
+            if (currentSocket == webSocket) {
+                clearJoinedSessions()
+            }
+        }
+    }
+
+    private fun joinSyncedSessions() {
+        val sessionIds = _uiState.value.sessions.map { it.id } +
+            listOfNotNull(_uiState.value.selectedSessionId)
+        sessionIds.distinct().forEach(::joinKnownSession)
+    }
+
+    private fun joinKnownSession(sessionId: String) {
+        val webSocket = currentSocket ?: return
+        val shouldJoin = synchronized(joinedSessionIds) {
+            joinedSessionIds.add(sessionId)
+        }
+        if (!shouldJoin) return
+        if (!client.joinSession(webSocket, sessionId)) {
+            synchronized(joinedSessionIds) {
+                joinedSessionIds.remove(sessionId)
+            }
+        }
+    }
+
+    private fun clearJoinedSessions() {
+        synchronized(joinedSessionIds) {
+            joinedSessionIds.clear()
         }
     }
 
@@ -640,6 +672,7 @@ class AgentHubRepository(
                 error = null,
             )
         }
+        joinSyncedSessions()
     }
 
     private fun startSyncLoop(config: ConnectionConfig) {

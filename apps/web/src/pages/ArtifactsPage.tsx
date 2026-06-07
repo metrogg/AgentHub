@@ -9,6 +9,8 @@ import {
   ExternalLink,
   FileDiff,
   FileText,
+  Folder,
+  FolderOpen,
   GitBranch,
   Loader2,
   Monitor,
@@ -23,6 +25,7 @@ import { ArtifactPreviewSurface } from '../components/artifacts/ArtifactPreviewS
 import SessionList from '../components/chat/SessionList'
 import {
   api,
+  type OrchestratorRunArtifactSnapshot,
   type OrchestratorRunListItem,
   type OrchestratorRunTaskSnapshot,
   type TypedBlackboardEntry,
@@ -54,6 +57,14 @@ interface AssetItem {
   raw: unknown
 }
 
+interface AssetFolderNode {
+  id: string
+  name: string
+  assetCount: number
+  children: AssetFolderNode[]
+  assets: AssetItem[]
+}
+
 const typeFilters: Array<{ value: AssetTypeFilter; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'artifact', label: '产物' },
@@ -70,6 +81,7 @@ export default function ArtifactsPage() {
   const { language } = useI18n()
   const [runs, setRuns] = useState<OrchestratorRunListItem[]>([])
   const [blackboardByRun, setBlackboardByRun] = useState<Record<string, TypedBlackboardEntry[]>>({})
+  const [artifactsByRun, setArtifactsByRun] = useState<Record<string, OrchestratorRunArtifactSnapshot[]>>({})
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [message, setMessage] = useState('')
@@ -88,7 +100,8 @@ export default function ArtifactsPage() {
       if (firstRunId && selectedRunId !== 'all' && !result.items.some((run) => run.id === selectedRunId)) {
         setSelectedRunId(firstRunId)
       }
-      await loadBlackboardForRuns(result.items.slice(0, 12).map((run) => run.id))
+      const visibleRunIds = result.items.slice(0, 12).map((run) => run.id)
+      await Promise.all([loadBlackboardForRuns(visibleRunIds), loadArtifactsForRuns(result.items.slice(0, 12))])
     } catch (error: any) {
       setMessage(error?.message || '读取产物资产库失败')
     } finally {
@@ -116,6 +129,26 @@ export default function ArtifactsPage() {
     setDetailLoading(false)
   }
 
+  async function loadArtifactsForRuns(runItems: OrchestratorRunListItem[]) {
+    const candidates = runItems.filter((run) => run.source !== 'direct-runtime' && !artifactsByRun[run.id])
+    if (!candidates.length) return
+    setDetailLoading(true)
+    const results = await Promise.all(
+      candidates.map((run) =>
+        api
+          .getOrchestratorRunArtifacts(run.id)
+          .then((result) => [run.id, result.items] as const)
+          .catch(() => [run.id, [] as OrchestratorRunArtifactSnapshot[]] as const),
+      ),
+    )
+    setArtifactsByRun((current) => {
+      const next = { ...current }
+      for (const [runId, entries] of results) next[runId] = entries
+      return next
+    })
+    setDetailLoading(false)
+  }
+
   useEffect(() => {
     void refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,6 +157,7 @@ export default function ArtifactsPage() {
   useEffect(() => {
     if (selectedRunId === 'all') return
     void loadBlackboardForRuns([selectedRunId])
+    void loadArtifactsForRuns(runs.filter((run) => run.id === selectedRunId))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRunId])
 
@@ -133,8 +167,8 @@ export default function ArtifactsPage() {
   }, [runs, selectedRunId])
 
   const assets = useMemo(
-    () => buildAssetItems(selectedRuns, blackboardByRun),
-    [blackboardByRun, selectedRuns],
+    () => buildAssetItems(selectedRuns, blackboardByRun, artifactsByRun),
+    [artifactsByRun, blackboardByRun, selectedRuns],
   )
 
   const filteredAssets = useMemo(() => {
@@ -163,6 +197,8 @@ export default function ArtifactsPage() {
       return matchesType && matchesQuery
     })
   }, [assets, query, typeFilter])
+
+  const assetFolders = useMemo(() => buildAssetFolderTree(filteredAssets), [filteredAssets])
 
   const runOptions = useMemo(
     () =>
@@ -278,19 +314,11 @@ export default function ArtifactsPage() {
             ) : filteredAssets.length === 0 ? (
               <EmptyState icon={<PackageOpen className="h-5 w-5" />} text="还没有可展示的产物资产" />
             ) : (
-              <section
-                className="grid gap-3"
-                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(23rem, 1fr))' }}
-              >
-                {filteredAssets.map((asset) => (
-                  <AssetCard
-                    key={asset.id}
-                    asset={asset}
-                    language={language}
-                    onPreview={() => setPreviewItem(assetToPreviewItem(asset))}
-                  />
-                ))}
-              </section>
+              <AssetFolderTree
+                nodes={assetFolders}
+                language={language}
+                onPreview={(asset) => setPreviewItem(assetToPreviewItem(asset))}
+              />
             )}
 
             {detailLoading && (
@@ -430,13 +458,170 @@ function AssetCard({
   )
 }
 
+function AssetFolderTree({
+  nodes,
+  language,
+  onPreview,
+}: {
+  nodes: AssetFolderNode[]
+  language: 'zh' | 'en'
+  onPreview: (asset: AssetItem) => void
+}) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+      <div className="border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-xs font-medium text-neutral-500">
+        Assets
+      </div>
+      <div className="divide-y divide-neutral-100">
+        {nodes.map((node) => (
+          <AssetFolderNodeView
+            key={node.id}
+            node={node}
+            depth={0}
+            language={language}
+            onPreview={onPreview}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function AssetFolderNodeView({
+  node,
+  depth,
+  language,
+  onPreview,
+}: {
+  node: AssetFolderNode
+  depth: number
+  language: 'zh' | 'en'
+  onPreview: (asset: AssetItem) => void
+}) {
+  return (
+    <details open={depth < 2} className="group">
+      <summary
+        className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm font-medium text-neutral-800 transition hover:bg-neutral-50"
+        style={{ paddingLeft: `${16 + depth * 20}px` }}
+      >
+        <ChevronRight className="h-4 w-4 shrink-0 text-neutral-400 transition group-open:rotate-90" />
+        <Folder className="h-4 w-4 shrink-0 text-amber-600 group-open:hidden" />
+        <FolderOpen className="hidden h-4 w-4 shrink-0 text-amber-600 group-open:block" />
+        <span className="min-w-0 flex-1 truncate">{node.name}</span>
+        <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
+          {node.assetCount}
+        </span>
+      </summary>
+      <div className="border-t border-neutral-100 bg-[#fbfbf8]">
+        {node.children.map((child) => (
+          <AssetFolderNodeView
+            key={child.id}
+            node={child}
+            depth={depth + 1}
+            language={language}
+            onPreview={onPreview}
+          />
+        ))}
+        {node.assets.length > 0 && (
+          <div
+            className="grid gap-3 p-3"
+            style={{
+              paddingLeft: `${16 + (depth + 1) * 20}px`,
+              gridTemplateColumns: 'repeat(auto-fill, minmax(22rem, 1fr))',
+            }}
+          >
+            {node.assets.map((asset) => (
+              <AssetCard
+                key={asset.id}
+                asset={asset}
+                language={language}
+                onPreview={() => onPreview(asset)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function buildAssetFolderTree(assets: AssetItem[]): AssetFolderNode[] {
+  const roots: AssetFolderNode[] = []
+  const rootByName = new Map<string, AssetFolderNode>()
+
+  for (const asset of assets) {
+    const segments = assetFolderSegments(asset)
+    let siblings = roots
+    let currentMap = rootByName
+    let current: AssetFolderNode | null = null
+    const idParts: string[] = []
+
+    for (const segment of segments) {
+      idParts.push(segment)
+      let node = currentMap.get(segment)
+      if (!node) {
+        node = {
+          id: idParts.join('/'),
+          name: segment,
+          assetCount: 0,
+          children: [],
+          assets: [],
+        }
+        currentMap.set(segment, node)
+        siblings.push(node)
+      }
+      node.assetCount += 1
+      current = node
+      siblings = node.children
+      currentMap = new Map(node.children.map((child) => [child.name, child] as const))
+    }
+
+    if (current) current.assets.push(asset)
+  }
+
+  sortAssetFolders(roots)
+  return roots
+}
+
+function assetFolderSegments(asset: AssetItem) {
+  const segments = [
+    asset.workspaceName || asset.workspaceId || 'Workspace',
+    asset.runTitle || asset.runId || 'Run',
+    asset.taskTitle || asset.taskId || (asset.kind === 'blackboard' ? 'Blackboard' : 'Artifacts'),
+  ].map(folderSegment)
+
+  const pathParts = (asset.path ?? '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(folderSegment)
+    .filter(Boolean)
+  if (pathParts.length > 1) {
+    segments.push(...pathParts.slice(0, -1))
+  }
+  return segments.filter(Boolean)
+}
+
+function folderSegment(value: string | null | undefined) {
+  return (value ?? '').trim().replace(/[<>:"|?*]/g, '_') || 'Untitled'
+}
+
+function sortAssetFolders(nodes: AssetFolderNode[]) {
+  nodes.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
+  for (const node of nodes) {
+    node.assets.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN'))
+    sortAssetFolders(node.children)
+  }
+}
+
 function buildAssetItems(
   runs: OrchestratorRunListItem[],
   blackboardByRun: Record<string, TypedBlackboardEntry[]>,
+  artifactsByRun: Record<string, OrchestratorRunArtifactSnapshot[]>,
 ) {
   const items: AssetItem[] = []
 
   for (const run of runs) {
+    const taskById = new Map((run.tasks ?? []).map((task) => [task.id, task] as const))
     for (const task of run.tasks ?? []) {
       const taskArtifacts = Array.isArray(task.artifacts) ? task.artifacts : []
       for (let index = 0; index < taskArtifacts.length; index += 1) {
@@ -444,6 +629,11 @@ function buildAssetItems(
         const normalized = normalizeArtifact(artifact, task, run, index)
         if (normalized) items.push(normalized)
       }
+    }
+
+    for (const artifact of artifactsByRun[run.id] ?? []) {
+      const normalized = normalizeStoredArtifact(artifact, run, taskById.get(artifact.taskId ?? ''))
+      if (normalized) items.push(normalized)
     }
 
     for (const entry of blackboardByRun[run.id] ?? []) {
@@ -497,6 +687,32 @@ function normalizeArtifact(
     source: text(record.source) || type || 'task artifact',
     updatedAt: createdAt,
     raw: value,
+  }
+}
+
+function normalizeStoredArtifact(
+  artifact: OrchestratorRunArtifactSnapshot,
+  run: OrchestratorRunListItem,
+  task?: OrchestratorRunTaskSnapshot,
+): AssetItem {
+  const path = artifact.path || artifact.filePath || artifact.handoffPath || artifact.sourcePath || artifact.objectKey || ''
+  return {
+    id: `${run.id}:stored-artifact:${artifact.artifactId}`,
+    kind: artifactKind(artifact as unknown as Record<string, unknown>),
+    title: artifact.title || path.split(/[\\/]/).pop() || artifact.artifactId,
+    description: artifact.description || artifact.mimeType || artifact.status,
+    runId: run.id,
+    runTitle: run.sessionTitle,
+    workspaceId: run.workspaceId,
+    workspaceName: run.workspaceName,
+    taskId: artifact.taskId,
+    taskTitle: task?.title,
+    agentId: artifact.workspaceAgentId ?? task?.agentId ?? artifact.workerInstanceId ?? null,
+    status: artifact.status,
+    path,
+    source: artifact.source,
+    updatedAt: artifact.createdAt || run.updatedAt,
+    raw: artifact,
   }
 }
 

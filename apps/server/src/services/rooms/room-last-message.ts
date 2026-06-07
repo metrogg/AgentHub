@@ -27,8 +27,11 @@ const INTERNAL_RUNTIME_PREVIEW_KINDS = new Set([
   'worker-runtime.failed',
 ])
 
+const INTERNAL_RUNTIME_PREVIEW_KIND_VALUES = Array.from(INTERNAL_RUNTIME_PREVIEW_KINDS)
+
 export async function listRoomLastMessagePreviews(sessionIds: string[]) {
   if (!sessionIds.length) return {}
+  const kindExpr = sql<string>`json_extract(${timelineEvents.metadata}, '$.kind')`
   const rankedTimeline = db
     .select({
       sessionId: rooms.sessionId,
@@ -46,6 +49,10 @@ export async function listRoomLastMessagePreviews(sessionIds: string[]) {
         inArray(rooms.sessionId, sessionIds),
         inArray(timelineEvents.type, PREVIEW_EVENT_TYPES),
         sql`trim(${timelineEvents.body}) <> ''`,
+        sql`coalesce(json_extract(${timelineEvents.metadata}, '$.hiddenFromChat'), 0) <> 1`,
+        sql`(${kindExpr} is null or ${kindExpr} not like 'manager.status.%')`,
+        sql`(${kindExpr} is null or ${kindExpr} <> 'manager.dispatch.diagnostic')`,
+        sql`(${kindExpr} is null or ${kindExpr} not in ${INTERNAL_RUNTIME_PREVIEW_KIND_VALUES})`,
       ),
     )
     .as('ranked_timeline')
@@ -66,10 +73,6 @@ export async function listRoomLastMessagePreviews(sessionIds: string[]) {
     const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
       ? row.metadata as Record<string, unknown>
       : {}
-    if (metadata.hiddenFromChat === true) continue
-    const kind = typeof metadata.kind === 'string' ? metadata.kind : ''
-    if (kind.startsWith('manager.status.') || kind === 'manager.dispatch.diagnostic') continue
-    if (INTERNAL_RUNTIME_PREVIEW_KINDS.has(kind)) continue
     previews[row.sessionId] = {
       content: row.content.slice(0, 120),
       senderType: timelineSenderTypeToMessageSenderType(row.senderType),

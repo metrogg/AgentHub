@@ -34,6 +34,9 @@ export class RoomService {
 
   async appendTimelineEvent(input: AppendTimelineEventInput) {
     const event = await this.adapter.appendTimelineEvent(input)
+    await this.touchTimelineSessions(input.roomId).catch(() => {
+      // Session ordering is a projection for clients; timeline persistence remains the source of truth.
+    })
     await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })
@@ -47,6 +50,9 @@ export class RoomService {
     const event = this.adapter.appendMentionTimelineEvent
       ? await this.adapter.appendMentionTimelineEvent(input)
       : await this.adapter.appendTimelineEvent(input)
+    await this.touchTimelineSessions(input.roomId).catch(() => {
+      // Session ordering is a projection for clients; timeline persistence remains the source of truth.
+    })
     await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })
@@ -60,6 +66,9 @@ export class RoomService {
     const event = this.adapter.importTimelineEvent
       ? await this.adapter.importTimelineEvent(input)
       : await this.adapter.appendTimelineEvent(input)
+    await this.touchTimelineSessions(input.roomId).catch(() => {
+      // Session ordering is a projection for clients; timeline persistence remains the source of truth.
+    })
     await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })
@@ -255,6 +264,16 @@ export class RoomService {
           participants,
         },
       })
+    }
+  }
+
+  private async touchTimelineSessions(roomId: string) {
+    const room = await this.adapter.getRoom(roomId)
+    const sessionIds = timelineBroadcastSessionIds(room)
+    if (!sessionIds.length) return
+    const now = new Date()
+    for (const sessionId of sessionIds) {
+      await db.update(sessions).set({ updatedAt: now }).where(eq(sessions.id, sessionId))
     }
   }
 

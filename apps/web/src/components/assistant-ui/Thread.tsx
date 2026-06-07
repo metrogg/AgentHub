@@ -49,6 +49,7 @@ import {
   FolderPlus,
   GitBranch,
   Github,
+  GitCommitHorizontal,
   Globe2,
   ImagePlus,
   ListTodo,
@@ -62,6 +63,7 @@ import {
   PanelRightOpen,
   Paperclip,
   Pencil,
+  Minus,
   Plus,
   Presentation,
   RefreshCw,
@@ -1365,9 +1367,189 @@ const ThreadContextRail: FC<{
             </div>
           </div>
         </RailCard>
+        {workspace?.id && <GitRailCard workspaceId={workspace.id} />}
         </div>
       </div>
     </aside>
+  )
+}
+
+type GitStatus = {
+  branch: string | null
+  upstream: string | null
+  ahead: number
+  behind: number
+  files: Array<{ path: string; x: string; y: string }>
+}
+
+function gitFileStatusLabel(x: string, y: string) {
+  if (x === '?' && y === '?') return { label: 'U', color: 'text-emerald-600', title: '未追踪' }
+  if (x === 'A') return { label: 'A', color: 'text-emerald-600', title: '新增' }
+  if (x === 'D' || y === 'D') return { label: 'D', color: 'text-red-600', title: '删除' }
+  if (x === 'R') return { label: 'R', color: 'text-blue-600', title: '重命名' }
+  return { label: 'M', color: 'text-amber-600', title: '修改' }
+}
+
+const GitRailCard: FC<{ workspaceId: string }> = ({ workspaceId }) => {
+  const [open, setOpen] = useState(true)
+  const [status, setStatus] = useState<GitStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [commitMsg, setCommitMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [output, setOutput] = useState('')
+  const [diffView, setDiffView] = useState<{ path: string; diff: string } | null>(null)
+
+  const refresh = async () => {
+    setLoading(true)
+    try {
+      const s = await api.gitStatus(workspaceId)
+      setStatus(s)
+    } catch { setStatus(null) }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => {
+    setStatus(null)
+    setOutput('')
+    setDiffView(null)
+    setCommitMsg('')
+    void refresh()
+  }, [workspaceId])
+
+  const staged = status?.files.filter((f) => f.x !== ' ' && f.x !== '?') ?? []
+  const unstaged = status?.files.filter((f) => f.y !== ' ' || f.x === '?') ?? []
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setOutput('')
+    try {
+      const r = await fn() as any
+      if (r?.output) setOutput(r.output)
+      await refresh()
+    } catch (e) {
+      setOutput(friendlyErrorMessage(e, '操作失败'))
+    } finally { setBusy(false) }
+  }
+
+  const branchLabel = status?.branch ?? '—'
+  const subtitle = status
+    ? `${branchLabel}${status.upstream ? ` ↑${status.ahead} ↓${status.behind}` : ''}`
+    : undefined
+
+  return (
+    <RailCard title="Git" subtitle={subtitle} open={open} onToggle={() => setOpen((v) => !v)}>
+      <div className="space-y-3">
+        {/* refresh */}
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-[11px] text-neutral-500">
+            <GitBranch className="h-3 w-3" />
+            {branchLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={loading || busy}
+            className="inline-flex h-6 items-center gap-1 rounded-full bg-neutral-100 px-2 text-[11px] text-neutral-600 transition hover:bg-neutral-200 disabled:opacity-50"
+          >
+            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+          </button>
+        </div>
+
+        {/* diff view */}
+        {diffView && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="truncate text-[11px] font-medium text-neutral-700">{diffView.path}</span>
+              <button type="button" onClick={() => setDiffView(null)} className="ml-2 shrink-0 text-neutral-400 hover:text-neutral-700"><X className="h-3 w-3" /></button>
+            </div>
+            <pre className="max-h-40 overflow-auto rounded-lg bg-neutral-950 p-2 text-[10px] leading-4 text-neutral-200 whitespace-pre-wrap break-all">{diffView.diff || '(无变更)'}</pre>
+          </div>
+        )}
+
+        {/* staged */}
+        {staged.length > 0 && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[11px] text-neutral-500">
+              <span>已暂存 {staged.length}</span>
+              <button type="button" disabled={busy} onClick={() => void run(() => api.gitUnstage(workspaceId, 'all'))} className="text-neutral-400 hover:text-neutral-700 disabled:opacity-40">全部取消</button>
+            </div>
+            {staged.slice(0, 8).map((f) => {
+              const s = gitFileStatusLabel(f.x, f.y)
+              return (
+                <div key={f.path} className="flex items-center gap-1.5">
+                  <button type="button" onClick={() => void run(() => api.gitUnstage(workspaceId, [f.path]))} className="shrink-0 text-neutral-300 hover:text-neutral-700" title="取消暂存"><Minus className="h-3 w-3" /></button>
+                  <button type="button" onClick={async () => { const r = await api.gitDiff(workspaceId, f.path, true); setDiffView({ path: f.path, diff: r.diff }) }} className="min-w-0 flex-1 truncate text-left text-[11px] text-neutral-700 hover:text-neutral-950" title={f.path}>{f.path.split(/[\\/]/).pop()}</button>
+                  <span className={cn('shrink-0 text-[10px] font-medium', s.color)} title={s.title}>{s.label}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* unstaged */}
+        {unstaged.length > 0 && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[11px] text-neutral-500">
+              <span>未暂存 {unstaged.length}</span>
+              <button type="button" disabled={busy} onClick={() => void run(() => api.gitStage(workspaceId, 'all'))} className="text-neutral-400 hover:text-neutral-700 disabled:opacity-40">全部暂存</button>
+            </div>
+            {unstaged.slice(0, 8).map((f) => {
+              const s = gitFileStatusLabel(f.x, f.y)
+              return (
+                <div key={f.path} className="flex items-center gap-1.5">
+                  <button type="button" onClick={() => void run(() => api.gitStage(workspaceId, [f.path]))} className="shrink-0 text-neutral-300 hover:text-neutral-700" title="暂存"><Plus className="h-3 w-3" /></button>
+                  <button type="button" onClick={async () => { const r = await api.gitDiff(workspaceId, f.path); setDiffView({ path: f.path, diff: r.diff }) }} className="min-w-0 flex-1 truncate text-left text-[11px] text-neutral-700 hover:text-neutral-950" title={f.path}>{f.path.split(/[\\/]/).pop()}</button>
+                  <span className={cn('shrink-0 text-[10px] font-medium', s.color)} title={s.title}>{s.label}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {status && staged.length === 0 && unstaged.length === 0 && (
+          <p className="text-[11px] text-neutral-400">工作区干净</p>
+        )}
+
+        {/* commit */}
+        {staged.length > 0 && (
+          <div className="space-y-1.5">
+            <textarea
+              value={commitMsg}
+              onChange={(e) => setCommitMsg(e.target.value)}
+              placeholder="提交消息…"
+              rows={2}
+              className="w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-[12px] leading-5 text-neutral-900 placeholder-neutral-400 focus:border-neutral-400 focus:outline-none"
+            />
+            <button
+              type="button"
+              disabled={!commitMsg.trim() || busy}
+              onClick={() => void run(() => api.gitCommit(workspaceId, commitMsg).then((r) => { setCommitMsg(''); return r }))}
+              className="inline-flex h-7 w-full items-center justify-center gap-1.5 rounded-xl bg-neutral-950 text-[11px] font-medium text-white transition hover:bg-neutral-800 disabled:opacity-40"
+            >
+              <GitCommitHorizontal className="h-3.5 w-3.5" />
+              提交
+            </button>
+          </div>
+        )}
+
+        {/* push / pull */}
+        <div className="flex gap-1.5">
+          <button type="button" disabled={busy} onClick={() => void run(() => api.gitPull(workspaceId))} className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-xl border border-neutral-200 bg-white text-[11px] text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-40">
+            <ChevronDown className="h-3 w-3" />
+            拉取
+          </button>
+          <button type="button" disabled={busy} onClick={() => void run(() => api.gitPush(workspaceId))} className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-xl border border-neutral-200 bg-white text-[11px] text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-40">
+            <ChevronDown className="h-3 w-3 rotate-180" />
+            推送
+          </button>
+        </div>
+
+        {/* output */}
+        {output && (
+          <pre className="rounded-lg bg-neutral-100 px-3 py-2 text-[10px] leading-4 text-neutral-600 whitespace-pre-wrap break-all">{output}</pre>
+        )}
+      </div>
+    </RailCard>
   )
 }
 
@@ -1378,7 +1560,7 @@ const RailCard: FC<{
   onToggle: () => void
   children: ReactNode
 }> = ({ title, subtitle, open, onToggle, children }) => (
-  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 shadow-[0_14px_40px_rgba(15,23,42,0.08)] backdrop-blur">
+  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 backdrop-blur">
     <button
       type="button"
       className="flex w-full items-start justify-between gap-3 text-left"

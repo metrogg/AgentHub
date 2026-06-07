@@ -473,14 +473,14 @@ describe('chat store artifact snapshot projection', () => {
     expect(planning.agentTyping).toBe(true)
     expect(planning.agentActivity).toMatchObject({
       sessionId: 'group-1',
-      agentName: 'Orchestrator',
+      agentName: 'Manager',
       phase: 'planning',
     })
 
     expect(synthesizing.agentTyping).toBe(true)
     expect(synthesizing.agentActivity).toMatchObject({
       sessionId: 'group-1',
-      agentName: 'Orchestrator',
+      agentName: 'Manager',
       phase: 'synthesizing',
     })
   })
@@ -1358,6 +1358,7 @@ describe('chat store artifact snapshot projection', () => {
     expect(projection?.tabs[0]?.status).toBe('running')
     expect(projection?.currentActivity).toEqual({
       agentName: 'Researcher',
+      detail: 'Worker 正在执行任务',
       label: '正在执行任务',
       phase: 'executing',
     })

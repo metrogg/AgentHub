@@ -12,8 +12,11 @@ import {
   runtimeLeases,
   roomParticipants,
   rooms,
+  timelineEvents,
+  workspaceAgents,
   workspaceTasks,
   taskThreads,
+  type AgentArtifact,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { listRunEvents } from '../services/orchestrator/run-events'
@@ -57,8 +60,8 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       [],
     )
 
-    return c.json({
-      items: await Promise.all(
+    const [orchestratorItems, directItems] = await Promise.all([
+      Promise.all(
         list.map(async (row) =>
           normalizeRunRow(
             row,
@@ -67,6 +70,13 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
             await loadRunRuntimeLeases(row.id),
           ),
         ),
+      ),
+      loadDirectRuntimeRuns(user.sub),
+    ])
+
+    return c.json({
+      items: [...orchestratorItems, ...directItems].sort(
+        (a, b) => dateMs(b.createdAt) - dateMs(a.createdAt),
       ),
     })
   })
@@ -735,6 +745,43 @@ async function loadRunRuntimeLeases(runId: string) {
   )
 }
 
+async function loadDirectRuntimeRuns(ownerId: string) {
+  const rows = await tableSafe(
+    db
+      .select({
+        eventId: timelineEvents.id,
+        eventType: timelineEvents.type,
+        eventBody: timelineEvents.body,
+        eventMetadata: timelineEvents.metadata,
+        createdAt: timelineEvents.createdAt,
+        roomId: rooms.id,
+        roomTitle: rooms.title,
+        sessionId: sessions.id,
+        sessionTitle: sessions.title,
+        workspaceId: workspaces.id,
+        workspaceName: workspaces.name,
+        participantName: roomParticipants.displayName,
+        participantWorkspaceAgentId: roomParticipants.workspaceAgentId,
+        participantWorkerInstanceId: roomParticipants.workerInstanceId,
+        workspaceAgentName: workspaceAgents.name,
+      })
+      .from(timelineEvents)
+      .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+      .innerJoin(sessions, eq(sessions.id, rooms.sessionId))
+      .innerJoin(workspaces, eq(workspaces.id, rooms.workspaceId))
+      .leftJoin(roomParticipants, eq(roomParticipants.id, timelineEvents.senderParticipantId))
+      .leftJoin(workspaceAgents, eq(workspaceAgents.id, roomParticipants.workspaceAgentId))
+      .where(and(eq(rooms.kind, 'direct'), eq(workspaces.ownerId, ownerId)))
+      .orderBy(desc(timelineEvents.createdAt))
+      .limit(200),
+    [],
+  )
+
+  return rows
+    .filter((row) => isDirectRuntimeTerminalEvent(row.eventType, row.eventMetadata))
+    .map(normalizeDirectRuntimeRunRow)
+}
+
 function normalizeRunRow<T extends { sessionTitle: string | null; conflictReport?: unknown }>(
   row: T,
   tasks: Awaited<ReturnType<typeof loadRunTasks>> = [],
@@ -792,6 +839,269 @@ function normalizeRunRow<T extends { sessionTitle: string | null; conflictReport
     taskBoardSnapshot,
     tasks: normalizedTasks,
   }
+}
+
+function normalizeDirectRuntimeRunRow(row: {
+  eventId: string
+  eventType: string
+  eventBody: string
+  eventMetadata: Record<string, unknown>
+  createdAt: Date
+  roomId: string
+  roomTitle: string
+  sessionId: string
+  sessionTitle: string
+  workspaceId: string
+  workspaceName: string
+  participantName: string | null
+  participantWorkspaceAgentId: string | null
+  participantWorkerInstanceId: string | null
+  workspaceAgentName: string | null
+}) {
+  const metadata = recordValue(row.eventMetadata) ?? {}
+  const codeAgentRun = recordValue(metadata.codeAgentRun) ?? metadata
+  const status = directRunStatusFromMetadata(metadata)
+  const agentId =
+    stringValue(metadata.workspaceAgentId) ??
+    row.participantWorkspaceAgentId ??
+    row.participantWorkerInstanceId ??
+    'direct-agent'
+  const agentName =
+    stringValue(metadata.agentName) ??
+    row.workspaceAgentName ??
+    row.participantName ??
+    'Agent'
+  const taskId = `direct-task:${row.eventId}`
+  const artifacts = directRunArtifacts(codeAgentRun, metadata)
+  const taskStatus: 'done' | 'cancelled' | 'failed' | 'running' =
+    status === OrchestratorRunStatus.Completed
+      ? 'done'
+      : status === OrchestratorRunStatus.Cancelled
+        ? 'cancelled'
+        : status === OrchestratorRunStatus.Failed
+          ? 'failed'
+          : 'running'
+  const directTaskTitle = `${agentName} direct run`
+  const directTaskDescription =
+    stringValue(codeAgentRun.finalMessage) ??
+    stringValue(row.eventBody) ??
+    'Agent direct runtime record'
+  const directTask = {
+    id: taskId,
+    workspaceId: row.workspaceId,
+    agentId,
+    title: directTaskTitle,
+    description: directTaskDescription,
+    status: taskStatus,
+    sessionId: row.sessionId,
+    taskThreadId: null,
+    taskThreadSessionId: row.sessionId,
+    taskThreadStatus: null,
+    workerInstanceId: row.participantWorkerInstanceId,
+    taskThreadSessionMetadata: {},
+    orderIdx: 0,
+    runId: `direct-runtime:${row.eventId}`,
+    phaseId: 'direct',
+    dependencies: [],
+    artifacts,
+    progressPercent: null,
+    progressStatus: null,
+    startedAt: row.createdAt,
+    completedAt: row.createdAt,
+    errorLog: null,
+  }
+  const plan = {
+    title: `私聊运行：${row.sessionTitle}`,
+    goal:
+      stringValue(codeAgentRun.finalMessage) ??
+      stringValue(row.eventBody) ??
+      row.sessionTitle,
+    collaborationMode: 'direct',
+    phases: [
+      {
+        id: 'direct',
+        title: '私聊执行',
+        purpose: 'Agent 私聊中的单次运行。',
+        taskIds: [taskId],
+      },
+    ],
+    tasks: [
+      {
+        id: taskId,
+        phaseId: 'direct',
+        title: `${agentName} 私聊执行`,
+        description:
+          stringValue(codeAgentRun.finalMessage) ??
+          stringValue(row.eventBody) ??
+          'Agent 私聊运行记录',
+        agentId,
+        agentName,
+        status: taskStatus,
+        childSessionId: row.sessionId,
+        artifacts,
+        outputSummary: stringValue(codeAgentRun.finalMessage) ?? stringValue(row.eventBody) ?? undefined,
+      },
+    ],
+    taskLedger: {
+      phases: [
+        {
+          id: 'direct',
+          title: '私聊执行',
+          purpose: 'Agent 私聊中的单次运行。',
+        },
+      ],
+      tasks: [
+        {
+          id: taskId,
+          phaseId: 'direct',
+          title: `${agentName} 私聊执行`,
+          agentId,
+          agentName,
+        },
+      ],
+    },
+    progressLedger: {
+      status,
+      completedTaskIds: status === OrchestratorRunStatus.Completed ? [taskId] : [],
+      runningTaskIds: status === OrchestratorRunStatus.Running ? [taskId] : [],
+      failedTaskIds: status === OrchestratorRunStatus.Failed ? [taskId] : [],
+      cancelledTaskIds: status === OrchestratorRunStatus.Cancelled ? [taskId] : [],
+      blockedTaskIds: [],
+    },
+  }
+
+  return normalizeRunRow(
+    {
+      id: `direct-runtime:${row.eventId}`,
+      workspaceId: row.workspaceId,
+      groupSessionId: row.sessionId,
+      planMessageId: null,
+      status,
+      plan,
+      summaryMessageId: null,
+      conflictReport: [],
+      createdAt: row.createdAt,
+      updatedAt: row.createdAt,
+      workspaceName: row.workspaceName,
+      sessionTitle: row.sessionTitle ?? row.roomTitle,
+      source: 'direct-runtime',
+      roomId: row.roomId,
+      eventId: row.eventId,
+    },
+    [directTask],
+    [],
+    [],
+  )
+}
+
+function isDirectRuntimeTerminalEvent(eventType: string, metadata: unknown) {
+  if (eventType !== 'worker.message' && eventType !== 'task.progress') return false
+  const record = recordValue(metadata)
+  const kind = stringValue(record?.kind)
+  if (
+    kind === 'worker-runtime.completed' ||
+    kind === 'worker-runtime.failed' ||
+    kind === 'worker-runtime.cancelled'
+  ) {
+    return true
+  }
+  const codeAgentRun = recordValue(record?.codeAgentRun) ?? record
+  const status = stringValue(codeAgentRun?.status)
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'timed-out'
+}
+
+function directRunStatusFromMetadata(metadata: Record<string, unknown>) {
+  const kind = stringValue(metadata.kind)
+  const codeAgentRun = recordValue(metadata.codeAgentRun) ?? metadata
+  const status = stringValue(codeAgentRun.status) ?? stringValue(metadata.status)
+  if (kind === 'worker-runtime.cancelled' || status === 'cancelled') return OrchestratorRunStatus.Cancelled
+  if (kind === 'worker-runtime.failed' || status === 'failed' || status === 'timed-out') return OrchestratorRunStatus.Failed
+  if (kind === 'worker-runtime.completed' || status === 'completed') return OrchestratorRunStatus.Completed
+  return OrchestratorRunStatus.Running
+}
+
+function directRunArtifacts(...sources: Array<Record<string, unknown>>): AgentArtifact[] {
+  const items: AgentArtifact[] = []
+  for (const source of sources) {
+    if (Array.isArray(source.artifacts)) {
+      for (const item of source.artifacts) {
+        const artifact = normalizeDirectRunArtifact(recordValue(item))
+        if (artifact) items.push(artifact)
+      }
+    }
+    if (Array.isArray(source.files)) {
+      for (const file of source.files) {
+        const record = recordValue(file)
+        const path = stringValue(record?.path) ?? stringValue(record?.filePath)
+        if (!path) continue
+        items.push({
+          id: `code-agent-file:${path}`,
+          kind: 'file',
+          title: path.split(/[\\/]/).filter(Boolean).at(-1) ?? path,
+          path,
+          filePath: path,
+          status: normalizeDirectRunFileStatus(stringValue(record?.status)) ?? 'modified',
+          source: 'codeAgentRun.files',
+        })
+      }
+    }
+  }
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    const key =
+      stringValue(item.id) ??
+      stringValue(item.path) ??
+      stringValue(item.filePath) ??
+      JSON.stringify(item)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function normalizeDirectRunArtifact(record: Record<string, unknown> | null): AgentArtifact | null {
+  if (!record) return null
+  const path =
+    stringValue(record.path) ??
+    stringValue(record.filePath) ??
+    stringValue(record.handoffPath) ??
+    stringValue(record.relativePath)
+  const kind = normalizeDirectRunArtifactKind(stringValue(record.kind) ?? stringValue(record.type) ?? 'file')
+  const title =
+    stringValue(record.title) ??
+    (path ? path.split(/[\\/]/).filter(Boolean).at(-1) : null) ??
+    stringValue(record.id) ??
+    'artifact'
+  return {
+    ...record,
+    id: stringValue(record.id) ?? stringValue(record.artifactId) ?? `${kind}:${path ?? title}`,
+    kind,
+    title,
+    description: stringValue(record.description) ?? stringValue(record.summary) ?? undefined,
+    source: stringValue(record.source) ?? 'codeAgentRun.artifacts',
+    path: path ?? stringValue(record.url) ?? undefined,
+    filePath: stringValue(record.filePath) ?? path ?? undefined,
+    status: normalizeDirectRunFileStatus(stringValue(record.status)),
+    url: stringValue(record.url) ?? undefined,
+    mimeType: stringValue(record.mimeType) ?? undefined,
+    size: numberValue(record.size) ?? undefined,
+  }
+}
+
+function normalizeDirectRunArtifactKind(value: string): AgentArtifact['kind'] {
+  if (value === 'diff') return 'diff'
+  if (value === 'preview') return 'preview'
+  if (value === 'deploy') return 'deploy'
+  if (value === 'log') return 'log'
+  if (value === 'workflow') return 'workflow'
+  return 'file'
+}
+
+function normalizeDirectRunFileStatus(value: string | null): AgentArtifact['status'] | undefined {
+  if (value === 'created' || value === 'modified' || value === 'deleted' || value === 'renamed' || value === 'untracked') {
+    return value
+  }
+  return undefined
 }
 
 function buildTaskBoardSnapshot(input: {
@@ -1386,10 +1696,23 @@ async function tableSafe<T>(promise: Promise<T>, fallback: T): Promise<T> {
   } catch (error: any) {
     const message = String(error?.message ?? error ?? '')
     if (/no such table:\s*orchestrator_runs/i.test(message)) return fallback
+    if (/no such table:\s*timeline_events/i.test(message)) return fallback
+    if (/no such table:\s*rooms/i.test(message)) return fallback
     if (/no such table:\s*artifacts/i.test(message)) return fallback
     if (/no such table:\s*runtime_leases/i.test(message)) return fallback
+    if (/no such column:/i.test(message)) return fallback
     throw error
   }
+}
+
+function dateMs(value: unknown) {
+  if (value instanceof Date) return value.getTime()
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  return 0
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {

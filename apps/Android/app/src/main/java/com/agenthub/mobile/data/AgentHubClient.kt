@@ -161,8 +161,8 @@ class AgentHubClient(
         return httpClient.newWebSocket(request, listener)
     }
 
-    fun joinSession(webSocket: WebSocket, sessionId: String) {
-        webSocket.send(json.encodeToString(JoinSessionCommand(payload = JoinSessionPayload(sessionId))))
+    fun joinSession(webSocket: WebSocket, sessionId: String): Boolean {
+        return webSocket.send(json.encodeToString(JoinSessionCommand(payload = JoinSessionPayload(sessionId))))
     }
 
     private suspend fun legacySync(config: ConnectionConfig): MobileSyncResponse {
