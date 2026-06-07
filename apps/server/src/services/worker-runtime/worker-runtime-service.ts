@@ -22,6 +22,7 @@ import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
+import { ensureWorkerAgentContractFromController } from '../agent-contract'
 import { EphemeralCodeAgentWorkerRuntime } from './local-worker-runtime'
 import { ResidentRoomWorkerRuntime } from './resident-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
@@ -834,6 +835,10 @@ export class WorkerRuntimeService {
         result: finalResult,
         source: input.source ?? 'worker-runtime.run',
       })
+      await refreshWorkerContractAfterTaskRoomResult({
+        workerInstanceId: thread?.workerInstanceId ?? null,
+        source: input.source ?? 'worker-runtime.run',
+      })
 
       return finalResult
     } finally {
@@ -1561,6 +1566,29 @@ async function syncRunControllerAfterTaskRoomResult(input: {
     error: input.result.message ?? 'WorkerRuntime failed.',
     metadata: { resultStatus: input.result.status, source: input.source },
   })
+}
+
+async function refreshWorkerContractAfterTaskRoomResult(input: {
+  workerInstanceId: string | null
+  source: string
+}) {
+  if (!input.workerInstanceId) return
+  try {
+    await ensureWorkerAgentContractFromController({
+      workerInstanceId: input.workerInstanceId,
+      controllerUrl: process.env.AGENTHUB_CONTAINER_CONTROLLER_URL || process.env.AGENTHUB_CONTROLLER_URL || null,
+      sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
+    })
+  } catch (error: any) {
+    logger.warn(
+      {
+        err: error?.message || String(error),
+        workerInstanceId: input.workerInstanceId,
+        source: input.source,
+      },
+      'Failed to refresh Worker contract after task room result',
+    )
+  }
 }
 
 function artifactsForRunController(value: unknown) {

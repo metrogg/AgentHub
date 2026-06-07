@@ -43,7 +43,7 @@ type WorkerRuntimeResult = workerRuntimeApi.WorkerRuntimeResult
 
 describe('WorkerRuntime task room integration', () => {
   test('task resources become active as soon as WorkerRuntime starts the task room', async () => {
-    const { room } = await createTaskRoomFixture()
+    const { room, thread } = await createTaskRoomFixture()
     const runtime = new DeferredWorkerRuntime()
     const service = new WorkerRuntimeService()
     const running = service.runTaskRoom({
@@ -79,6 +79,18 @@ describe('WorkerRuntime task room integration', () => {
     expect(threadRows[0]?.status).toBe('completed')
     leaseRows = await db.select().from(runtimeLeases).where(eq(runtimeLeases.taskId, room.taskId!))
     expect(leaseRows[0]?.status).toBe('released')
+
+    const contract = resolveWorkerAgentContractWorkspace(thread.workerInstanceId!)
+    const contractTasks = JSON.parse(readFileSync(contract.tasksPath, 'utf8')) as {
+      tasks: Array<{ taskId: string; status: string; runtimeLeaseId: string | null }>
+    }
+    const mirroredTask = contractTasks.tasks.find((item) => item.taskId === room.taskId)
+    expect(mirroredTask?.status).toBe('completed')
+    expect(mirroredTask?.runtimeLeaseId).toBe(leaseRows[0]?.id)
+    const contractState = JSON.parse(readFileSync(contract.statePath, 'utf8')) as {
+      activeTasks: Array<{ taskId: string; status: string }>
+    }
+    expect(contractState.activeTasks.find((item) => item.taskId === room.taskId)?.status).toBe('completed')
   })
 
   test('running task room emits WorkerRuntime heartbeat into room timeline and stops after completion', async () => {
