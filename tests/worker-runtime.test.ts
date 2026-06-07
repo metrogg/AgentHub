@@ -27,6 +27,7 @@ const {
   workspaceTasks,
   workspaces,
   runtimeLeases,
+  rooms,
   roomParticipants,
   workerInstances,
   taskThreads,
@@ -201,12 +202,22 @@ describe('WorkerRuntime task room integration', () => {
   })
 
   test('direct rooms emit started and final code-agent run metadata without showing live metadata bubbles', async () => {
+    const [oldWorkspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Old Direct Runtime Workspace',
+        goal: 'Old direct room path',
+        projectPath: 'C:/Users/Mozero/AppData/Local/AgentHub/workspaces/2026-06-06-task-1',
+      })
+      .returning()
     const [workspace] = await db
       .insert(workspaces)
       .values({
         ownerId: 'default-user',
         name: 'Direct Runtime Workspace',
         goal: 'Run direct rooms',
+        projectPath: 'F:/Before_Work/Agenthubtest/word',
       })
       .returning()
     const [agent] = await db
@@ -233,10 +244,13 @@ describe('WorkerRuntime task room integration', () => {
       .returning()
     const room = await roomService.ensureRoomForSession(directSession!.id, 'default-user')
     await roomService.addWorkerParticipant(room.id, agent!.id)
+    await db.update(rooms).set({ workspaceId: oldWorkspace!.id }).where(eq(rooms.id, room.id))
 
     const originalExecuteTask = localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype.executeTask
+    const runtimeContexts: any[] = []
     ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
-      async function* () {
+      async function* (context: any) {
+        runtimeContexts.push(context)
         yield {
           type: 'progress',
           message: 'Worker runtime metadata updated.',
@@ -292,6 +306,9 @@ describe('WorkerRuntime task room integration', () => {
         command: 'opencode run',
         finalMessage: 'done',
       })
+      expect(runtimeContexts).toHaveLength(1)
+      expect(runtimeContexts[0].workspaceId).toBe(workspace!.id)
+      expect(runtimeContexts[0].workspacePath).toBe(workspace!.projectPath)
     } finally {
       ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
         originalExecuteTask

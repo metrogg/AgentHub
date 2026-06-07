@@ -356,6 +356,7 @@ export type AgentArtifact =
       description?: string
       source?: string
       createdAt?: string
+      workspaceId?: string | null
       filePath: string
       status?: ArtifactFileStatus
       language?: string
@@ -368,6 +369,7 @@ export type AgentArtifact =
       description?: string
       source?: string
       createdAt?: string
+      workspaceId?: string | null
       url: string
       previewKind: 'dev-server' | 'static-html' | 'iframe'
     }
@@ -378,6 +380,7 @@ export type AgentArtifact =
       description?: string
       source?: string
       createdAt?: string
+      workspaceId?: string | null
       path: string
       status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
       mimeType?: string
@@ -390,6 +393,7 @@ export type AgentArtifact =
       description?: string
       source?: string
       createdAt?: string
+      workspaceId?: string | null
       provider: 'vercel' | 'static' | 'unknown'
       status: 'pending' | 'running' | 'ready' | 'failed'
       url?: string
@@ -402,6 +406,7 @@ export type AgentArtifact =
       description?: string
       source?: string
       createdAt?: string
+      workspaceId?: string | null
       nodes: Array<{
         id: string
         label: string

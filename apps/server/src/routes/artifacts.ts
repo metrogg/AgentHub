@@ -20,17 +20,15 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     const rawPath = c.req.query('path')?.trim()
     const workspaceId = c.req.query('workspaceId')?.trim()
     if (!rawPath) throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少预览路径', { field: 'path' })
-    if (!workspaceId) {
-      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少 workspaceId', { field: 'workspaceId' })
-    }
-
     const ext = extname(rawPath).toLowerCase()
     if (ext !== '.html' && ext !== '.htm') {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '仅支持 HTML 文件预览')
     }
 
     const user = c.get('user')
-    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    const ws = workspaceId
+      ? await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1).then((rows) => rows[0])
+      : await resolveWorkspaceForPreviewPath(rawPath, user.sub)
     if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
       throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
     }
@@ -553,6 +551,20 @@ function contentType(filePath: string) {
 function resolveWorkspaceFilePath(rawPath: string, workspaceRoot: string) {
   const normalizedPath = normalize(rawPath)
   return isAbsolute(normalizedPath) ? resolve(normalizedPath) : resolve(workspaceRoot, normalizedPath)
+}
+
+async function resolveWorkspaceForPreviewPath(rawPath: string, ownerId: string) {
+  const normalizedPath = normalize(rawPath)
+  if (!isAbsolute(normalizedPath)) return null
+
+  const resolvedPath = resolve(normalizedPath)
+  const ownedWorkspaces = await db
+    .select()
+    .from(workspaces)
+    .where(eq(workspaces.ownerId, ownerId))
+  return ownedWorkspaces.find(
+    (ws) => ws.projectPath && isPathUnder(resolvedPath, resolve(ws.projectPath)),
+  ) ?? null
 }
 
 function isPathUnder(child: string, parent: string) {

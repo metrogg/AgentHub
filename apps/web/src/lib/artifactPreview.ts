@@ -43,6 +43,7 @@ export function previewItemFromAgentArtifact(
       title: artifact.title,
       url: artifact.url,
       path: previewPathFromUrl(artifact.url),
+      workspaceId: artifact.workspaceId ?? workspaceIdFromUrl(artifact.url) ?? undefined,
     }
   }
 
@@ -57,6 +58,7 @@ export function previewItemFromAgentArtifact(
       title: artifact.title,
       url: artifact.url,
       path: previewPathFromUrl(artifact.url),
+      workspaceId: artifact.workspaceId ?? workspaceIdFromUrl(artifact.url) ?? undefined,
     }
   }
 
@@ -102,6 +104,7 @@ export function previewItemFromAgentArtifact(
     subtitle,
     title: artifact.title || fileNameFromPath(artifact.path) || artifact.path,
     url: undefined,
+    workspaceId: artifact.workspaceId ?? undefined,
   }
 }
 
@@ -133,6 +136,13 @@ export function previewPathFromUrl(url?: string) {
   return path || undefined
 }
 
+export function workspaceIdFromUrl(url?: string) {
+  const parsed = normalizePreviewUrl(url)
+  if (!parsed) return undefined
+  const workspaceId = parsed.searchParams.get('workspaceId')?.trim()
+  return workspaceId || undefined
+}
+
 export function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
   if (!item.workspaceId || !path) return false
   const extension = extensionFromName(path)
@@ -144,15 +154,22 @@ export function enrichPreviewItem(
   item: ArtifactPreviewItem,
   workspaceId?: string,
 ): ArtifactPreviewItem {
+  const urlWorkspaceId = workspaceIdFromUrl(item.url)
+  const url = normalizePreviewUrl(item.url)
+  const isPathScopedPreviewFileUrl =
+    url?.pathname === '/api/artifacts/preview-file' &&
+    Boolean(url.searchParams.get('path')) &&
+    !url.searchParams.get('workspaceId') &&
+    !item.workspaceId &&
+    !urlWorkspaceId
   const next: ArtifactPreviewItem = {
     ...item,
-    workspaceId: item.workspaceId ?? workspaceId,
+    workspaceId: item.workspaceId ?? urlWorkspaceId ?? (isPathScopedPreviewFileUrl ? undefined : workspaceId),
   }
   if (!next.workspaceId || !next.path) return next
 
   if ((next.kind === 'web' || next.kind === 'deploy') && isHtmlPreviewItem(next)) {
-    const url = normalizePreviewUrl(next.url)
-    if (!url || url.pathname === '/api/artifacts/preview-file') {
+    if (!url || (url.pathname === '/api/artifacts/preview-file' && !url.searchParams.get('workspaceId'))) {
       next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
     }
     return next

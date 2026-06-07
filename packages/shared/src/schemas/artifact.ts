@@ -6,6 +6,7 @@ const artifactBaseSchema = z.object({
   description: z.string().optional(),
   source: z.string().optional(),
   createdAt: z.string().optional(),
+  workspaceId: z.string().nullable().optional(),
 })
 
 export const diffArtifactSchema = artifactBaseSchema.extend({

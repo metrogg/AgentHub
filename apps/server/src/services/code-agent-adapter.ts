@@ -90,6 +90,7 @@ interface CodeAgentRuntimeOptions {
   sandboxConfigDir?: string
   sandboxTempDir?: string
   sandboxContainer?: SandboxContainerSpec
+  workspaceId?: string | null
 }
 
 const activeDockerSandboxes = new Map<number, string>()
@@ -587,6 +588,7 @@ export async function* streamCodeAgentReply(
       sandboxConfigDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_CONFIG,
       sandboxTempDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_TMP,
       sandboxContainer: envelope?.sandboxContainer,
+      workspaceId: envelope?.workspaceId ?? null,
     },
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
@@ -1376,6 +1378,7 @@ async function runCodeAgentCommand(
         cwd,
         files: liveFiles.slice(0, 80),
         output: liveLogs.map((log) => log.text).join('\n'),
+        workspaceId: runtimeOptions.workspaceId,
       }),
       reviewRequired: requiresCodeAgentOutputReview(adapter),
       logs: liveLogs.slice(-80),
@@ -1654,6 +1657,7 @@ async function runCodeAgentCommand(
     liveToolCalls,
     liveLogs,
     liveSteps,
+    workspaceId: runtimeOptions.workspaceId,
   })
   return {
     ...parsed,
@@ -1791,6 +1795,7 @@ async function buildCodeAgentRunMetadata(input: {
   finalMessage?: string
   output: string
   timedOut: boolean
+  workspaceId?: string | null
 }): Promise<CodeAgentRunMetadata> {
   const diagnostics = input.code === 0 && !input.timedOut ? '' : cleanDiagnosticOutput(input.output)
   const parsedCommands = parseExecutedCommands(input.output)
@@ -1802,7 +1807,12 @@ async function buildCodeAgentRunMetadata(input: {
       ...(await diffWorkspaceFiles(input.cwd, input.beforeFiles)),
     ]),
   )
-  const artifacts = buildArtifactsFromMetadata({ cwd: input.cwd, files, output: input.output })
+  const artifacts = buildArtifactsFromMetadata({
+    cwd: input.cwd,
+    files,
+    output: input.output,
+    workspaceId: input.workspaceId,
+  })
   const status: CodeAgentRunMetadata['status'] = input.timedOut
     ? 'timed-out'
     : input.code === 0
@@ -2708,6 +2718,7 @@ function buildArtifactsFromMetadata(input: {
   cwd?: string
   files: CodeAgentRunMetadata['files']
   output: string
+  workspaceId?: string | null
 }): AgentArtifact[] {
   const artifacts: AgentArtifact[] = []
   const createdAt = new Date().toISOString()
@@ -2720,6 +2731,7 @@ function buildArtifactsFromMetadata(input: {
       status: file.status,
       source: 'code-agent',
       createdAt,
+      workspaceId: input.workspaceId ?? undefined,
     })
     if (file.diff) {
       artifacts.push({
@@ -2732,10 +2744,11 @@ function buildArtifactsFromMetadata(input: {
         diff: file.diff,
         source: 'git',
         createdAt,
+        workspaceId: input.workspaceId ?? undefined,
       })
     }
     if (isHtmlFile(file.path)) {
-      const url = staticPreviewUrl(input.cwd, file.path)
+      const url = staticPreviewUrl(input.cwd, file.path, input.workspaceId)
       if (url) {
         artifacts.push({
           id: `preview:${file.path}`,
@@ -2745,6 +2758,7 @@ function buildArtifactsFromMetadata(input: {
           previewKind: 'static-html',
           source: 'file',
           createdAt,
+          workspaceId: input.workspaceId ?? undefined,
         })
         artifacts.push({
           id: `deploy:static:${file.path}`,
@@ -2755,6 +2769,7 @@ function buildArtifactsFromMetadata(input: {
           url,
           source: 'file',
           createdAt,
+          workspaceId: input.workspaceId ?? undefined,
         })
       }
     }
@@ -2792,10 +2807,11 @@ function isHtmlFile(path: string) {
   return /\.html?$/i.test(path)
 }
 
-function staticPreviewUrl(cwd: string | undefined, path: string) {
+export function staticPreviewUrl(cwd: string | undefined, path: string, workspaceId?: string | null) {
   if (!cwd) return null
   const absolutePath = isAbsolute(path) ? path : resolve(cwd, path)
-  return `/api/artifacts/preview-file?path=${encodeURIComponent(absolutePath)}`
+  if (!workspaceId) return `/api/artifacts/preview-file?path=${encodeURIComponent(absolutePath)}`
+  return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(absolutePath)}`
 }
 
 function detectPreviewUrls(output: string) {

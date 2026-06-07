@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { db, workspaces } from '../packages/db/src/index'
 import { app } from '../apps/server/src/app'
+import { staticPreviewUrl } from '../apps/server/src/services/code-agent-adapter'
 import { previewDirectoryUrl } from '../apps/server/src/services/artifact-preview'
 import {
   enrichPreviewItem,
@@ -10,7 +13,16 @@ import {
 } from '../apps/web/src/lib/artifactPreview'
 
 describe('artifact static preview', () => {
-  test('workspace-backed preview artifacts retain their file path for workspaceId enrichment', () => {
+  test('code-agent static preview URLs include workspaceId for workspace-scoped files', () => {
+    const cwd = 'F:\\Before_Work\\Agenthubtest\\word'
+    const filePath = 'F:\\Before_Work\\Agenthubtest\\word\\index.html'
+
+    expect(staticPreviewUrl(cwd, 'index.html', 'workspace-1')).toBe(
+      `/api/artifacts/preview-file?workspaceId=workspace-1&path=${encodeURIComponent(filePath)}`,
+    )
+  })
+
+  test('legacy preview-file artifacts keep their path-scoped URL when workspaceId is missing', () => {
     const filePath = 'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-06-task-1\\game.html'
     const preview = previewItemFromAgentArtifact({
       id: 'preview:game',
@@ -23,12 +35,11 @@ describe('artifact static preview', () => {
     const enriched = enrichPreviewItem(preview, 'workspace-1')
 
     expect(enriched.path).toBe(filePath)
-    expect(enriched.url).toBe(
-      `/api/artifacts/preview-file?workspaceId=workspace-1&path=${encodeURIComponent(filePath)}`,
-    )
+    expect(enriched.workspaceId).toBeUndefined()
+    expect(enriched.url).toBe(`/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`)
   })
 
-  test('static deploy artifacts retain their file path for workspaceId enrichment', () => {
+  test('legacy static deploy artifacts keep their path-scoped URL when workspaceId is missing', () => {
     const filePath = 'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-06-task-1\\game.html'
     const deploy = previewItemFromAgentArtifact({
       id: 'deploy:game',
@@ -42,8 +53,27 @@ describe('artifact static preview', () => {
     const enriched = enrichPreviewItem(deploy, 'workspace-1')
 
     expect(enriched.path).toBe(filePath)
+    expect(enriched.workspaceId).toBeUndefined()
+    expect(enriched.url).toBe(`/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`)
+  })
+
+  test('workspace-scoped preview artifacts use their source workspaceId over the current workspace', () => {
+    const filePath = 'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-06-task-1\\game.html'
+    const preview = previewItemFromAgentArtifact({
+      id: 'preview:game',
+      type: 'preview',
+      title: `Preview: ${filePath}`,
+      url: `/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`,
+      previewKind: 'static-html',
+      workspaceId: 'source-workspace',
+    })
+
+    const enriched = enrichPreviewItem(preview, 'current-workspace')
+
+    expect(enriched.path).toBe(filePath)
+    expect(enriched.workspaceId).toBe('source-workspace')
     expect(enriched.url).toBe(
-      `/api/artifacts/preview-file?workspaceId=workspace-1&path=${encodeURIComponent(filePath)}`,
+      `/api/artifacts/preview-file?workspaceId=source-workspace&path=${encodeURIComponent(filePath)}`,
     )
   })
 
@@ -58,14 +88,22 @@ describe('artifact static preview', () => {
     expect([401, 403]).toContain(html.status)
   })
 
-  test('preview-file rejects requests without workspaceId with 400', async () => {
+  test('preview-file resolves legacy absolute paths under an owned workspace', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-old-'))
     const filePath = join(root, 'index.html')
     writeFileSync(filePath, '<div>ok</div>')
+    await db.insert(workspaces).values({
+      id: `preview-${randomUUID()}`,
+      ownerId: 'default-user',
+      name: 'Legacy Preview Workspace',
+      goal: 'Preview old artifacts',
+      projectPath: root,
+    })
 
     const response = await app.request(`/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`)
 
-    expect([400, 401]).toContain(response.status)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('<div>ok</div>')
   })
 
   test('preview-file rejects requests with invalid workspaceId', async () => {
