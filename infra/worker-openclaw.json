@@ -22,7 +22,7 @@
       "enabled": true,
       "homeserver": "http://localhost:6167",
       "userId": "@worker:agenthub.local",
-      "accessToken": "rQyEyzxBS50XBZv4fidtvV0snkMNxMa9",
+      "accessToken": "NwSVM3hQJxBS7BpPG4TWSsjnG8LHXkjE",
       "encryption": false,
       "network": {
         "dangerouslyAllowPrivateNetwork": true
@@ -53,19 +53,19 @@
     "mode": "merge",
     "providers": {
       "agenthub-llm": {
-        "baseUrl": "http://localhost:8000/v1",
-        "apiKey": "agenthub-internal",
+        "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+        "apiKey": "tp-c73dgjhtdfgp6fd7l62580s5iz8uqwd8ahl9wbj3o9hdqc8c",
         "api": "openai-completions",
         "models": [
           {
-            "id": "default",
+            "id": "mimo-v2.5",
             "reasoning": false,
             "contextWindow": 128000,
             "maxTokens": 8192,
             "input": [
               "text"
             ],
-            "name": "default"
+            "name": "mimo-v2.5"
           }
         ]
       }
@@ -74,9 +74,9 @@
   "agents": {
     "defaults": {
       "timeoutSeconds": 600,
-      "workspace": "/mnt/f/Learning/AgentHub/infra",
+      "workspace": "/mnt/c/Users/wzd/Desktop/速通ing/字节ai全栈挑战赛(agenthub)/AgentHub/infra",
       "model": {
-        "primary": "agenthub-llm/default"
+        "primary": "agenthub-llm/mimo-v2.5"
       },
       "maxConcurrent": 4,
       "subagents": {

@@ -40,7 +40,6 @@ export function projectRoomTimeline(input: {
   const messages = dedupeProjectedTimelineMessages(input.timeline
     .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
     .filter((event) => !isMessageControlEvent(event))
-    .filter((event) => !isDirectRuntimeInternalEvent(event, input.room, asRecord(event.metadata)))
     .filter((event) => !timelineEventIsRedacted(event, controls))
     .map((event) => timelineEventToMessage(event, input.room, input.sessionId, participantsById))
     .filter((message): message is Message => Boolean(message))
@@ -374,17 +373,6 @@ function timelineEventToMessage(
     },
     createdAt: event.createdAt,
   }
-}
-
-function isDirectRuntimeInternalEvent(
-  event: TimelineEvent,
-  room: Room,
-  metadata: Record<string, unknown> | null,
-) {
-  if (room.kind !== 'direct') return false
-  if (event.type === 'worker.message' && metadata?.kind === 'worker-runtime.message') return true
-  if (event.type === 'task.progress' && metadata?.kind === 'worker-runtime.progress') return true
-  return false
 }
 
 function senderTypeFromTimeline(event: TimelineEvent): SenderType {

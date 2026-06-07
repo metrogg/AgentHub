@@ -1,5 +1,5 @@
 import QRCode from 'qrcode'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -29,6 +29,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
+import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
 import { api, friendlyErrorMessage, type MobileConnectivityStatus, type Session, type WorkspaceAgent } from '../../lib/api'
 import {
@@ -50,9 +51,7 @@ import { settingsUpdatedEvent } from '../../lib/shortcuts'
 import {
   buildSessionTree,
   filterSessionTree,
-  isAgentDirectSession,
-  isOrchestratorTaskSession,
-  type SessionGroup,
+  isStableOrchestratorTaskSession,
 } from '../../lib/sessionTree'
 import {
   getCachedAccountProfile,
@@ -62,8 +61,6 @@ import {
 } from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
-import { VirtualList } from '../VirtualList'
-import { useChatStore } from '../../stores/chatStore'
 type SidebarTab = 'messages' | 'agents' | 'artifacts' | 'abilities' | 'me'
 
 function activeTabFromPath(pathname: string): SidebarTab {
@@ -119,7 +116,6 @@ export default function SessionList({
   const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<
     Record<string, WorkspaceAgent[]>
   >({})
-  const messageListScrollRef = useRef<HTMLDivElement>(null)
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
   const groupWorkspaceIds = useMemo(
@@ -137,7 +133,7 @@ export default function SessionList({
   )
   const messageSessions = useMemo(
     () =>
-      sessions.filter((session) => !isAgentDirectSession(session)),
+      sessions.filter((session) => !isPrivateAgentSession(session)),
     [sessions],
   )
   const baseSessionTree = useMemo(
@@ -174,7 +170,7 @@ export default function SessionList({
   const agentDirectSessionsBySavedId = useMemo(() => {
     const byAgentId = new Map<string, Session>()
     for (const session of sessions) {
-      if (!isAgentDirectSession(session)) continue
+      if (!isPrivateAgentSession(session)) continue
       const savedAgentId = readSavedAgentId(session)
       if (!savedAgentId || !savedAgentIds.has(savedAgentId)) continue
       if (byAgentId.has(savedAgentId)) continue
@@ -190,7 +186,7 @@ export default function SessionList({
     () =>
       sessions
         .filter((session) => {
-          if (!isAgentDirectSession(session)) return false
+          if (!isPrivateAgentSession(session)) return false
           const savedAgentId = readSavedAgentId(session)
           if (!savedAgentId || !savedAgentIds.has(savedAgentId)) return false
           if (!query.trim()) return true
@@ -323,7 +319,7 @@ export default function SessionList({
     if (
       !activeSession?.workspaceId ||
       activeSession.type !== 'direct' ||
-      (!activeSession.workspaceAgentId && !isOrchestratorTaskSession(activeSession))
+      (!activeSession.workspaceAgentId && !isStableOrchestratorTaskSession(activeSession))
     )
       return
     setExpandedWorkspaces((current) => {
@@ -702,7 +698,7 @@ export default function SessionList({
         <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'abilities' && 'hidden')}>
           <NavItem
             icon={Blocks}
-            label="能力商店"
+            label="能力中心"
             strong
             active={location.pathname === '/abilities'}
             onClick={() => navigate('/abilities')}
@@ -730,7 +726,6 @@ export default function SessionList({
         <div className={cn('my-3', activeTab !== 'messages' && 'hidden')} />
 
         <div
-          ref={messageListScrollRef}
           className={cn('flex-1 overflow-y-auto px-2 pb-4', activeTab !== 'messages' && 'hidden')}
         >
           {hint && (
@@ -874,23 +869,15 @@ export default function SessionList({
                   : t('还没有会话')}
             </div>
           ) : (
-            <VirtualList
-              className="space-y-1"
-              scrollRef={messageListScrollRef}
-              items={sessionTree}
-              getKey={(item) => item.parent.id}
-              estimateSize={(item) =>
-                estimateProjectSessionGroupHeight(item, expandedWorkspaces, taskBoard?.sessionId)
-              }
-              overscanPx={700}
-              renderItem={(item) => {
+            <ul className="space-y-1">
+              {sessionTree.map((item) => {
                 const workspaceId = item.parent.workspaceId
                 const isGroupParent = item.parent.type === 'group' && Boolean(workspaceId)
                 const workspaceAgents =
                   isGroupParent && workspaceId
                     ? groupSessionAgents(item.parent, groupWorkspaceAgents[workspaceId] ?? [])
                     : []
-                const visibleChildren = item.children.filter(isOrchestratorTaskSession)
+                const visibleChildren = item.children.filter(isStableAgentChildSession)
                 const visibleChildIds = new Set(visibleChildren.map((child) => child.id))
                 const previewChildren =
                   isGroupParent && taskBoard?.sessionId === item.parent.id
@@ -1311,8 +1298,8 @@ export default function SessionList({
                     )}
                   </li>
                 )
-              }}
-            />
+              })}
+            </ul>
           )}
         </div>
 
@@ -1366,7 +1353,6 @@ export default function SessionList({
                         }
                         void openAgentSession(agent)
                       }}
-                      data-testid={`agent-row-${agent.id}`}
                       disabled={!isAgentConfigRoute && opening}
                       className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left disabled:opacity-60"
                     >
@@ -1632,7 +1618,6 @@ function DockButton({
   return (
     <button
       type="button"
-      data-testid={label === 'Agent' ? 'sidebar-dock-agents' : undefined}
       onClick={onClick}
       className={cn(
         'relative grid h-10 w-10 place-items-center rounded-xl transition',
@@ -1807,6 +1792,17 @@ function filterAgents(agents: SavedAgentConfig[], query: string) {
   )
 }
 
+function isStableAgentChildSession(session: Session) {
+  if (session.type !== 'direct' || !session.workspaceId) return false
+  return isStableOrchestratorTaskSession(session)
+}
+
+function isPrivateAgentSession(session: Session | null | undefined) {
+  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
+  const metadata = session.metadata ?? {}
+  return metadata.kind === 'agent-direct'
+}
+
 function isManagerSavedAgent(agent: SavedAgentConfig | null | undefined) {
   if (!agent) return false
   if (agent.roleType === 'orchestrator') return true
@@ -1861,21 +1857,6 @@ function groupMemberCount(session: Session, childCount: number, loadedCount?: nu
   if (explicitAgentIds.length) return explicitAgentIds.length + 1
   if (loadedCount && loadedCount > 0) return loadedCount
   return Math.max(1, childCount + 1)
-}
-
-function estimateProjectSessionGroupHeight(
-  group: SessionGroup,
-  expandedWorkspaces: Set<string>,
-  taskBoardSessionId?: string | null,
-) {
-  const baseRowHeight = 48
-  const workspaceId = group.parent.workspaceId
-  const expanded = Boolean(workspaceId && expandedWorkspaces.has(workspaceId))
-  if (!expanded) return baseRowHeight
-
-  const childCount = group.children.filter(isOrchestratorTaskSession).length
-  const previewAllowance = taskBoardSessionId === group.parent.id ? 4 : 0
-  return baseRowHeight + Math.max(1, childCount + previewAllowance) * 34 + 10
 }
 
 function childTaskStatusText(status?: string) {

@@ -22,16 +22,8 @@ export const CodeAgentType = {
   ClaudeCode: 'claude-code',
   Opencode: 'opencode',
   Gemini: 'gemini',
-  OpenClaw: 'openclaw',
 } as const
 export type CodeAgentType = (typeof CodeAgentType)[keyof typeof CodeAgentType]
-export const CODE_AGENT_TYPES = [
-  CodeAgentType.Codex,
-  CodeAgentType.ClaudeCode,
-  CodeAgentType.Opencode,
-  CodeAgentType.Gemini,
-  CodeAgentType.OpenClaw,
-] as const
 
 export const OrchestratorRunStatus = {
   Planning: 'planning',

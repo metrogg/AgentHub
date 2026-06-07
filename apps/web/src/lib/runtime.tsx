@@ -5,8 +5,7 @@ import {
   type AppendMessage,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
-import { describeRuntimeActivity } from './runtimeStatusProjection'
-import { selectRuntimeState, useChatStoreShallow } from '../stores/chatSelectors'
+import { describeRuntimeActivity, useChatStore } from '../stores/chatStore'
 import type { AgentArtifact, ChatAttachment, Message } from './api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 
@@ -32,7 +31,16 @@ export function getCachedCodeAgentRunMetadata(id?: string | null): CodeAgentRunM
 }
 
 function toThreadMessage(message: Message): ThreadMessageLike {
-  const role: ThreadMessageLike['role'] = message.senderType === 'user' ? 'user' : 'assistant'
+  if (message.senderType === 'system') {
+    return {
+      id: message.id,
+      role: 'assistant' as const,
+      content: [{ type: 'text' as const, text: message.content }],
+      createdAt: message.createdAt ? new Date(message.createdAt) : undefined,
+    }
+  }
+
+  const role: ThreadMessageLike['role'] = message.senderType === 'agent' ? 'assistant' : 'user'
 
   const taskBoard =
     message.type === 'task_board' &&
@@ -51,10 +59,6 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const deliveryReport =
     message.metadata && 'delivery_report' in (message.metadata as Record<string, unknown>)
       ? (message.metadata as Record<string, unknown>).delivery_report
-      : null
-  const fileCard =
-    message.metadata && 'file_card' in (message.metadata as Record<string, unknown>)
-      ? (message.metadata as Record<string, unknown>).file_card
       : null
   const memberProposal =
     message.metadata && 'memberProposals' in (message.metadata as Record<string, unknown>)
@@ -102,9 +106,6 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const deliveryReportPart = deliveryReport
     ? [{ type: 'data' as const, name: 'delivery_report', data: deliveryReport }]
     : []
-  const fileCardPart = fileCard
-    ? [{ type: 'data' as const, name: 'file_card', data: fileCard }]
-    : []
   const memberProposalPart = memberProposal
     ? [{ type: 'data' as const, name: 'member_proposal_card', data: memberProposal }]
     : []
@@ -127,7 +128,6 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 ...memberProposalPart,
                 ...controllerApprovalPart,
                 { type: 'data', name: 'code_agent_run', data: codeAgentRun },
-                ...fileCardPart,
                 ...deliveryReportPart,
               ]
             : [
@@ -137,15 +137,10 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 ...memberProposalPart,
                 ...controllerApprovalPart,
                 ...artifactPart,
-                ...fileCardPart,
                 ...deliveryReportPart,
               ],
     createdAt: new Date(message.createdAt),
   }
-}
-
-export const __runtimeTestHooks = {
-  toThreadMessage,
 }
 
 function toThreadCodeAgentRunData(
@@ -236,25 +231,22 @@ function readAgentAvatarPart(
     runtime !== 'codex' &&
     runtime !== 'claude-code' &&
     runtime !== 'opencode' &&
-    runtime !== 'gemini' &&
-    runtime !== 'openclaw'
+    runtime !== 'gemini'
   )
     return []
   return [{ type: 'data' as const, name: 'agent_avatar', data: { runtime } }]
 }
 
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
-  const {
-    messages,
-    streamingMessage,
-    streamingCodeAgentRun,
-    agentTyping,
-    agentActivity,
-    currentSessionId,
-    sendMessage,
-    safetyMode,
-    cancelRun,
-  } = useChatStoreShallow(selectRuntimeState)
+  const messages = useChatStore((state) => state.messages)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
+  const agentTyping = useChatStore((state) => state.agentTyping)
+  const agentActivity = useChatStore((state) => state.agentActivity)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const sendMessage = useChatStore((state) => state.sendMessage)
+  const safetyMode = useChatStore((state) => state.safetyMode)
+  const cancelRun = useChatStore((state) => state.cancelRun)
 
   const threadMessages = useMemo<ThreadMessageLike[]>(() => {
     const list = messages.map(toThreadMessage)

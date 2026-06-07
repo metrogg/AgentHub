@@ -544,43 +544,4 @@ describe('room timeline projection', () => {
     expect(projection.messages).toHaveLength(0)
     expect(projection.events).toHaveLength(3)
   })
-
-  test('hides direct worker runtime internals from visible chat bubbles', () => {
-    const projection = projectRoomTimeline({
-      room: {
-        ...room,
-        kind: 'direct',
-        sessionId: 'direct-session-1',
-        taskId: null,
-        taskThreadId: null,
-      },
-      participants: [worker],
-      sessionId: 'direct-session-1',
-      timeline: [
-        event({
-          id: 'event-progress',
-          type: 'task.progress',
-          sequence: 1,
-          body: 'Running...',
-          metadata: { kind: 'worker-runtime.progress' },
-        }),
-        event({
-          id: 'event-chunk',
-          type: 'worker.message',
-          sequence: 2,
-          body: 'chunk',
-          metadata: { kind: 'worker-runtime.message' },
-        }),
-        event({
-          id: 'event-final',
-          type: 'worker.message',
-          sequence: 3,
-          body: '完成了',
-          metadata: {},
-        }),
-      ],
-    })
-
-    expect(projection.messages.map((message) => message.content)).toEqual(['完成了'])
-  })
 })

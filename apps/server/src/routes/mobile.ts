@@ -20,7 +20,6 @@ import { listRoomLastMessagePreviews } from '../services/rooms/room-last-message
 const PAIRING_TTL_MS = 2 * 60 * 1000
 const AGENT_LIBRARY_SETTING_KEY = 'AGENT_LIBRARY'
 const execFileAsync = promisify(execFile)
-type WorkspaceCodeAgentType = 'codex' | 'claude-code' | 'opencode' | 'gemini'
 
 interface PairingRecord {
   code: string
@@ -535,7 +534,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     color: input.color || '#111827',
     modelId: input.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (codeAgentType ?? 'codex') : null,
+    codeAgentType,
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags.filter(isNonEmptyString) : [],
     toolPermissions: Array.isArray(input.toolPermissions) ? input.toolPermissions.filter(isNonEmptyString) : [],
     sandboxPolicy: normalizeSandboxPolicy(input.sandboxPolicy),
@@ -777,7 +776,7 @@ function savedAgentWorkspaceValues(agent: SavedAgentConfig) {
     color: agent.color ?? '#111827',
     modelId: agent.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (normalizeCodeAgentType(agent.codeAgentType) ?? 'codex') : null,
+    codeAgentType: runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType) : null,
     capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions ?? [],
     sandboxPolicy: normalizeSandboxPolicy(agent.sandboxPolicy),
@@ -821,13 +820,14 @@ function normalizeRoleType(value?: string | null) {
   return allowed.includes(value ?? '') ? value! as any : 'custom'
 }
 
-function normalizeRuntimeType(value?: string | null): 'code-agent' {
-  return 'code-agent'
+function normalizeRuntimeType(value?: string | null) {
+  const allowed = ['llm', 'code-agent', 'mcp', 'a2a']
+  return allowed.includes(value ?? '') ? value! as any : 'llm'
 }
 
-function normalizeCodeAgentType(value?: string | null): WorkspaceCodeAgentType | null {
-  if (value === 'codex' || value === 'claude-code' || value === 'opencode' || value === 'gemini') return value
-  return null
+function normalizeCodeAgentType(value?: string | null) {
+  const allowed = ['codex', 'claude-code', 'opencode', 'gemini']
+  return allowed.includes(value ?? '') ? value! as any : null
 }
 
 function normalizeSandboxPolicy(value?: string | null) {
@@ -838,12 +838,6 @@ function normalizeSandboxPolicy(value?: string | null) {
 function normalizeContextPolicy(value?: string | null) {
   const allowed = ['recent-only', 'pinned-recent', 'workspace-aware']
   return allowed.includes(value ?? '') ? value! as any : 'workspace-aware'
-}
-
-export const __mobileRoutesTestHooks = {
-  normalizeSavedAgent,
-  normalizeRuntimeType,
-  savedAgentWorkspaceValues,
 }
 
 function getServerPort() {

@@ -43,6 +43,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  File,
   FileText,
   FolderOpen,
   FolderPlus,
@@ -96,22 +97,14 @@ import {
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import { ClarificationCard } from '@/components/ClarificationCard'
-import { requestConfirmDialog, requestNoticeDialog } from '../ConfirmDialog'
 import DeliveryReport from '@/components/DeliveryReport'
 import type { DeliveryReportData } from '@/components/DeliveryReport'
 import { FileCard } from '@/components/FileCard'
 import {
-  ArtifactDiffViewer,
-  ArtifactPreviewSurface,
-  canInspectArtifactPreviewSource,
-  type DiffEditSaveParams,
-} from '../artifacts/ArtifactPreviewSurface'
-import { VirtualList } from '../VirtualList'
-import {
   api,
   friendlyErrorMessage,
-  SessionType,
   type AgentArtifact,
+  type ChatAttachment,
   type MemberProposal,
   type Message,
   type ModelCatalogItem,
@@ -123,23 +116,6 @@ import {
 } from '../../lib/api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
-import {
-  artifactPreviewEvent,
-  clampPreviewPanelWidth,
-  defaultPreviewPanelWidth,
-  downloadFileName,
-  enrichPreviewItem,
-  extractPreviewErrorMessage,
-  fileNameFromPath,
-  formatPreviewError,
-  getPreviewPanelWidthBounds,
-  normalizePreviewUrl,
-  previewItemFromAgentArtifact,
-  readStoredPreviewPanelWidth,
-  requestArtifactPreview,
-  storePreviewPanelWidth,
-  type ArtifactPreviewItem,
-} from '../../lib/artifactPreview'
 import {
   downloadExternalUrl,
   isDesktopApp,
@@ -156,15 +132,7 @@ import {
 } from '../../lib/shortcuts'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { useMessageStyleMode } from '../../lib/messageStyle'
-import { classifyAgentSession } from '../../lib/sessionTree'
-import { cn, compactPath, formatBytes, trimLongText } from '../../lib/utils'
-import {
-  extractMentionedAgentIds,
-  mentionAliasEntries,
-  mentionPatternForAliases,
-  readMentionCommand,
-  readSlashCommand,
-} from '../../lib/composerCommands'
+import { cn } from '../../lib/utils'
 import { getCachedAccountProfile } from '../../lib/accountProfile'
 import {
   isProjectWorkspace,
@@ -176,29 +144,8 @@ import {
   getCachedCodeAgentRunMetadata,
   type ThreadCodeAgentRunData,
 } from '../../lib/runtime'
-import {
-  activityLabel,
-  buildDirectRunProgress,
-  codeAgentStatusLabel,
-  type DirectRunProgressProjection,
-  type DirectRunStepStatus,
-  fileStatusLabel,
-  type HeaderAgentStatusProjection,
-  readFlowArtifacts,
-  taskProgressStats,
-} from '../../lib/runtimeStatusProjection'
 import { useChatStore } from '../../stores/chatStore'
-import {
-  makeSelectMessageById,
-  makeSelectMessageWithQuoteSource,
-  selectAgentHeaderState,
-  selectComposerState,
-  selectGroupHeaderState,
-  selectHeaderAgentStatus,
-  selectThreadShellState,
-  useChatMessageById,
-  useChatStoreShallow,
-} from '../../stores/chatSelectors'
+import { buildHeaderAgentStatusProjection, type HeaderAgentStatusProjection } from '../../stores/chatStore'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -206,16 +153,6 @@ import {
 } from '../chat/QuickPromptBubbles'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
-import { WorkspaceFileExplorer } from '../workspace/WorkspaceFileExplorer'
-import {
-  ChatAttachmentsPart,
-  PendingAttachmentList,
-  attachmentInputAccept,
-  fileToChatAttachment,
-  isDragWithFiles,
-  maxAttachmentBytes,
-  maxPendingAttachments,
-} from './ChatAttachments'
 import {
   agentLibraryChangeEvent,
   flushAgentLibraryServerSync,
@@ -227,6 +164,7 @@ import {
 import { workspaceNameFromPath } from '@agenthub/shared'
 import { useLineSelection } from './useLineSelection'
 import LineSelectionToolbar from './LineSelectionToolbar'
+import { VirtualList } from '../VirtualList'
 
 const highlightLanguageMap = {
   bash,
@@ -266,8 +204,63 @@ const languageAliases: Record<string, string> = {
 
 const autoHighlightLanguages = Object.keys(highlightLanguageMap)
 type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
+const maxAttachmentBytes = 5 * 1024 * 1024
+const maxAttachmentTextBytes = 256 * 1024
+const maxPendingAttachments = 6
+const attachmentInputAccept = [
+  'image/*',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.json',
+  '.jsonl',
+  '.csv',
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.py',
+  '.html',
+  '.htm',
+  '.css',
+  '.scss',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.sql',
+  '.sh',
+  '.bat',
+  '.ps1',
+  '.log',
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.ppt',
+  '.pptx',
+  '.xls',
+  '.xlsx',
+].join(',')
 const composerSyncEvent = 'agenthub:composer-sync'
+const artifactPreviewEvent = 'agenthub:artifact-preview'
 const roomTasksDrawerEvent = 'agenthub:open-room-tasks'
+const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
+const defaultPreviewPanelWidth = 560
+
+type ArtifactPreviewItem = {
+  id: string
+  title: string
+  subtitle?: string
+  description?: string
+  kind: 'web' | 'file' | 'image' | 'diff' | 'deploy' | 'workflow'
+  url?: string
+  path?: string
+  mimeType?: string
+  source?: string
+  /** 用于构造 HTML 预览 URL 的 workspaceId */
+  workspaceId?: string
+}
 
 type PreviewActionItem = {
   id: string
@@ -279,22 +272,37 @@ type PreviewActionItem = {
   folder?: string
 }
 
+type DiffEditSaveParams = {
+  lineText: string
+  lineNumber?: number
+  fileContent?: string
+}
+
+function classifyAgentSession(
+  session: ReturnType<typeof useChatStore.getState>['currentSession'],
+) {
+  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId)
+    return 'regular'
+  const metadata = session.metadata ?? {}
+  if (metadata.kind === 'agent-direct') return 'agent-direct'
+  if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) {
+    return 'orchestrator-task'
+  }
+  return 'agent-direct'
+}
+
 export const Thread: FC = () => {
-  const {
-    currentSession,
-    workspaceAgents,
-    taskBoard,
-    agentActivity,
-    streamingCodeAgentRun,
-    selectedAgentTab,
-    agentTabs,
-    selectAgentTab,
-    selectSession,
-  } = useChatStoreShallow(selectThreadShellState)
+  const currentSession = useChatStore((state) => state.currentSession)
+  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
   const sessionKind = classifyAgentSession(currentSession)
   const isAgentDirectSession = sessionKind === 'agent-direct'
+  const taskBoard = useChatStore((s) => s.taskBoard)
+  const agentActivity = useChatStore((s) => s.agentActivity)
   const messages = useChatStore((s) => s.messages)
+  const streamingCodeAgentRun = useChatStore((s) => s.streamingCodeAgentRun)
+  const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
+  const agentTabs = useChatStore((s) => s.agentTabs)
   const railTaskBoard =
     taskBoard &&
     (taskBoard.sessionId === currentSession?.id ||
@@ -303,6 +311,8 @@ export const Thread: FC = () => {
       : null
   const roomTaskBoard =
     isGroupSession && taskBoard?.sessionId === currentSession?.id ? taskBoard : null
+  const selectAgentTab = useChatStore((s) => s.selectAgentTab)
+  const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
   const planningActivity =
     isGroupSession &&
@@ -367,9 +377,7 @@ export const Thread: FC = () => {
     function handlePreview(event: Event) {
       const item = (event as CustomEvent<ArtifactPreviewItem>).detail
       if (!item?.id) return
-      const state = useChatStore.getState()
-      const workspaceId =
-        item.workspaceId ?? state.currentSession?.workspaceId ?? state.currentWorkspace?.id
+      const workspaceId = item.workspaceId ?? useChatStore.getState().currentSession?.workspaceId
       setPreviewItem(enrichPreviewItem(item, workspaceId ?? undefined))
       setPreviewCollapsed(false)
     }
@@ -610,7 +618,22 @@ function estimateThreadMessageHeight(message?: Message) {
 }
 
 function useHeaderAgentStatus(): HeaderAgentStatusProjection {
-  return useChatStoreShallow(selectHeaderAgentStatus)
+  const currentSession = useChatStore((state) => state.currentSession)
+  const agentTyping = useChatStore((state) => state.agentTyping)
+  const agentActivity = useChatStore((state) => state.agentActivity)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
+  const taskBoard = useChatStore((state) => state.taskBoard)
+  const agentTabs = useChatStore((state) => state.agentTabs)
+  return buildHeaderAgentStatusProjection({
+    sessionId: currentSession?.id ?? null,
+    taskBoard,
+    agentTabs,
+    agentTyping,
+    agentActivity,
+    streamingMessage,
+    streamingCodeAgentRun,
+  })
 }
 
 const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
@@ -619,20 +642,17 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
   previewAvailable,
   onTogglePreview,
 }) => {
-  const { session, workspace, agents, clearMessages } = useChatStoreShallow(selectGroupHeaderState)
+  const session = useChatStore((state) => state.currentSession)
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const clearMessages = useChatStore((state) => state.clearMessages)
   const navigate = useNavigate()
   const title = groupChatDisplayTitle(session?.title, workspace?.name)
   const memberCount = agents.length + 1
 
   async function handleClear() {
     if (!session) return
-    const confirmed = await requestConfirmDialog({
-      title: '清空当前会话？',
-      description: '会话内的所有消息都会被删除，此操作不可撤销。',
-      confirmLabel: '清空',
-      tone: 'danger',
-    })
-    if (!confirmed) return
+    if (!window.confirm('确定清空当前会话的所有消息？此操作不可撤销。')) return
     await clearMessages(session.id)
   }
 
@@ -690,7 +710,9 @@ const AgentChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
   previewAvailable,
   onTogglePreview,
 }) => {
-  const { session, workspace, agents } = useChatStoreShallow(selectAgentHeaderState)
+  const session = useChatStore((state) => state.currentSession)
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
   const title = agent?.name || session?.title || 'Agent'
   const subtitle = [agent?.role, workspace?.name].filter(Boolean).join(' · ') || '单 Agent 会话'
@@ -897,11 +919,28 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
 
 type LiveTaskBoard = NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
 type LiveAgentActivity = NonNullable<ReturnType<typeof useChatStore.getState>['agentActivity']>
+type DirectRunStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+type DirectRunProgress = {
+  agentName?: string
+  done: number
+  percent: number
+  run: CodeAgentRunMetadata
+  status: CodeAgentRunMetadata['status']
+  steps: Array<{
+    id: string
+    status: DirectRunStepStatus
+    title: string
+    subtitle?: string
+    detail?: string
+  }>
+  subtitle: string
+  total: number
+}
 
 const ThreadContextRail: FC<{
   taskBoard: LiveTaskBoard | null
   activity: LiveAgentActivity | null
-  directRunProgress?: DirectRunProgressProjection | null
+  directRunProgress?: DirectRunProgress | null
 }> = ({ taskBoard, activity, directRunProgress }) => {
   const workspace = useChatStore((state) => state.currentWorkspace)
   const [progressOpen, setProgressOpen] = useState(true)
@@ -912,7 +951,7 @@ const ThreadContextRail: FC<{
       directRunProgress && !taskBoard
         ? collectDirectRunFiles(directRunProgress, workspace)
         : collectRailFiles(taskBoard, workspace),
-    [directRunProgress, taskBoard, workspace?.id, workspace?.projectPath],
+    [directRunProgress, taskBoard, workspace?.projectPath],
   )
   const activeTask =
     taskBoard?.tasks.find((task) => task.status === 'running') ??
@@ -932,32 +971,33 @@ const ThreadContextRail: FC<{
   const hasProgress = Boolean(taskBoard || directRunProgress || activity)
 
   return (
-    <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
-      <div className="flex max-h-full w-full flex-col gap-3 overflow-visible">
-          {hasProgress && (
-            <RailCard
-              title="进度"
-              subtitle={directRunProgress?.subtitle}
-              open={progressOpen}
-              onToggle={() => setProgressOpen((open) => !open)}
-            >
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center justify-between text-[11px] text-neutral-500">
-                    <span>
-                      {directRunProgress
-                        ? `${directRunProgress.done}/${directRunProgress.total} 完成`
-                        : `${stats.done}/${stats.total || 0} 完成`}
-                    </span>
-                    <span>{progressPercent}%</span>
-                  </div>
-                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-100">
-                    <div
-                      className="h-full rounded-full bg-neutral-900 transition-all duration-500"
-                      style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-                    />
-                  </div>
+    <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 bg-transparent px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
+      <div className="pointer-events-none max-h-full overflow-visible bg-transparent">
+        <div className="flex w-full flex-col gap-3 bg-transparent">
+        {hasProgress && (
+          <RailCard
+            title="进度"
+            subtitle={directRunProgress?.subtitle}
+            open={progressOpen}
+            onToggle={() => setProgressOpen((open) => !open)}
+          >
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center justify-between text-[11px] text-neutral-500">
+                  <span>
+                    {directRunProgress
+                      ? `${directRunProgress.done}/${directRunProgress.total} 完成`
+                      : `${stats.done}/${stats.total || 0} 完成`}
+                  </span>
+                  <span>{progressPercent}%</span>
                 </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                  <div
+                    className="h-full rounded-full bg-neutral-900 transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                  />
+                </div>
+              </div>
 
               {directRunProgress ? (
                 <div className="space-y-2">
@@ -1003,14 +1043,60 @@ const ThreadContextRail: FC<{
           </RailCard>
         )}
 
-          <RailCard
-            title="工作文件夹"
-            subtitle={workspacePath ? compactPath(workspacePath) ?? workspaceName : '当前项目与产物'}
-            open={workspaceOpen}
-            onToggle={() => setWorkspaceOpen((open) => !open)}
-          >
-            <WorkspaceFileExplorer workspace={workspace} quickFiles={files} />
-          </RailCard>
+        <RailCard
+          title="工作文件夹"
+          subtitle={workspacePath ? compactPath(workspacePath) ?? workspaceName : '当前项目与产物'}
+          open={workspaceOpen}
+          onToggle={() => setWorkspaceOpen((open) => !open)}
+        >
+          <div>
+            <button
+              type="button"
+              disabled={!workspacePath}
+              onClick={() => workspacePath && void openPath(workspacePath)}
+              className="mb-2 block max-w-full truncate text-left text-sm text-neutral-400 transition hover:text-neutral-700 disabled:cursor-default disabled:hover:text-neutral-400"
+              title={workspacePath ?? workspaceName}
+            >
+              {workspaceName}
+            </button>
+
+            <div className="space-y-1.5">
+              {files.map((file) => (
+                <button
+                  key={file.id}
+                  type="button"
+                  onClick={() => openRailFile(file)}
+                  className="flex min-h-8 w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition hover:bg-neutral-50"
+                  title={file.path ?? file.url ?? file.title}
+                >
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-neutral-100 text-neutral-500">
+                    <FileText className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-900">
+                    {file.title}
+                  </span>
+                </button>
+              ))}
+
+              {files.length === 0 && (
+                <button
+                  type="button"
+                  disabled={!workspacePath}
+                  onClick={() => workspacePath && void openPath(workspacePath)}
+                  className="flex min-h-9 w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left text-sm text-neutral-600 transition hover:bg-neutral-50 disabled:cursor-default disabled:text-neutral-400 disabled:hover:bg-transparent"
+                >
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-neutral-100 text-neutral-500">
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {workspacePath ? '打开工作文件夹' : '尚未选择工作文件夹'}
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+        </RailCard>
+        </div>
       </div>
     </aside>
   )
@@ -1023,7 +1109,7 @@ const RailCard: FC<{
   onToggle: () => void
   children: ReactNode
 }> = ({ title, subtitle, open, onToggle, children }) => (
-  <section className="pointer-events-auto rounded-xl border border-neutral-200 bg-white px-4 py-3.5">
+  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 shadow-[0_14px_40px_rgba(15,23,42,0.08)] backdrop-blur">
     <button
       type="button"
       className="flex w-full items-start justify-between gap-3 text-left"
@@ -1045,7 +1131,173 @@ const RailCard: FC<{
   </section>
 )
 
-type RailFileItem = ArtifactPreviewItem
+type RailFileItem = {
+  id: string
+  title: string
+  path?: string
+  url?: string
+  source?: string
+  kind: ArtifactPreviewItem['kind']
+}
+
+function buildDirectRunProgress(input: {
+  activity: LiveAgentActivity | null
+  agentName?: string | null
+  messages: Message[]
+  streamingRun: CodeAgentRunMetadata | null
+}): DirectRunProgress | null {
+  const run = input.streamingRun ?? latestCodeAgentRunFromMessages(input.messages)
+  if (!run) return null
+
+  const steps = buildDirectRunSteps(run)
+  if (!steps.length) return null
+
+  const total = steps.length
+  const done = steps.filter((step) =>
+    step.status === 'done' || step.status === 'failed' || step.status === 'cancelled',
+  ).length
+  const rawPercent = Math.round((done / total) * 100)
+  const percent =
+    run.status === 'running'
+      ? Math.min(95, Math.max(8, rawPercent))
+      : run.status === 'completed'
+        ? 100
+        : Math.max(rawPercent, 100)
+  const summary = [
+    codeAgentRuntimeLabel(run.runtime),
+    codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
+    input.agentName || input.activity?.agentName,
+  ].filter(Boolean).join(' · ')
+
+  return {
+    agentName: input.agentName ?? input.activity?.agentName,
+    done,
+    percent,
+    run,
+    status: run.status,
+    steps,
+    subtitle: summary,
+    total,
+  }
+}
+
+function latestCodeAgentRunFromMessages(messages: Message[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const value = messages[index]?.metadata?.codeAgentRun
+    if (isCodeAgentRunMetadataLike(value)) return value
+  }
+  return null
+}
+
+function isCodeAgentRunMetadataLike(value: unknown): value is CodeAgentRunMetadata {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      (value as { type?: unknown }).type === 'code-agent-run' &&
+      typeof (value as { status?: unknown }).status === 'string' &&
+      typeof (value as { runtime?: unknown }).runtime === 'string',
+  )
+}
+
+function buildDirectRunSteps(run: CodeAgentRunMetadata): DirectRunProgress['steps'] {
+  const steps = run.steps ?? []
+  if (steps.length) {
+    const rows = steps
+      .filter((step) => step.kind !== 'log')
+      .map((step) => ({
+        detail: step.detail ? trimLongText(step.detail, 120) : undefined,
+        id: step.id,
+        status: directRunStatusFromCodeAgent(step.status),
+        subtitle: [
+          step.subtitle,
+          step.toolName,
+          step.command,
+          step.path ? compactPath(step.path) : null,
+          step.fileStatus ? fileStatusLabel(step.fileStatus) : null,
+        ].filter(Boolean).join(' · ') || undefined,
+        title: step.title,
+      }))
+    const logSteps = steps.filter((step) => step.kind === 'log')
+    if (logSteps.length) {
+      const lastLog = logSteps[logSteps.length - 1]
+      rows.push({
+        detail: lastLog.detail ? trimLongText(lastLog.detail, 120) : undefined,
+        id: 'direct-log-summary',
+        status: logSteps.some((step) => step.status === 'failed') ? 'failed' : 'done',
+        subtitle: `${logSteps.length} 条运行日志`,
+        title: '整理过程输出',
+      })
+    }
+    return rows
+  }
+
+  const inferred: DirectRunProgress['steps'] = [
+    {
+      detail: run.cwd ? compactPath(run.cwd) ?? run.cwd : undefined,
+      id: 'direct-start',
+      status: run.status === 'running' ? 'running' : directRunStatusFromCodeAgent(run.status),
+      subtitle: [codeAgentRuntimeLabel(run.runtime), run.command].filter(Boolean).join(' · '),
+      title: '启动 Agent Runtime',
+    },
+  ]
+
+  for (const command of (run.commands ?? []).slice(0, 3)) {
+    inferred.push({
+      detail: command.output ? trimLongText(command.output, 120) : undefined,
+      id: `direct-command-${command.id}`,
+      status: 'done',
+      subtitle: command.cwd ? compactPath(command.cwd) ?? command.cwd : undefined,
+      title: command.command,
+    })
+  }
+
+  for (const call of (run.toolCalls ?? []).slice(0, 3)) {
+    inferred.push({
+      detail: call.detail ? trimLongText(call.detail, 120) : undefined,
+      id: `direct-tool-${call.id}`,
+      status: 'done',
+      subtitle: [call.name, call.target].filter(Boolean).join(' · ') || undefined,
+      title: call.label,
+    })
+  }
+
+  for (const file of (run.files ?? []).slice(0, 4)) {
+    inferred.push({
+      id: `direct-file-${file.path}`,
+      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
+      subtitle: fileStatusLabel(file.status),
+      title: compactPath(file.path) ?? file.path,
+    })
+  }
+
+  const artifacts = readFlowArtifacts(run.artifacts)
+  if (artifacts.length) {
+    inferred.push({
+      id: 'direct-artifacts',
+      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
+      subtitle: `${artifacts.length} 个产物`,
+      title: '汇总产物',
+    })
+  }
+
+  if (run.status !== 'running') {
+    inferred.push({
+      detail: run.finalMessage ? trimLongText(run.finalMessage, 120) : undefined,
+      id: 'direct-finish',
+      status: directRunStatusFromCodeAgent(run.status),
+      title: codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
+    })
+  }
+
+  return inferred
+}
+
+function directRunStatusFromCodeAgent(status: CodeAgentRunMetadata['status']): DirectRunStepStatus {
+  if (status === 'running') return 'running'
+  if (status === 'failed' || status === 'timed-out') return 'failed'
+  if (status === 'cancelled') return 'cancelled'
+  return 'done'
+}
 
 function directRunStepIcon(status: DirectRunStepStatus) {
   if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
@@ -1053,6 +1305,28 @@ function directRunStepIcon(status: DirectRunStepStatus) {
   if (status === 'cancelled') return <Square className="h-4 w-4 text-neutral-400" />
   if (status === 'done') return <CheckCircle2 className="h-4 w-4 text-green-600" />
   return <Clock3 className="h-4 w-4 text-neutral-400" />
+}
+
+function taskProgressStats(taskBoard: LiveTaskBoard | null) {
+  const tasks = taskBoard?.tasks ?? []
+  const done = tasks.filter((task) => task.status === 'done').length
+  const finished =
+    done +
+    tasks.filter((task) =>
+      ['failed', 'blocked', 'cancelled'].includes(task.status),
+    ).length
+  return {
+    done,
+    total: tasks.length,
+    percent: tasks.length ? Math.round((finished / tasks.length) * 100) : 0,
+  }
+}
+
+function activityLabel(activity: LiveAgentActivity | null) {
+  if (activity?.phase === 'thinking') return '理解中'
+  if (activity?.phase === 'planning') return '规划中'
+  if (activity?.phase === 'synthesizing') return '汇总中'
+  return '未开始'
 }
 
 function collectRailFiles(
@@ -1079,19 +1353,14 @@ function collectRailFiles(
         task.title ||
         '任务产物'
 
-      files.push(
-        enrichPreviewItem(
-          {
-            id: key,
-            kind: railPreviewKind(artifact.type ?? artifact.kind, rawPath, rawUrl),
-            path,
-            source: artifact.source,
-            title,
-            url: rawUrl,
-          },
-          workspace?.id ?? undefined,
-        ),
-      )
+      files.push({
+        id: key,
+        kind: railPreviewKind(artifact.type ?? artifact.kind, rawPath, rawUrl),
+        path,
+        source: artifact.source,
+        title,
+        url: rawUrl,
+      })
     }
   }
 
@@ -1099,7 +1368,7 @@ function collectRailFiles(
 }
 
 function collectDirectRunFiles(
-  progress: DirectRunProgressProjection,
+  progress: DirectRunProgress,
   workspace: Workspace | null,
 ): RailFileItem[] {
   const files: RailFileItem[] = []
@@ -1114,37 +1383,32 @@ function collectDirectRunFiles(
   }
 
   for (const artifact of readFlowArtifacts(progress.run.artifacts)) {
-    const rawPreview = previewItemFromArtifact(artifact)
+    const preview = previewItemFromArtifact(artifact)
     const rawPath =
       artifact.type === 'diff'
         ? artifact.filePath
         : artifact.type === 'file'
           ? artifact.path
           : undefined
-    addFile(
-      enrichPreviewItem(
-        {
-          ...rawPreview,
-          path: rawPath ? resolveWorkspacePath(rawPath, workspacePath) : rawPreview.path,
-        },
-        workspace?.id ?? undefined,
-      ),
-    )
+    const path = rawPath ? resolveWorkspacePath(rawPath, workspacePath) : preview.path
+    addFile({
+      id: artifact.id,
+      kind: preview.kind,
+      path,
+      source: preview.source,
+      title: preview.title,
+      url: preview.url,
+    })
   }
 
   for (const file of progress.run.files ?? []) {
-    addFile(
-      enrichPreviewItem(
-        {
-          id: `direct-run-file-${file.path}`,
-          kind: file.diff ? 'diff' : railPreviewKind(undefined, file.path),
-          path: resolveWorkspacePath(file.path, workspacePath),
-          source: file.diff,
-          title: fileNameFromPath(file.path) ?? file.path,
-        },
-        workspace?.id ?? undefined,
-      ),
-    )
+    addFile({
+      id: `direct-run-file-${file.path}`,
+      kind: file.diff ? 'diff' : railPreviewKind(undefined, file.path),
+      path: resolveWorkspacePath(file.path, workspacePath),
+      source: file.diff,
+      title: fileNameFromPath(file.path) ?? file.path,
+    })
   }
 
   return files.slice(0, 4)
@@ -1163,12 +1427,31 @@ function railPreviewKind(
   return 'file'
 }
 
+function openRailFile(file: RailFileItem) {
+  if (file.path) {
+    void openPath(file.path)
+      .then((opened) => {
+        if (!opened) requestArtifactPreview(file)
+      })
+      .catch(() => requestArtifactPreview(file))
+    return
+  }
+  requestArtifactPreview(file)
+}
+
 function resolveWorkspacePath(path: string, workspacePath?: string | null) {
   if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || path.startsWith('\\\\')) {
     return path
   }
   if (!workspacePath) return path
   return `${workspacePath.replace(/[\\/]+$/, '')}\\${path.replace(/^[\\/]+/, '')}`
+}
+
+function fileNameFromPath(value?: string | null) {
+  if (!value) return null
+  const normalized = value.replace(/\\/g, '/')
+  const withoutQuery = normalized.split(/[?#]/)[0]
+  return withoutQuery.split('/').filter(Boolean).pop() ?? value
 }
 
 const runStatusLabel: Record<string, string> = {
@@ -1278,6 +1561,13 @@ function TaskRuntimeStrip({
   )
 }
 
+function compactPath(value?: string | null) {
+  if (!value) return null
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length <= 3) return value
+  return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
+}
+
 type RoomThreadSection = {
   id: string
   title: string
@@ -1288,7 +1578,6 @@ function taskArtifactPreviewItem(
   artifact: NonNullable<LiveTaskBoard['tasks'][number]['artifacts']>[number],
   taskId: string,
   index: number,
-  workspaceId?: string,
 ): ArtifactPreviewItem {
   const title = artifact.title || artifact.filePath || artifact.url || `产物 ${index + 1}`
   const kind: ArtifactPreviewItem['kind'] =
@@ -1305,22 +1594,19 @@ function taskArtifactPreviewItem(
               : /\.(png|jpg|jpeg|webp|gif)$/i.test(artifact.filePath ?? '')
                 ? 'image'
                 : 'file'
-  return enrichPreviewItem(
-    {
-      id:
-        artifact.artifactId ??
-        artifact.id ??
-        artifact.filePath ??
-        artifact.url ??
-        `${taskId}-${index}`,
-      title,
-      kind,
-      url: artifact.url ?? undefined,
-      path: artifact.filePath ?? undefined,
-      source: artifact.source ?? undefined,
-    },
-    workspaceId,
-  )
+  return {
+    id:
+      artifact.artifactId ??
+      artifact.id ??
+      artifact.filePath ??
+      artifact.url ??
+      `${taskId}-${index}`,
+    title,
+    kind,
+    url: artifact.url ?? undefined,
+    path: artifact.filePath ?? undefined,
+    source: artifact.source ?? undefined,
+  }
 }
 
 function buildRoomThreadSections(tasks: LiveTaskBoard['tasks']): RoomThreadSection[] {
@@ -1345,9 +1631,6 @@ const RoomTaskDrawer: FC<{
 }> = ({ open, onClose, taskBoard, agentTabs, activity }) => {
   const selectAgentTab = useChatStore((state) => state.selectAgentTab)
   const selectSession = useChatStore((state) => state.selectSession)
-  const previewWorkspaceId = useChatStore(
-    (state) => state.currentSession?.workspaceId ?? state.currentWorkspace?.id ?? undefined,
-  )
   const navigate = useNavigate()
   const [pendingChildNoticeTaskId, setPendingChildNoticeTaskId] = useState<string | null>(null)
   const title = taskBoard?.title || taskBoard?.goal || '房间任务'
@@ -1371,7 +1654,7 @@ const RoomTaskDrawer: FC<{
   const newestArtifacts = tasks
     .flatMap((task) =>
       (task.artifacts ?? []).map((artifact, index) => ({
-        item: taskArtifactPreviewItem(artifact, task.id, index, previewWorkspaceId),
+        item: taskArtifactPreviewItem(artifact, task.id, index),
         taskTitle: task.title,
       })),
     )
@@ -1579,12 +1862,7 @@ const RoomTaskDrawer: FC<{
                                 {task.artifacts && task.artifacts.length > 0 && (
                                   <div className="mt-2 flex flex-wrap gap-1.5">
                                     {task.artifacts.slice(0, 3).map((artifact, index) => {
-                                      const item = taskArtifactPreviewItem(
-                                        artifact,
-                                        task.id,
-                                        index,
-                                        previewWorkspaceId,
-                                      )
+                                      const item = taskArtifactPreviewItem(artifact, task.id, index)
                                       return (
                                         <button
                                           key={item.id}
@@ -1996,13 +2274,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
 
   async function deleteGroupChat() {
     if (!session || busyAction) return
-    const confirmed = await requestConfirmDialog({
-      title: '删除这个群聊？',
-      description: '群聊和其中的消息会被移除，此操作不可撤销。',
-      confirmLabel: '删除',
-      tone: 'danger',
-    })
-    if (!confirmed) return
+    if (!window.confirm('确定删除这个群聊吗？')) return
     setBusyAction('delete')
     try {
       await deleteSession(session.id)
@@ -2413,6 +2685,20 @@ function replaceTextRangeInComposer(value: string, range: { start: number; end: 
   return insertTextIntoComposer(value, 'insertReplacementText', range)
 }
 
+export function readMentionCommand(text: string, cursor: number) {
+  const before = text.slice(0, cursor)
+  const match = /(^|\s)@([^\s@]*)$/.exec(before)
+  if (!match) return null
+  const suffix = /^[^\s]*/.exec(text.slice(cursor))?.[0] ?? ''
+  const start = match.index + match[1].length
+  const prefix = match[2] ?? ''
+  return {
+    start,
+    end: cursor + suffix.length,
+    query: `${prefix}${suffix}`,
+  }
+}
+
 function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputType = 'insertText') {
   try {
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType, data }))
@@ -2508,15 +2794,13 @@ function quotedPreviewFromValue(value: unknown): QuotedMessagePreview | null {
   }
 }
 
-function quotedPreviewForMessage(
-  message: Message,
-  quotedSourceMessage?: Message | null,
-): QuotedMessagePreview | null {
+function quotedPreviewForMessage(message: Message, messages: Message[]): QuotedMessagePreview | null {
   const metadataQuote = quotedPreviewFromValue(messageMetadata(message).quotedMessage)
   if (metadataQuote) return metadataQuote
   const replyToMessageId = typeof message.replyToMessageId === 'string' ? message.replyToMessageId : ''
   if (!replyToMessageId) return null
-  return quotedSourceMessage ? quotedPreviewFromMessage(quotedSourceMessage) : null
+  const source = messages.find((item) => item.id === replyToMessageId)
+  return source ? quotedPreviewFromMessage(source) : null
 }
 
 type LocalChangeTarget = {
@@ -2787,29 +3071,23 @@ const Composer: FC = () => {
   const { sendMode } = useShortcutSettings()
   const { t } = useI18n()
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const {
-    currentSessionId,
-    currentSession,
-    currentWorkspace,
-    workspaceAgents,
-    fetchSessions,
-    selectSession,
-    setSessionWorkspace,
-    pendingAttachments,
-    addPendingAttachments,
-    removePendingAttachment,
-    replyingToMessage,
-    replyingToKind,
-    setReplyingTo,
-    sendMessage,
-    sendMessageToSession,
-    agentTyping,
-    streamingMessage,
-    safetyMode,
-    setSafetyMode,
-    cancelRun,
-  } = useChatStoreShallow(selectComposerState)
-  const navigate = useNavigate()
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
+  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const setSessionWorkspace = useChatStore((state) => state.setSessionWorkspace)
+  const pendingAttachments = useChatStore((state) => state.pendingAttachments)
+  const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
+  const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
+  const replyingToMessage = useChatStore((state) => state.replyingToMessage)
+  const replyingToKind = useChatStore((state) => state.replyingToKind)
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
+  const sendMessage = useChatStore((state) => state.sendMessage)
+  const agentTyping = useChatStore((state) => state.agentTyping)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const safetyMode = useChatStore((state) => state.safetyMode)
+  const setSafetyMode = useChatStore((state) => state.setSafetyMode)
+  const cancelRun = useChatStore((state) => state.cancelRun)
   const [menu, setMenu] = useState<'tools' | 'agents' | 'workspace' | null>(null)
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -2880,26 +3158,6 @@ const Composer: FC = () => {
   function showHint(text: string) {
     setHint(text)
     window.setTimeout(() => setHint(null), 1800)
-  }
-
-  async function applyWorkspaceToComposer(workspaceId: string): Promise<string | null> {
-    if (!currentSessionId) return null
-
-    const shouldEnterWorkspaceGroup =
-      currentSession?.type === SessionType.Group ||
-      currentSession?.metadata?.kind === 'orchestrator-task'
-
-    if (shouldEnterWorkspaceGroup) {
-      const { session } = await api.openWorkspaceGroupSession(workspaceId, [])
-      await fetchSessions()
-      await selectSession(session.id)
-      navigate(`/chat/${session.id}`)
-      return session.id
-    }
-
-    await setSessionWorkspace(currentSessionId, workspaceId)
-    await fetchSessions()
-    return currentSessionId
   }
 
   async function handleFiles(files: FileList | File[] | null) {
@@ -3106,8 +3364,9 @@ const Composer: FC = () => {
     setOpeningWorkspaceId(workspaceId)
     showHint('正在选择工作区...')
     try {
-      await applyWorkspaceToComposer(workspaceId)
+      await setSessionWorkspace(currentSessionId, workspaceId)
       setMenu(null)
+      await fetchSessions()
       showHint('工作区已应用到当前会话')
     } catch (err) {
       showHint(friendlyErrorMessage(err, '选择工作区失败'))
@@ -3130,8 +3389,9 @@ const Composer: FC = () => {
         ...items.filter((item) => item.id !== full.workspace.id),
       ])
       setOpeningWorkspaceId(full.workspace.id)
-      await applyWorkspaceToComposer(full.workspace.id)
+      if (currentSessionId) await setSessionWorkspace(currentSessionId, full.workspace.id)
       setMenu(null)
+      await fetchSessions()
       showHint('已创建并应用工作区')
     } catch (err) {
       showHint(friendlyErrorMessage(err, '创建工作区失败'))
@@ -3164,8 +3424,9 @@ const Composer: FC = () => {
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
       setOpeningWorkspaceId(workspace.id)
-      await applyWorkspaceToComposer(workspace.id)
+      if (currentSessionId) await setSessionWorkspace(currentSessionId, workspace.id)
       setMenu(null)
+      await fetchSessions()
       showHint('工作区已应用到当前会话')
     } catch (err) {
       showHint(friendlyErrorMessage(err, '处理工作区失败'))
@@ -3199,11 +3460,12 @@ const Composer: FC = () => {
         ...items.filter((item) => item.id !== full.workspace.id),
       ])
       setOpeningWorkspaceId(full.workspace.id)
-      const targetSessionId = await applyWorkspaceToComposer(full.workspace.id)
+      await setSessionWorkspace(currentSessionId, full.workspace.id)
       setMenu(null)
+      await fetchSessions()
       showHint(deployAfterClone ? '已拉取，正在部署...' : 'GitHub 仓库已应用到当前会话')
-      if (deployAfterClone && targetSessionId) {
-        await sendMessageToSession(targetSessionId, '部署', { usePendingAttachments: false })
+      if (deployAfterClone) {
+        await sendMessage('部署', { usePendingAttachments: false })
       }
     } catch (err) {
       showHint(friendlyErrorMessage(err, 'GitHub 拉取失败'))
@@ -3343,10 +3605,59 @@ const Composer: FC = () => {
               onCancel={() => setReplyingTo(null)}
             />
           )}
-          <PendingAttachmentList
-            attachments={pendingAttachments}
-            onRemove={removePendingAttachment}
-          />
+          {pendingAttachments.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {pendingAttachments.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => requestArtifactPreview(attachmentToPreviewItem(attachment))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      requestArtifactPreview(attachmentToPreviewItem(attachment))
+                    }
+                  }}
+                  className="group relative flex h-16 max-w-full items-center gap-2 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 px-2.5 pr-8 text-left transition hover:border-neutral-300 hover:bg-white sm:w-56"
+                  title={attachment.name}
+                >
+                  <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-neutral-200 bg-white text-neutral-500">
+                    {attachment.type === 'image' ? (
+                      <img
+                        src={attachment.dataUrl}
+                        alt={attachment.name}
+                        className="h-full w-full object-cover"
+                        draggable={false}
+                      />
+                    ) : (
+                      attachmentIcon(attachment, 'h-4 w-4')
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-neutral-800">
+                      {attachment.name}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[11px] text-neutral-400">
+                      {attachmentKindLabel(attachment)} · {formatBytes(attachment.size)}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      removePendingAttachment(attachment.id)
+                    }}
+                    className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-neutral-400 opacity-80 transition hover:bg-neutral-200 hover:text-neutral-900"
+                    aria-label={`移除 ${attachment.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {dragActive && (
             <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-2xl border border-dashed border-neutral-400 bg-white/82 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur-sm">
               松开即可添加附件
@@ -3369,7 +3680,6 @@ const Composer: FC = () => {
             <ComposerPrimitive.Input
               autoFocus
               data-agenthub-composer="true"
-              data-testid="chat-composer-input"
               placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
               rows={1}
               onPaste={handlePaste}
@@ -3846,6 +4156,223 @@ const ComposerMenu: FC<{
   )
 }
 
+export function readSlashCommand(text: string, cursor: number) {
+  const before = text.slice(0, cursor)
+  const match = /(^|\s)\/([^\s/]*)$/.exec(before)
+  if (!match) return null
+  const suffix = /^[^\s]*/.exec(text.slice(cursor))?.[0] ?? ''
+  const start = match.index + match[1].length
+  const prefix = match[2] ?? ''
+  return {
+    start,
+    end: cursor + suffix.length,
+    query: `${prefix}${suffix}`,
+  }
+}
+
+function isDragWithFiles(event: DragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer.types).includes('Files')
+}
+
+async function fileToChatAttachment(file: File): Promise<ChatAttachment> {
+  const extension = extensionFromName(file.name)
+  const mimeType = file.type || mimeFromExtension(extension) || 'application/octet-stream'
+  const previewKind = attachmentPreviewKind(mimeType, extension)
+  const dataUrl = await readFileAsDataUrl(file)
+  const text =
+    previewKind === 'text' ? await readFileAsTextPreview(file).catch(() => undefined) : undefined
+
+  return {
+    id: crypto.randomUUID(),
+    type: mimeType.startsWith('image/') ? 'image' : 'file',
+    name: file.name || fallbackAttachmentName(mimeType, extension),
+    mimeType,
+    size: file.size,
+    dataUrl,
+    extension,
+    previewKind,
+    text,
+  }
+}
+
+function fallbackAttachmentName(mimeType: string, extension?: string) {
+  if (mimeType.startsWith('image/')) {
+    const ext = extension || mimeType.split('/').pop() || 'png'
+    return `pasted-image-${Date.now()}.${ext}`
+  }
+  return `attachment-${Date.now()}${extension ? `.${extension}` : ''}`
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('读取附件失败'))
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function readFileAsTextPreview(file: File) {
+  const truncated = file.size > maxAttachmentTextBytes
+  const blob = truncated ? file.slice(0, maxAttachmentTextBytes) : file
+  const text = await blob.text()
+  return truncated ? `${text}\n\n...` : text
+}
+
+function extensionFromName(name?: string | null) {
+  const match = (name ?? '').trim().match(/\.([A-Za-z0-9]{1,12})$/)
+  return match?.[1]?.toLowerCase()
+}
+
+function mimeFromExtension(extension?: string) {
+  if (!extension) return undefined
+  const map: Record<string, string> = {
+    bat: 'text/plain',
+    cjs: 'text/javascript',
+    css: 'text/css',
+    csv: 'text/csv',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    htm: 'text/html',
+    html: 'text/html',
+    jpeg: 'image/jpeg',
+    jpg: 'image/jpeg',
+    js: 'text/javascript',
+    json: 'application/json',
+    jsonl: 'application/jsonl',
+    log: 'text/plain',
+    markdown: 'text/markdown',
+    md: 'text/markdown',
+    mjs: 'text/javascript',
+    pdf: 'application/pdf',
+    png: 'image/png',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ps1: 'text/plain',
+    py: 'text/x-python',
+    scss: 'text/css',
+    sh: 'text/x-shellscript',
+    sql: 'application/sql',
+    svg: 'image/svg+xml',
+    ts: 'text/typescript',
+    tsx: 'text/tsx',
+    txt: 'text/plain',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    xml: 'application/xml',
+    yaml: 'application/yaml',
+    yml: 'application/yaml',
+  }
+  return map[extension]
+}
+
+function attachmentPreviewKind(
+  mimeType: string,
+  extension?: string,
+): NonNullable<ChatAttachment['previewKind']> {
+  if (mimeType.startsWith('image/')) return 'image'
+  if (isTextLikeAttachment(mimeType, extension)) return 'text'
+  if (isDocumentLikeAttachment(mimeType, extension)) return 'document'
+  return 'binary'
+}
+
+function isTextLikeAttachment(mimeType: string, extension?: string) {
+  if (mimeType.startsWith('text/')) return true
+  if (
+    [
+      'application/json',
+      'application/jsonl',
+      'application/sql',
+      'application/xml',
+      'application/yaml',
+      'image/svg+xml',
+    ].includes(mimeType)
+  ) {
+    return true
+  }
+  return Boolean(
+    extension &&
+      [
+        'bat',
+        'cjs',
+        'css',
+        'csv',
+        'htm',
+        'html',
+        'js',
+        'json',
+        'jsonl',
+        'log',
+        'markdown',
+        'md',
+        'mjs',
+        'ps1',
+        'py',
+        'scss',
+        'sh',
+        'sql',
+        'svg',
+        'ts',
+        'tsx',
+        'txt',
+        'xml',
+        'yaml',
+        'yml',
+      ].includes(extension),
+  )
+}
+
+function isDocumentLikeAttachment(mimeType: string, extension?: string) {
+  return (
+    mimeType === 'application/pdf' ||
+    mimeType.includes('wordprocessingml') ||
+    mimeType.includes('presentationml') ||
+    mimeType.includes('spreadsheetml') ||
+    Boolean(extension && ['doc', 'docx', 'pdf', 'ppt', 'pptx', 'xls', 'xlsx'].includes(extension))
+  )
+}
+
+function attachmentToPreviewItem(attachment: ChatAttachment): ArtifactPreviewItem {
+  const isImage = attachment.type === 'image' || attachment.previewKind === 'image'
+  return {
+    id: attachment.id,
+    kind: isImage ? 'image' : 'file',
+    mimeType: attachment.mimeType,
+    path: attachment.name,
+    source: attachment.text,
+    subtitle: `${attachmentKindLabel(attachment)} · ${formatBytes(attachment.size)}`,
+    title: attachment.name,
+    url: attachment.dataUrl,
+  }
+}
+
+function attachmentIcon(attachment: ChatAttachment, className = 'h-3.5 w-3.5') {
+  const lower = `${attachment.mimeType} ${attachment.name}`.toLowerCase()
+  if (attachment.type === 'image' || lower.includes('image/')) {
+    return <ImagePlus className={className} />
+  }
+  if (/\.(pptx?|key)$/.test(lower) || lower.includes('presentation')) {
+    return <Presentation className={className} />
+  }
+  if (/\.(xlsx?|csv)$/.test(lower) || lower.includes('spreadsheet') || lower.includes('excel')) {
+    return <Sheet className={className} />
+  }
+  if (attachment.previewKind === 'text' || /\.(md|txt|json|ts|tsx|js|py|html|css|xml|ya?ml|sql|log)$/.test(lower)) {
+    return <FileText className={className} />
+  }
+  return <File className={className} />
+}
+
+function attachmentKindLabel(attachment: ChatAttachment) {
+  if (attachment.type === 'image' || attachment.previewKind === 'image') return '图片'
+  if (attachment.previewKind === 'text') return '文本'
+  const lower = `${attachment.mimeType} ${attachment.name}`.toLowerCase()
+  if (/\.(pptx?|key)$/.test(lower) || lower.includes('presentation')) return '演示文稿'
+  if (/\.(xlsx?|csv)$/.test(lower) || lower.includes('spreadsheet') || lower.includes('excel')) return '表格'
+  if (/\.(docx?|pdf)$/.test(lower) || attachment.previewKind === 'document') return '文档'
+  return '文件'
+}
+
 const MenuRow: FC<{ title: string; desc: string; color?: string; onClick: () => void }> = ({
   title,
   desc,
@@ -3955,7 +4482,6 @@ const ComposerAction: FC<ComposerActionProps> = ({
           disabled={isSubmitting}
           className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200"
           aria-label="发送"
-          data-testid="chat-composer-send"
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
         </button>
@@ -3964,7 +4490,6 @@ const ComposerAction: FC<ComposerActionProps> = ({
           <button
             className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200"
             aria-label="发送"
-            data-testid="chat-composer-send"
           >
             <ArrowUp className="h-4 w-4" />
           </button>
@@ -3989,19 +4514,13 @@ const UserMessage: FC = () => {
   const messageStyleMode = useMessageStyleMode()
   const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
-  const selectMessageWithQuoteSource = useMemo(
-    () => makeSelectMessageWithQuoteSource(messageId),
-    [messageId],
+  const allMessages = useChatStore((state) => state.messages)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
   )
-  const {
-    message: sourceMessage,
-    quotedSourceMessage,
-  } = useChatStoreShallow(selectMessageWithQuoteSource)
-  const { editMessage, resendMessage, withdrawMessage } = useChatStoreShallow((state) => ({
-    editMessage: state.editMessage,
-    resendMessage: state.resendMessage,
-    withdrawMessage: state.withdrawMessage,
-  }))
+  const editMessage = useChatStore((state) => state.editMessage)
+  const resendMessage = useChatStore((state) => state.resendMessage)
+  const withdrawMessage = useChatStore((state) => state.withdrawMessage)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState<'edit' | 'withdraw' | null>(null)
@@ -4010,9 +4529,7 @@ const UserMessage: FC = () => {
     typeof sourceMessage?.metadata?.displayContent === 'string'
       ? sourceMessage.metadata.displayContent
       : (sourceMessage?.content ?? '')
-  const quotedPreview = sourceMessage
-    ? quotedPreviewForMessage(sourceMessage, quotedSourceMessage)
-    : null
+  const quotedPreview = sourceMessage ? quotedPreviewForMessage(sourceMessage, allMessages) : null
 
   function startEdit(event?: React.MouseEvent<HTMLButtonElement>) {
     event?.preventDefault()
@@ -4054,23 +4571,15 @@ const UserMessage: FC = () => {
     event?.preventDefault()
     event?.stopPropagation()
     if (!sourceMessage) return
-    const ok = await requestConfirmDialog({
-      title: '撤回这条消息？',
-      description: '如果后续 Agent 产生了文件修改，系统会尝试一并回滚。',
-      confirmLabel: '撤回',
-      tone: 'warning',
-    })
+    const ok = window.confirm('撤回这条消息？如果后续 Agent 产生了文件修改，将尝试一并回滚。')
     if (!ok) return
     setBusy('withdraw')
     try {
       const rollback = await withdrawMessage(sourceMessage.id)
       if (rollback?.failed) {
-        await requestNoticeDialog({
-          title: '消息已撤回',
-          description: `有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`,
-          confirmLabel: '知道了',
-          tone: 'warning',
-        })
+        window.alert(
+          `消息已撤回，但有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`,
+        )
       }
     } finally {
       setBusy(null)
@@ -4090,7 +4599,6 @@ const UserMessage: FC = () => {
   if (editing) {
     return (
       <MessagePrimitive.Root
-        data-testid={`message-${messageId}`}
         className={cn(
           'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start gap-3 py-3',
           isFlatMessageStyle ? 'justify-start' : 'justify-end',
@@ -4122,7 +4630,6 @@ const UserMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root
-      data-testid={`message-${messageId}`}
       className={cn(
         'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start gap-3',
         isFlatMessageStyle ? 'justify-start border-b border-neutral-100 py-3' : 'justify-end py-3',
@@ -4290,12 +4797,13 @@ const AssistantMessage: FC = () => {
   const messageStyleMode = useMessageStyleMode()
   const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
-  const sourceMessage = useChatMessageById(messageId)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
+  )
   const timestamp = sourceMessage?.createdAt ? formatTime(sourceMessage.createdAt) : ''
 
   return (
     <MessagePrimitive.Root
-      data-testid={`message-${messageId}`}
       className={cn(
         'mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3',
         isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-4',
@@ -4771,7 +5279,6 @@ interface FileCardEntry {
   filePath: string
   fileSize?: number
   runId: string
-  workspaceId?: string
 }
 
 function FileCardMessage({ data }: { data?: { files?: FileCardEntry[] } | null }) {
@@ -4787,7 +5294,6 @@ function FileCardMessage({ data }: { data?: { files?: FileCardEntry[] } | null }
           filePath={file.filePath}
           fileSize={file.fileSize}
           runId={file.runId}
-          workspaceId={file.workspaceId}
         />
       ))}
     </div>
@@ -4799,27 +5305,92 @@ function DeliveryReportMessage({ data }: { data?: DeliveryReportData | null }) {
   return <DeliveryReport data={data} />
 }
 
+function requestArtifactPreview(item: ArtifactPreviewItem) {
+  window.dispatchEvent(new CustomEvent<ArtifactPreviewItem>(artifactPreviewEvent, { detail: item }))
+}
+
+const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data }) => {
+  const items = Array.isArray(data.items) ? data.items : []
+  if (!items.length) return null
+  return (
+    <div className="not-prose mt-3 grid gap-2 sm:grid-cols-2">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => requestArtifactPreview(attachmentToPreviewItem(item))}
+          className={cn(
+            'group overflow-hidden rounded-xl border border-neutral-200 bg-white text-left shadow-sm transition hover:border-neutral-300 hover:shadow-md',
+            item.type === 'image' ? 'block' : 'flex min-h-20 items-center gap-3 px-3 py-3',
+          )}
+        >
+          {item.type === 'image' ? (
+            <>
+              <img
+                src={item.dataUrl}
+                alt={item.name}
+                className="aspect-video w-full bg-neutral-100 object-cover transition group-hover:scale-[1.015]"
+                draggable={false}
+              />
+              <div className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-500">
+                <ImagePlus className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                <span className="shrink-0">{formatBytes(item.size)}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500">
+                {attachmentIcon(item, 'h-5 w-5')}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-neutral-900">
+                  {item.name}
+                </span>
+                <span className="mt-1 block truncate text-xs text-neutral-500">
+                  {attachmentKindLabel(item)} · {formatBytes(item.size)}
+                </span>
+                {item.text && (
+                  <span className="mt-1 block truncate text-[11px] text-neutral-400">
+                    可预览文本内容
+                  </span>
+                )}
+              </span>
+            </>
+          )}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void }> = ({
   item,
   onClose,
 }) => {
-  const activeWorkspaceId = useChatStore(
-    (state) => state.currentSession?.workspaceId ?? state.currentWorkspace?.id,
-  )
+  const activeWorkspaceId = useChatStore((state) => state.currentSession?.workspaceId)
   const previewWorkspaceId = item.workspaceId ?? activeWorkspaceId ?? undefined
   const canOpen = Boolean(item.url)
-  const canInspectSource = canInspectArtifactPreviewSource(item, previewWorkspaceId)
+  const previewSourcePath = item.path ?? previewPathFromUrl(item.url) ?? undefined
+  const canInspectSource =
+    Boolean(item.source?.trim()) || canFetchWorkspaceTextSource(item, previewSourcePath)
   const runnablePreview = (item.kind === 'web' || item.kind === 'deploy') && Boolean(item.url)
   const [maximized, setMaximized] = useState(false)
   const [visible, setVisible] = useState(false)
   const [panelWidth, setPanelWidth] = useState(() => readStoredPreviewPanelWidth())
   const [resizing, setResizing] = useState(false)
   const [previewMode, setPreviewMode] = useState<'preview' | 'source'>('preview')
+  const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    item.kind === 'web' || item.kind === 'deploy' ? 'loading' : 'ready',
+  )
+  const [loadError, setLoadError] = useState('')
   const [actionPanelOpen, setActionPanelOpen] = useState(false)
   const [actionItems, setActionItems] = useState<PreviewActionItem[]>([])
+  const [reloadToken, setReloadToken] = useState(0)
   const panelRef = useRef<HTMLElement | null>(null)
   const panelWidthRef = useRef(panelWidth)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const previewUrl = useMemo(() => normalizePreviewUrl(item.url), [item.url])
 
   useEffect(() => {
     panelWidthRef.current = panelWidth
@@ -5092,6 +5663,45 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     return () => window.removeEventListener('resize', syncPanelWidth)
   }, [])
 
+  useEffect(() => {
+    if (!item.url || (item.kind !== 'web' && item.kind !== 'deploy')) {
+      setLoadingState('ready')
+      setLoadError('')
+      return
+    }
+
+    let cancelled = false
+    setLoadingState('loading')
+    setLoadError('')
+
+    async function probePreview() {
+      if (!previewUrl || previewUrl.origin !== window.location.origin) {
+        if (!cancelled) setLoadingState('ready')
+        return
+      }
+
+      try {
+        const response = await fetch(previewUrl.href, { credentials: 'include' })
+        if (cancelled) return
+        if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
+        const contentType = response.headers.get('content-type') ?? ''
+        if (contentType.includes('application/json')) {
+          throw new Error(await extractPreviewErrorMessage(response))
+        }
+        setLoadingState('ready')
+      } catch (error) {
+        if (cancelled) return
+        setLoadingState('error')
+        setLoadError(formatPreviewError(error))
+      }
+    }
+
+    void probePreview()
+    return () => {
+      cancelled = true
+    }
+  }, [item.kind, item.url, previewUrl, reloadToken])
+
   const panelClasses = cn(
     'relative flex shrink-0 flex-col overflow-hidden border-neutral-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.12)]',
     resizing ? 'transition-none' : 'transition-all duration-300 ease-out',
@@ -5120,7 +5730,6 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
       )}
       <aside
         ref={panelRef}
-        data-testid="artifact-preview-panel"
         className={panelClasses}
         style={maximized ? undefined : { width: panelWidth }}
       >
@@ -5140,7 +5749,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             )}
           />
         )}
-        <div className="flex h-16 shrink-0 items-center gap-3 bg-white px-3">
+        <div className="flex h-16 shrink-0 items-center gap-3 bg-[#f5f5f1] px-3 backdrop-blur">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
               {previewIcon(item)}
@@ -5250,21 +5859,64 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           />
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col bg-white p-2">
+        <div className="flex min-h-0 flex-1 flex-col bg-[#f6f7f9] p-2">
           {item.description && (
             <div className="mb-2 rounded-2xl border border-neutral-200 bg-white/90 px-3 py-2 text-xs leading-5 text-neutral-600 shadow-sm">
               {item.description}
             </div>
           )}
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
-            <ArtifactPreviewSurface
-              item={item}
-              onSaveDiffEdit={
-                previewWorkspaceId && item.path ? handleSaveDiffPreviewEdit : undefined
-              }
-              viewMode={previewMode}
-              workspaceId={previewWorkspaceId}
-            />
+            {item.kind === 'image' && item.url ? (
+              <div className="grid h-full place-items-center bg-neutral-950 p-4">
+                <img
+                  src={item.url}
+                  alt={item.title}
+                  className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+                  decoding="async"
+                  draggable={false}
+                />
+              </div>
+            ) : runnablePreview && previewMode === 'source' && canInspectSource ? (
+              <TextFilePreview item={item} />
+            ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
+              loadingState === 'error' ? (
+                <PreviewErrorState
+                  title={item.title}
+                  error={loadError}
+                  onRetry={() => setReloadToken((value) => value + 1)}
+                />
+              ) : loadingState !== 'ready' ? (
+                <PreviewLoadingState item={item} />
+              ) : (
+                <iframe
+                  title={item.title}
+                  src={item.url}
+                  className="h-full w-full border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                />
+              )
+            ) : item.kind === 'diff' ? (
+              <div className="h-full overflow-auto">
+                <DiffViewer
+                  diff={item.source ?? ''}
+                  maxHeightClassName="max-h-none"
+                  filePath={item.path}
+                  onSaveEdit={
+                    previewWorkspaceId && item.path ? handleSaveDiffPreviewEdit : undefined
+                  }
+                />
+              </div>
+            ) : item.kind === 'workflow' ? (
+              <PreviewPlaceholder item={item} />
+            ) : isDocxPreviewItem(item) ? (
+              <WordDocumentPreview item={item} />
+            ) : isPptxPreviewItem(item) ? (
+              <PresentationDocumentPreview item={item} />
+            ) : item.source ? (
+              <TextFilePreview item={item} />
+            ) : (
+              <DocumentPreviewPlaceholder item={item} />
+            )}
           </div>
         </div>
       </aside>
@@ -5352,6 +6004,427 @@ const PreviewActionPanel: FC<{
           </div>
         </div>
       ))}
+    </div>
+  </div>
+)
+
+const PreviewLoadingState: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
+  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
+    <div className="w-full max-w-md rounded-[22px] border border-neutral-200 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-neutral-100 bg-neutral-50 text-neutral-500">
+        <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">Loading preview</div>
+      <div className="mt-2 text-xs leading-5 text-neutral-500">
+        {item.subtitle ?? previewKindLabel(item)}
+      </div>
+    </div>
+  </div>
+)
+
+const PreviewErrorState: FC<{ error: string; onRetry: () => void; title: string }> = ({
+  error,
+  onRetry,
+  title,
+}) => (
+  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
+    <div className="w-full max-w-lg rounded-[22px] border border-red-100 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-red-100 bg-red-50 text-red-500">
+        <AlertTriangle className="h-6 w-6" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">Preview failed</div>
+      <div className="mt-2 text-xs leading-6 text-neutral-500">{title}</div>
+      <div className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-left text-xs leading-6 text-red-700">
+        {error || 'The preview service returned an error response.'}
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800"
+      >
+        <RefreshCw className="h-4 w-4" />
+        Retry
+      </button>
+    </div>
+  </div>
+)
+
+const WordDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const styleRef = useRef<HTMLDivElement | null>(null)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
+
+  useEffect(() => {
+    const bodyEl = bodyRef.current
+    const styleEl = styleRef.current
+    if (!bodyEl || !styleEl) return
+    const bodyContainer: HTMLElement = bodyEl
+    const styleContainer: HTMLElement = styleEl
+
+    let cancelled = false
+    bodyContainer.innerHTML = ''
+    styleContainer.innerHTML = ''
+    setStatus('loading')
+    setError('')
+
+    async function renderDocument() {
+      const [{ renderAsync }, data] = await Promise.all([
+        import('docx-preview'),
+        loadPreviewArrayBuffer(item),
+      ])
+      if (cancelled) return
+      await renderAsync(data, bodyContainer, styleContainer, {
+        breakPages: true,
+        className: 'agenthub-docx',
+        ignoreFonts: false,
+        inWrapper: true,
+        renderFooters: true,
+        renderHeaders: true,
+        useBase64URL: true,
+      })
+      if (!cancelled) setStatus('ready')
+    }
+
+    void renderDocument().catch((err) => {
+      if (cancelled) return
+      setStatus('error')
+      setError(formatPreviewError(err))
+    })
+
+    return () => {
+      cancelled = true
+      bodyContainer.innerHTML = ''
+      styleContainer.innerHTML = ''
+    }
+  }, [item.id, item.path, item.url, item.workspaceId, reloadToken])
+
+  if (status === 'error') {
+    return (
+      <PreviewErrorState
+        title={item.title}
+        error={error}
+        onRetry={() => setReloadToken((value) => value + 1)}
+      />
+    )
+  }
+
+  return (
+    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
+      <OfficePreviewHeader item={item} label="Word" />
+      <div className="relative min-h-0 flex-1 overflow-auto">
+        {status === 'loading' && (
+          <div className="absolute inset-0 z-10">
+            <PreviewLoadingState item={item} />
+          </div>
+        )}
+        <div className="agenthub-docx-host">
+          <div ref={styleRef} />
+          <div ref={bodyRef} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
+  const [renderWidth, setRenderWidth] = useState(900)
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+
+    const updateWidth = () => {
+      const nextWidth = Math.max(320, Math.min(1120, Math.floor(scrollEl.clientWidth - 32)))
+      setRenderWidth((current) => (Math.abs(current - nextWidth) > 24 ? nextWidth : current))
+    }
+
+    updateWidth()
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(scrollEl)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const hostEl = hostRef.current
+    if (!hostEl) return
+    const hostContainer: HTMLElement = hostEl
+
+    let cancelled = false
+    let previewer: { destroy?: () => void } | null = null
+    hostContainer.innerHTML = ''
+    setStatus('loading')
+    setError('')
+
+    async function renderPresentation() {
+      const [{ init }, data] = await Promise.all([
+        import('pptx-preview'),
+        loadPreviewArrayBuffer(item),
+      ])
+      if (cancelled) return
+      const width = Math.max(320, Math.floor(renderWidth))
+      const height = Math.round(width * 0.5625)
+      const nextPreviewer = init(hostContainer, { height, mode: 'list', width })
+      previewer = nextPreviewer
+      await nextPreviewer.preview(data)
+      if (!cancelled) setStatus('ready')
+    }
+
+    void renderPresentation().catch((err) => {
+      if (cancelled) return
+      setStatus('error')
+      setError(formatPreviewError(err))
+    })
+
+    return () => {
+      cancelled = true
+      previewer?.destroy?.()
+      hostContainer.innerHTML = ''
+    }
+  }, [item.id, item.path, item.url, item.workspaceId, reloadToken, renderWidth])
+
+  if (status === 'error') {
+    return (
+      <PreviewErrorState
+        title={item.title}
+        error={error}
+        onRetry={() => setReloadToken((value) => value + 1)}
+      />
+    )
+  }
+
+  return (
+    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
+      <OfficePreviewHeader item={item} label="PowerPoint" />
+      <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-auto">
+        {status === 'loading' && (
+          <div className="absolute inset-0 z-10">
+            <PreviewLoadingState item={item} />
+          </div>
+        )}
+        <div className="agenthub-pptx-host">
+          <div ref={hostRef} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const OfficePreviewHeader: FC<{ item: ArtifactPreviewItem; label: string }> = ({
+  item,
+  label,
+}) => (
+  <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 bg-white px-3 text-xs text-neutral-500">
+    {isPptxPreviewItem(item) ? (
+      <Presentation className="h-4 w-4 text-neutral-400" />
+    ) : (
+      <FileText className="h-4 w-4 text-neutral-400" />
+    )}
+    <span className="min-w-0 flex-1 truncate">{previewFileName(item)}</span>
+    <span className="rounded-md bg-[#f6f7f9] px-2 py-1">{label}</span>
+  </div>
+)
+
+const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const fileName = item.path ?? item.title
+  return (
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
+        <FileText className="h-4 w-4 text-neutral-400" />
+        <span className="min-w-0 flex-1 truncate">{fileName}</span>
+        <span className="rounded-md bg-[#F7F7F7] px-2 py-1">只读预览</span>
+      </div>
+      <div className="grid min-h-0 flex-1 place-items-center bg-[#F7F7F7] p-8">
+        <div className="w-full max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
+          <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#F7F7F7] text-neutral-500">
+            <File className="h-8 w-8" />
+          </div>
+          <div className="mt-4 truncate text-sm font-semibold text-neutral-950">{item.title}</div>
+          <div className="mt-2 text-xs leading-5 text-neutral-500">{previewFileHint(item)}</div>
+          {item.path && (
+            <div className="agenthub-readable-code mt-4 rounded-xl bg-[#F7F7F7] px-3 py-2 text-left text-xs leading-5 text-neutral-500">
+              {item.path}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const resolvedPath = item.path ?? previewPathFromUrl(item.url) ?? undefined
+  const fileName = resolvedPath ?? item.title
+  const language = guessLanguageFromPath(fileName) || 'text'
+  const canLoadWorkspaceSource = canFetchWorkspaceTextSource(item, resolvedPath)
+  const [loadedSource, setLoadedSource] = useState<string | null>(null)
+  const [sourceLoadState, setSourceLoadState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  )
+  const [sourceLoadError, setSourceLoadError] = useState('')
+  const source = loadedSource ?? item.source ?? ''
+  const lines = useMemo(() => source.replace(/\n$/, '').split('\n'), [source])
+  const highlightedLines = useMemo(
+    () => lines.map((line) => highlightCode(line, language)),
+    [lines, language],
+  )
+  const selection = useLineSelection(lines.length)
+  const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
+
+  useEffect(() => {
+    selection.clearSelection()
+    setLocalChangeTarget(null)
+  }, [source, selection.clearSelection])
+
+  useEffect(() => {
+    setLoadedSource(null)
+    setSourceLoadError('')
+    setSourceLoadState('idle')
+    if (!canLoadWorkspaceSource || !item.workspaceId || !resolvedPath) return
+
+    const controller = new AbortController()
+    setSourceLoadState('loading')
+
+    fetch(artifactFileUrl(item.workspaceId, resolvedPath), {
+      credentials: 'include',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
+        return response.text()
+      })
+      .then((text) => {
+        setLoadedSource(text)
+        setSourceLoadState('ready')
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        setSourceLoadState('error')
+        setSourceLoadError(formatPreviewError(error))
+      })
+
+    return () => controller.abort()
+  }, [canLoadWorkspaceSource, item.id, item.workspaceId, resolvedPath])
+
+  function buildTextFileTarget(): LocalChangeTarget | null {
+    const selected = selection.sortedSelected
+    if (selected.length === 0) return null
+    const selectedLines = selected.map((index) => lines[index])
+    return {
+      filePath: resolvedPath,
+      language,
+      lineLabel: formatLineRangeLabel(selected[0] + 1, selected[selected.length - 1] + 1),
+      selectedText: selectedLines.join('\n'),
+      sourceLabel: '文件预览',
+    }
+  }
+
+  function handleReference() {
+    const target = buildTextFileTarget()
+    if (!target) return
+    const header = target.filePath
+      ? `\`${target.filePath}\` ${target.lineLabel}:\n`
+      : `${target.lineLabel}:\n`
+    insertTextIntoComposer(`${header}${codeFenceForContent(target.selectedText, language)}\n`)
+    selection.clearSelection()
+    setLocalChangeTarget(null)
+  }
+
+  function handleLocalChange() {
+    const target = buildTextFileTarget()
+    if (target) setLocalChangeTarget(target)
+  }
+
+  function clearTextSelection() {
+    selection.clearSelection()
+    setLocalChangeTarget(null)
+  }
+
+  return (
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
+        <FileText className="h-4 w-4 text-neutral-400" />
+        <span className="min-w-0 flex-1 truncate">{fileName}</span>
+        <span className="rounded-md bg-[#F7F7F7] px-2 py-1">{language}</span>
+        {sourceLoadState === 'loading' && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-blue-600">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            读取源码
+          </span>
+        )}
+        {sourceLoadState === 'error' && (
+          <span className="max-w-[12rem] truncate rounded-md bg-amber-50 px-2 py-1 text-amber-700" title={sourceLoadError}>
+            使用缓存源码
+          </span>
+        )}
+      </div>
+      <div className="agenthub-file-code-preview min-h-0 flex-1 overflow-auto bg-[#0f172a]">
+        {selection.selectedCount > 0 && (
+          <LineSelectionToolbar
+            selectedCount={selection.selectedCount}
+            onReference={handleReference}
+            onLocalChange={handleLocalChange}
+            onClear={clearTextSelection}
+          />
+        )}
+        {localChangeTarget && (
+          <LocalChangeComposer
+            target={localChangeTarget}
+            onCancel={() => setLocalChangeTarget(null)}
+            onSent={clearTextSelection}
+          />
+        )}
+        <pre className="agenthub-code-pre agenthub-file-code-pre not-prose">
+          <code className={cn('agenthub-code', `language-${language}`)}>
+            <table className="agenthub-code-table">
+              <tbody>
+                {lines.map((_line, index) => (
+                  <tr
+                    key={index}
+                    className={selection.isSelected(index) ? 'agenthub-code-row-selected' : undefined}
+                  >
+                    <td
+                      className="agenthub-code-ln"
+                      onClick={(event) => selection.toggleLine(index, event.shiftKey)}
+                    >
+                      {index + 1}
+                    </td>
+                    <td
+                      className="agenthub-code-content"
+                      onClick={(event) => {
+                        if (shouldSkipLineSelectionClick(event)) return
+                        selection.toggleLine(index, event.shiftKey)
+                      }}
+                    >
+                      <span dangerouslySetInnerHTML={{ __html: highlightedLines[index] || '&nbsp;' }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </code>
+        </pre>
+      </div>
+    </div>
+  )
+}
+
+const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
+  <div className="grid h-full place-items-center bg-[#F7F7F7] p-8">
+    <div className="max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#F7F7F7] text-neutral-500">
+        <GitBranch className="h-8 w-8" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">{item.title}</div>
+      <div className="mt-2 text-xs leading-5 text-neutral-500">
+        {item.description ?? '这个产物当前显示结构化摘要和关联信息。'}
+      </div>
     </div>
   </div>
 )
@@ -5783,11 +6856,35 @@ function formatDurationMs(value: number) {
   return `${minutes}m${seconds.toString().padStart(2, '0')}s`
 }
 
+function trimLongText(text: string, limit: number) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return normalized
+  return `${normalized.slice(0, limit - 1)}…`
+}
+
 function summarizeDiff(diff: string) {
   const lines = diff.split(/\r?\n/)
   const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
   const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
   return `Diff · +${additions} / -${deletions}`
+}
+
+function readFlowArtifacts(value: unknown): AgentArtifact[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  return value.filter((item): item is AgentArtifact => {
+    if (!item || typeof item !== 'object') return false
+    const artifact = item as { id?: unknown; type?: unknown }
+    if (
+      typeof artifact.id !== 'string' ||
+      typeof artifact.type !== 'string' ||
+      seen.has(artifact.id)
+    ) {
+      return false
+    }
+    seen.add(artifact.id)
+    return ['diff', 'preview', 'file', 'deploy', 'workflow'].includes(artifact.type)
+  })
 }
 
 function fileTone(status?: CodeAgentRunMetadata['files'][number]['status']): FlowTone {
@@ -5828,7 +6925,7 @@ const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
 const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({
   artifact,
 }) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
   const item = enrichPreviewItem(previewItemFromArtifact(artifact), workspaceId ?? undefined)
   return (
     <FlowRowShell
@@ -5841,7 +6938,6 @@ const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> 
         <button
           type="button"
           onClick={() => requestArtifactPreview(item)}
-          data-testid="artifact-preview-button"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
           title={previewActionLabel(item)}
         >
@@ -5878,7 +6974,7 @@ const InlineDiffReview: FC<{
   compact?: boolean
   previewId?: string
 }> = ({ compact = false, diff, filePath, previewId }) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
   const [open, setOpen] = useState(false)
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<'applied' | 'error' | null>(null)
@@ -5892,7 +6988,6 @@ const InlineDiffReview: FC<{
     source: diff,
     subtitle: '代码 Diff',
     title: filePath,
-    workspaceId: workspaceId ?? undefined,
   }
 
   async function handleSaveEdit(params: DiffEditSaveParams) {
@@ -5923,14 +7018,6 @@ const InlineDiffReview: FC<{
       setApplyMessage('当前会话未绑定工作区，无法暂存 Diff。')
       return
     }
-    const confirmed = await requestConfirmDialog({
-      title: '应用这段 Diff？',
-      description: '系统会把代码变更应用到当前工作区并暂存到 Git，应用后可继续检查 diff/status。',
-      detail: filePath,
-      confirmLabel: '应用 Diff',
-      tone: 'warning',
-    })
-    if (!confirmed) return
     setApplying(true)
     setApplyResult(null)
     setApplyMessage('')
@@ -5955,7 +7042,6 @@ const InlineDiffReview: FC<{
         <button
           type="button"
           onClick={() => requestArtifactPreview(previewItem)}
-          data-testid="diff-preview-button"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
         >
           <GitBranch className="h-3 w-3" />
@@ -5973,7 +7059,6 @@ const InlineDiffReview: FC<{
         <button
           type="button"
           onClick={() => void applyCurrentDiff()}
-          data-testid="diff-apply-button"
           disabled={applying || applyResult === 'applied'}
           className={cn(
             'inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition disabled:pointer-events-none',
@@ -6006,7 +7091,7 @@ const InlineDiffReview: FC<{
       )}
       {open && (
         <div className="mt-2 overflow-hidden rounded-xl border border-neutral-200">
-          <ArtifactDiffViewer
+          <DiffViewer
             diff={diff}
             maxHeightClassName={compact ? 'max-h-72' : 'max-h-96'}
             filePath={filePath}
@@ -6018,11 +7103,307 @@ const InlineDiffReview: FC<{
   )
 }
 
+const DiffViewer: FC<{
+  diff: string
+  maxHeightClassName?: string
+  filePath?: string
+  /** Called when user saves an inline edit. */
+  onSaveEdit?: (params: DiffEditSaveParams) => void | Promise<void>
+}> = ({
+  diff,
+  maxHeightClassName = 'max-h-96',
+  filePath,
+  onSaveEdit,
+}) => {
+  const parsedRows = useMemo(() => parseDiffRows(diff), [diff])
+  const [rowTextOverrides, setRowTextOverrides] = useState<Record<number, string>>({})
+  const rows = useMemo(
+    () =>
+      parsedRows.map((row, index) =>
+        Object.prototype.hasOwnProperty.call(rowTextOverrides, index)
+          ? { ...row, text: rowTextOverrides[index] }
+          : row,
+      ),
+    [parsedRows, rowTextOverrides],
+  )
+  // Only selectable rows are add/del/context (not hunk/meta)
+  const selectableRows = useMemo(
+    () => rows.map((row, i) => ({ ...row, _index: i })).filter((r) => r.kind === 'add' || r.kind === 'del' || r.kind === 'context'),
+    [rows],
+  )
+  const selectableCount = selectableRows.length
+  const selection = useLineSelection(selectableCount)
+  const [editingSelectableIndex, setEditingSelectableIndex] = useState<number | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [editSaveNotice, setEditSaveNotice] = useState<{
+    tone: 'success' | 'error'
+    message: string
+  } | null>(null)
+  const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
+
+  useEffect(() => {
+    setRowTextOverrides({})
+    setEditSaveNotice(null)
+    setEditingSelectableIndex(null)
+    setEditDraft('')
+  }, [diff])
+
+  function isRowSelected(originalIndex: number) {
+    const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
+    return selIdx >= 0 && selection.isSelected(selIdx)
+  }
+
+  function handleLineNumberClick(originalIndex: number, shiftKey: boolean) {
+    const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
+    if (selIdx >= 0) selection.toggleLine(selIdx, shiftKey)
+  }
+
+  function handleDiffCodeClick(
+    originalIndex: number,
+    event: ReactMouseEvent<HTMLElement>,
+  ) {
+    if (window.getSelection()?.toString()) return
+    handleLineNumberClick(originalIndex, event.shiftKey)
+  }
+
+  function buildDiffTarget(): LocalChangeTarget | null {
+    const selected = selection.sortedSelected.map((si) => selectableRows[si])
+    if (selected.length === 0) return null
+    const lines = selected.map((r) => {
+      const marker = r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ' '
+      return `${marker}${r.text}`
+    })
+    const startLine = selected[0].newNumber ?? selected[0].oldNumber ?? '?'
+    const endLine =
+      selected[selected.length - 1].newNumber ?? selected[selected.length - 1].oldNumber ?? startLine
+    return {
+      filePath,
+      language: filePath ? guessLanguageFromPath(filePath) : 'diff',
+      lineLabel: formatLineRangeLabel(startLine, endLine),
+      selectedText: lines.join('\n'),
+      sourceLabel: 'Diff 预览',
+    }
+  }
+
+  function buildReferenceText() {
+    const target = buildDiffTarget()
+    if (!target) return ''
+    const langGuess = filePath ? guessLanguageFromPath(filePath) : ''
+    const header = filePath
+      ? `\`${filePath}\` ${target.lineLabel}:\n`
+      : `${target.lineLabel}:\n`
+    return `${header}${codeFenceForContent(target.selectedText, langGuess)}\n`
+  }
+
+  function handleReference() {
+    const text = buildReferenceText()
+    if (text) insertTextIntoComposer(text)
+    clearDiffSelection()
+  }
+
+  function handleLocalChange() {
+    const target = buildDiffTarget()
+    if (target) setLocalChangeTarget(target)
+  }
+
+  function clearDiffSelection() {
+    selection.clearSelection()
+    setLocalChangeTarget(null)
+  }
+
+  function handleStartEdit() {
+    if (selection.sortedSelected.length === 0) return
+    const firstSelIdx = selection.sortedSelected[0]
+    setEditingSelectableIndex(firstSelIdx)
+    setEditSaveNotice(null)
+    const row = selectableRows[firstSelIdx]
+    const marker = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '
+    setEditDraft(`${marker}${row.text}`)
+  }
+
+  function handleCancelEdit() {
+    setEditingSelectableIndex(null)
+    setEditDraft('')
+    setEditSaveNotice(null)
+  }
+
+  async function handleSaveEdit() {
+    if (editingSelectableIndex === null || !onSaveEdit) return
+    setSaving(true)
+    setEditSaveNotice(null)
+    try {
+      const row = selectableRows[editingSelectableIndex]
+      // Determine the 1-based line number in the current file
+      // For 'add' and 'context' rows, use newNumber; for 'del', use oldNumber
+      const lineNumber = row.kind === 'del' ? row.oldNumber : row.newNumber
+      if (!lineNumber) {
+        setEditSaveNotice({
+          tone: 'error',
+          message: '当前 Diff 缺少可写入行号，无法保存。',
+        })
+        return
+      }
+      // The editDraft has a prefix marker (+, -, or space); strip it to get just the line text
+      const lineText = editDraft.length > 1 ? editDraft.slice(1) : ''
+      await onSaveEdit({
+        lineText,
+        lineNumber,
+        fileContent: buildEditableDiffFileContent(rows, row._index, lineText),
+      })
+      setRowTextOverrides((current) => ({ ...current, [row._index]: lineText }))
+      setEditSaveNotice({ tone: 'success', message: '已保存到工作区文件。' })
+      setEditingSelectableIndex(null)
+      setEditDraft('')
+      clearDiffSelection()
+    } catch (error) {
+      setEditSaveNotice({
+        tone: 'error',
+        message: friendlyErrorMessage(error, '保存失败'),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="agenthub-diff-container">
+      {selection.selectedCount > 0 && (
+        <LineSelectionToolbar
+          selectedCount={selection.selectedCount}
+          onReference={handleReference}
+          onLocalChange={handleLocalChange}
+          onEdit={onSaveEdit ? handleStartEdit : undefined}
+          onClear={clearDiffSelection}
+        />
+      )}
+      {localChangeTarget && (
+        <LocalChangeComposer
+          target={localChangeTarget}
+          onCancel={() => setLocalChangeTarget(null)}
+          onSent={clearDiffSelection}
+        />
+      )}
+      {editSaveNotice && (
+        <div
+          className={cn(
+            'border-t px-3 py-2 text-xs',
+            editSaveNotice.tone === 'error'
+              ? 'border-red-100 bg-red-50 text-red-700'
+              : 'border-emerald-100 bg-emerald-50 text-emerald-700',
+          )}
+        >
+          {editSaveNotice.message}
+        </div>
+      )}
+      <div
+        className={cn(
+          'overflow-auto border-t border-neutral-200 bg-white text-[13px]',
+          maxHeightClassName,
+          selection.selectedCount > 0 && 'border-t-0',
+        )}
+      >
+        <div className="agenthub-readable-code min-w-max py-1 leading-7">
+          {rows.map((row, index) => {
+            const selected = isRowSelected(index)
+            const isEditing = selectableRows.findIndex((r) => r._index === index) === editingSelectableIndex
+            const canSelect = row.kind === 'add' || row.kind === 'del' || row.kind === 'context'
+
+            return (
+              <div
+                key={`${index}-${row.text}`}
+                className={cn(
+                  'grid grid-cols-[3.25rem_3.25rem_minmax(32rem,1fr)] border-l-4 pr-4',
+                  row.kind === 'add' && 'border-emerald-500 bg-emerald-50 text-emerald-950',
+                  row.kind === 'del' && 'border-red-500 bg-red-50 text-red-950',
+                  row.kind === 'hunk' && 'border-blue-300 bg-blue-50 text-blue-700',
+                  row.kind === 'meta' && 'border-transparent bg-neutral-50 text-neutral-500',
+                  row.kind === 'context' && 'border-transparent text-neutral-800',
+                  selected && 'agenthub-diff-row-selected',
+                )}
+              >
+                <span
+                  className={cn(
+                    'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
+                    row.kind === 'add' && 'text-emerald-600',
+                    row.kind === 'del' && 'text-red-600',
+                    canSelect && 'agenthub-diff-line-number',
+                  )}
+                  onClick={canSelect ? (e) => handleLineNumberClick(index, e.shiftKey) : undefined}
+                >
+                  {row.oldNumber ?? ''}
+                </span>
+                <span
+                  className={cn(
+                    'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
+                    row.kind === 'add' && 'text-emerald-600',
+                    row.kind === 'del' && 'text-red-600',
+                    canSelect && 'agenthub-diff-line-number',
+                  )}
+                  onClick={canSelect ? (e) => handleLineNumberClick(index, e.shiftKey) : undefined}
+                >
+                  {row.newNumber ?? ''}
+                </span>
+                {isEditing ? (
+                  <div className="flex flex-col px-1 py-0.5">
+                    <textarea
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      className="agenthub-inline-edit"
+                      autoFocus
+                      rows={1}
+                    />
+                    <div className="agenthub-inline-edit-actions">
+                      <button
+                        type="button"
+                        className="agenthub-inline-edit-btn agenthub-inline-edit-btn-save"
+                        onClick={handleSaveEdit}
+                        disabled={saving}
+                      >
+                        {saving ? '保存中...' : '保存'}
+                      </button>
+                      <button
+                        type="button"
+                        className="agenthub-inline-edit-btn agenthub-inline-edit-btn-cancel"
+                        onClick={handleCancelEdit}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <code
+                    className={cn(
+                      'whitespace-pre px-3',
+                      canSelect && 'agenthub-diff-code-selectable',
+                    )}
+                    onClick={canSelect ? (event) => handleDiffCodeClick(index, event) : undefined}
+                  >
+                    <span
+                      className={cn(
+                        'mr-2 inline-block w-3 select-none',
+                        row.kind === 'add' && 'text-emerald-600',
+                        row.kind === 'del' && 'text-red-600',
+                      )}
+                    >
+                      {row.marker}
+                    </span>
+                    {row.text}
+                  </code>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({
   artifact,
 }) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
-  const item = enrichPreviewItem(previewItemFromArtifact(artifact), workspaceId ?? undefined)
+  const item = previewItemFromArtifact(artifact)
   return (
     <FlowRowShell
       icon={<Globe2 className="h-3.5 w-3.5" />}
@@ -6035,7 +7416,6 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
         <button
           type="button"
           onClick={() => requestArtifactPreview(item)}
-          data-testid="artifact-preview-button"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
           title="预览网页"
         >
@@ -6043,7 +7423,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
           预览
         </button>
         <a
-          href={item.url ?? artifact.url}
+          href={artifact.url}
           target="_blank"
           rel="noreferrer"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
@@ -6061,8 +7441,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
 const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({
   artifact,
 }) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId ?? s.currentWorkspace?.id)
-  const item = enrichPreviewItem(previewItemFromArtifact(artifact), workspaceId ?? undefined)
+  const item = previewItemFromArtifact(artifact)
   return (
     <FlowRowShell
       icon={<Rocket className="h-3.5 w-3.5" />}
@@ -6076,7 +7455,6 @@ const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy'
             <button
               type="button"
               onClick={() => requestArtifactPreview(item)}
-              data-testid="artifact-preview-button"
               className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
               title="预览部署"
             >
@@ -6084,7 +7462,7 @@ const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy'
               预览
             </button>
             <a
-              href={item.url ?? artifact.url}
+              href={artifact.url}
               target="_blank"
               rel="noreferrer"
               className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
@@ -6112,15 +7490,7 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
     action={
       <button
         type="button"
-        onClick={() => {
-          const state = useChatStore.getState()
-          requestArtifactPreview(
-            enrichPreviewItem(
-              previewItemFromArtifact(artifact),
-              state.currentSession?.workspaceId ?? state.currentWorkspace?.id ?? undefined,
-            ),
-          )
-        }}
+        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
         className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
         title="查看流程"
       >
@@ -6139,12 +7509,76 @@ function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['s
 }
 
 function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
-  return previewItemFromAgentArtifact(artifact, {
-    deployStatusLabel,
-    fileStatusLabel,
-    formatBytes,
-    previewKindName,
-  })
+  if (artifact.type === 'preview') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'web',
+      source: artifact.source,
+      subtitle: previewKindName(artifact.previewKind),
+      title: artifact.title,
+      url: artifact.url,
+    }
+  }
+  if (artifact.type === 'deploy') {
+    return {
+      id: artifact.id,
+      description: artifact.description ?? artifact.logs,
+      kind: 'deploy',
+      source: artifact.source,
+      subtitle: `${artifact.provider} · ${deployStatusLabel(artifact.status)}`,
+      title: artifact.title,
+      url: artifact.url,
+    }
+  }
+  if (artifact.type === 'diff') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'diff',
+      path: artifact.filePath,
+      source: artifact.diff,
+      subtitle: `${fileStatusLabel(artifact.status ?? 'modified')} · Diff`,
+      title: artifact.title || artifact.filePath,
+    }
+  }
+  if (artifact.type === 'workflow') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'workflow',
+      source: artifact.source,
+      subtitle: `${artifact.nodes.length} 个节点 · ${artifact.edges.length} 条连接`,
+      title: artifact.title,
+    }
+  }
+  // HTML 文件生成预览 URL
+  const ext = artifact.path.split('.').pop()?.toLowerCase()
+  const isHtml = ext === 'html' || ext === 'htm'
+
+  return {
+    id: artifact.id,
+    description: artifact.description,
+    kind: isHtml ? 'web' : filePreviewKind(artifact),
+    mimeType: artifact.mimeType,
+    path: artifact.path,
+    source: artifact.source,
+    subtitle:
+      [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null]
+        .filter(Boolean)
+        .join(' · ') || fileStatusLabel(artifact.status ?? 'created'),
+    title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
+    url: isHtml
+      ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}`
+      : undefined,
+  }
+}
+
+function filePreviewKind(
+  artifact: Extract<AgentArtifact, { type: 'file' }>,
+): ArtifactPreviewItem['kind'] {
+  if (artifact.mimeType?.startsWith('image/')) return 'image'
+  return 'file'
 }
 
 function previewKindName(kind: Extract<AgentArtifact, { type: 'preview' }>['previewKind']) {
@@ -6178,7 +7612,7 @@ function previewActionIcon(item: ArtifactPreviewItem) {
   return <FileText className="h-3.5 w-3.5" />
 }
 
-export function previewFileHint(item: ArtifactPreviewItem) {
+function previewFileHint(item: ArtifactPreviewItem) {
   const lower = (item.mimeType || item.path || item.title).toLowerCase()
   if (/\.(docx?|pptx?|xlsx?|pdf)$/.test(lower)) {
     return '文档类产物当前展示文件信息，可从产物卡打开文件查看。'
@@ -6196,10 +7630,158 @@ function previewIcon(item: ArtifactPreviewItem) {
   return <FileText className="h-4 w-4" />
 }
 
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
+}
+
+type DiffRow = {
+  kind: 'add' | 'context' | 'del' | 'hunk' | 'meta'
+  marker: string
+  newNumber?: number
+  oldNumber?: number
+  text: string
+}
+
+function parseDiffRows(diff: string): DiffRow[] {
+  const rows: DiffRow[] = []
+  let oldLine: number | undefined
+  let newLine: number | undefined
+  let oldFilePath: string | undefined
+  let newFilePath: string | undefined
+  const rawLines = diff.split(/\r?\n/)
+
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const rawLine = rawLines[index]
+    if (index === rawLines.length - 1 && rawLine === '' && diff.endsWith('\n')) continue
+
+    if (rawLine.startsWith('@@')) {
+      const match = rawLine.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)$/)
+      oldLine = match ? Number(match[1]) : undefined
+      newLine = match ? Number(match[2]) : undefined
+      rows.push({ kind: 'hunk', marker: '@@', text: rawLine })
+      continue
+    }
+
+    if (
+      rawLine.startsWith('diff --git') ||
+      rawLine.startsWith('index ') ||
+      rawLine.startsWith('new file mode ') ||
+      rawLine.startsWith('deleted file mode ') ||
+      rawLine.startsWith('old mode ') ||
+      rawLine.startsWith('new mode ') ||
+      rawLine.startsWith('similarity index ') ||
+      rawLine.startsWith('dissimilarity index ') ||
+      rawLine.startsWith('rename from ') ||
+      rawLine.startsWith('rename to ')
+    ) {
+      rows.push({ kind: 'meta', marker: '', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('--- ')) {
+      oldFilePath = rawLine.slice(4).trim()
+      oldLine = oldFilePath === '/dev/null' ? undefined : (oldLine ?? 1)
+      rows.push({ kind: 'meta', marker: '', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('+++ ')) {
+      newFilePath = rawLine.slice(4).trim()
+      newLine = newFilePath === '/dev/null' ? undefined : (newLine ?? 1)
+      rows.push({ kind: 'meta', marker: '', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('+')) {
+      if (newLine === undefined && newFilePath && newFilePath !== '/dev/null') newLine = 1
+      rows.push({ kind: 'add', marker: '+', newNumber: newLine, text: rawLine.slice(1) })
+      if (newLine !== undefined) newLine += 1
+      continue
+    }
+
+    if (rawLine.startsWith('-')) {
+      if (oldLine === undefined && oldFilePath && oldFilePath !== '/dev/null') oldLine = 1
+      rows.push({ kind: 'del', marker: '-', oldNumber: oldLine, text: rawLine.slice(1) })
+      if (oldLine !== undefined) oldLine += 1
+      continue
+    }
+
+    const text = rawLine.startsWith(' ') ? rawLine.slice(1) : rawLine
+    if (oldLine === undefined && oldFilePath && oldFilePath !== '/dev/null') oldLine = 1
+    if (newLine === undefined && newFilePath && newFilePath !== '/dev/null') newLine = 1
+    rows.push({ kind: 'context', marker: '', oldNumber: oldLine, newNumber: newLine, text })
+    if (oldLine !== undefined) oldLine += 1
+    if (newLine !== undefined) newLine += 1
+  }
+
+  return rows
+}
+
+function buildEditableDiffFileContent(
+  rows: DiffRow[],
+  editedOriginalIndex: number,
+  editedLineText: string,
+) {
+  const isNewFileDiff =
+    rows.some((row) => row.kind === 'meta' && row.text === '--- /dev/null') &&
+    rows.some(
+      (row) =>
+        row.kind === 'meta' &&
+        row.text.startsWith('+++ ') &&
+        row.text.trim() !== '+++ /dev/null',
+    )
+  if (!isNewFileDiff) return undefined
+
+  return rows
+    .flatMap((row, index) => {
+      if (row.kind !== 'add' && row.kind !== 'context') return []
+      return index === editedOriginalIndex ? [editedLineText] : [row.text]
+    })
+    .join('\n')
+}
+
+function guessLanguageFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+  const map: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
+    css: 'css', scss: 'css', less: 'css', html: 'xml', xml: 'xml',
+    json: 'json', yaml: 'yaml', yml: 'yaml', md: 'markdown',
+    sh: 'bash', bash: 'bash', zsh: 'bash', sql: 'sql', vue: 'xml',
+    svelte: 'xml',
+  }
+  return map[ext] ?? ''
+}
+
+function codeAgentStatusLabel(status: CodeAgentRunMetadata['status'], partialSuccess = false) {
+  if (status === 'running') return '正在执行'
+  if (status === 'completed') return '执行完成'
+  if (status === 'cancelled') return '已停止'
+  if (status === 'timed-out') return '已超时'
+  if (partialSuccess) return '已产出，需复核'
+  return '执行失败'
+}
+
 function groupChatDisplayTitle(sessionTitle?: string | null, workspaceName?: string | null) {
   const normalized = (sessionTitle || workspaceName || 'Agent 群聊').trim()
   const withoutSuffix = normalized.replace(/\s*\/\s*Agent Group\s*$/i, '').trim()
   return withoutSuffix || workspaceName?.trim() || 'Agent 群聊'
+}
+
+function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']) {
+  if (status === 'created') return '创建'
+  if (status === 'modified') return '修改'
+  if (status === 'deleted') return '删除'
+  if (status === 'renamed') return '重命名'
+  return '未跟踪'
 }
 
 function TaskBoardCard({ data }: { data: any }) {
@@ -6248,22 +7830,18 @@ function TaskBoardCard({ data }: { data: any }) {
 const SystemMessage: FC = () => (
   <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] py-2">
     <div className="rounded-2xl bg-neutral-100 px-3 py-2 text-xs text-neutral-500">
-      <AssistantMessageParts />
+      <MessagePrimitive.Parts />
     </div>
   </MessagePrimitive.Root>
 )
 
 const AssistantActionBar: FC = () => {
   const messageId = useMessage((message) => message.id)
-  const selectMessageById = useMemo(
-    () => makeSelectMessageById(messageId),
-    [messageId],
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
   )
-  const sourceMessage = useChatStore(selectMessageById)
-  const { setReplyingTo, regenerateMessage } = useChatStoreShallow((state) => ({
-    setReplyingTo: state.setReplyingTo,
-    regenerateMessage: state.regenerateMessage,
-  }))
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
+  const regenerateMessage = useChatStore((state) => state.regenerateMessage)
   const [regenerating, setRegenerating] = useState(false)
   const canUseMessage = Boolean(sourceMessage && messageId !== 'agenthub-thinking')
 
@@ -6298,7 +7876,6 @@ const AssistantActionBar: FC = () => {
     >
       <MessageActionButton
         aria-label="回复"
-        data-testid={`message-reply-${messageId}`}
         title="回复"
         onClick={reply}
         disabled={!canUseMessage}
@@ -6308,7 +7885,6 @@ const AssistantActionBar: FC = () => {
       </MessageActionButton>
       <MessageActionButton
         aria-label="引用"
-        data-testid={`message-quote-${messageId}`}
         title="引用为卡片"
         onClick={quote}
         disabled={!canUseMessage}
@@ -6318,7 +7894,6 @@ const AssistantActionBar: FC = () => {
       </MessageActionButton>
       <MessageActionButton
         aria-label="重新生成"
-        data-testid={`message-regenerate-${messageId}`}
         title="重新生成"
         onClick={regenerate}
         disabled={!canUseMessage || regenerating}
@@ -6549,8 +8124,12 @@ const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...prop
 
 function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
   const aliases = mentionAliasEntries(agents).map((entry) => entry.alias)
-  const pattern = mentionPatternForAliases(aliases)
-  if (!pattern) return text
+  if (!aliases.length) return text
+
+  const pattern = new RegExp(
+    `@(${aliases.map(escapeRegExp).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`,
+    'gi',
+  )
   const parts: ReactNode[] = []
   let lastIndex = 0
 
@@ -6567,6 +8146,59 @@ function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
 
   if (lastIndex < text.length) parts.push(text.slice(lastIndex))
   return parts.length ? parts : text
+}
+
+function mentionAliasEntries(agents: WorkspaceAgent[]) {
+  const entries: Array<{ alias: string; agentId: string }> = []
+  for (const agent of agents) {
+    entries.push(
+      { alias: agent.name, agentId: agent.id },
+      { alias: agent.role, agentId: agent.id },
+    )
+    if (agent.roleType === 'orchestrator') {
+      entries.push(
+        { alias: 'orchestrator', agentId: agent.id },
+        { alias: 'coordinator', agentId: agent.id },
+        { alias: '总指挥', agentId: agent.id },
+        { alias: '协调器', agentId: agent.id },
+        { alias: '调度', agentId: agent.id },
+      )
+    }
+  }
+  const deduped = new Map<string, string>()
+  for (const entry of entries) {
+    const alias = entry.alias.trim()
+    if (!alias) continue
+    const key = alias.toLowerCase()
+    if (!deduped.has(key)) deduped.set(key, entry.agentId)
+  }
+  return Array.from(deduped.entries())
+    .map(([alias, agentId]) => ({ alias, agentId }))
+    .sort((a, b) => b.alias.length - a.alias.length)
+}
+
+function extractMentionedAgentIds(text: string, agents: WorkspaceAgent[]) {
+  const entries = mentionAliasEntries(agents)
+  if (!entries.length) return []
+  const pattern = new RegExp(
+    `@(${entries.map((entry) => escapeRegExp(entry.alias)).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`,
+    'gi',
+  )
+  const aliasToAgentId = new Map(entries.map((entry) => [entry.alias.toLowerCase(), entry.agentId]))
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const match of text.matchAll(pattern)) {
+    const rawAlias = (match[1] ?? '').trim().toLowerCase()
+    const agentId = aliasToAgentId.get(rawAlias)
+    if (!agentId || seen.has(agentId)) continue
+    seen.add(agentId)
+    ids.push(agentId)
+  }
+  return ids
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 const ComposerToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
@@ -6820,8 +8452,179 @@ const MarkdownText: FC = () => (
   </div>
 )
 
+function normalizePreviewUrl(url?: string) {
+  if (!url) return null
+  try {
+    return new URL(url, window.location.origin)
+  } catch {
+    return null
+  }
+}
+
+function previewPathFromUrl(url?: string) {
+  const parsed = normalizePreviewUrl(url)
+  if (!parsed) return undefined
+  const path = parsed.searchParams.get('path')?.trim()
+  return path || undefined
+}
+
+function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
+  if (!item.workspaceId || !path) return false
+  const extension = extensionFromName(path)
+  const mimeType = item.mimeType?.toLowerCase() || mimeFromExtension(extension) || 'text/plain'
+  return isTextLikeAttachment(mimeType, extension)
+}
+
+function enrichPreviewItem(item: ArtifactPreviewItem, workspaceId?: string): ArtifactPreviewItem {
+  const next: ArtifactPreviewItem = {
+    ...item,
+    workspaceId: item.workspaceId ?? workspaceId,
+  }
+  if (!next.workspaceId || !next.path) return next
+
+  if (next.kind === 'web' && isHtmlPreviewItem(next)) {
+    const url = normalizePreviewUrl(next.url)
+    if (!url || url.pathname === '/api/artifacts/preview-file') {
+      next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
+    }
+    return next
+  }
+
+  if ((next.kind === 'file' || next.kind === 'image') && !next.url) {
+    next.url = artifactFileUrl(next.workspaceId, next.path)
+  }
+
+  return next
+}
+
+function artifactPreviewFileUrl(workspaceId: string, path: string) {
+  return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`
+}
+
+function artifactFileUrl(workspaceId: string, path: string) {
+  return `/api/artifacts/file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`
+}
+
+function previewFileName(item: ArtifactPreviewItem) {
+  return fileNameFromPath(item.path) || fileNameFromPath(item.url) || item.title || 'preview'
+}
+
+function previewFileExtension(item: ArtifactPreviewItem) {
+  const fileName = previewFileName(item).split(/[?#]/)[0]
+  return fileName.match(/\.([A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? ''
+}
+
+function isHtmlPreviewItem(item: ArtifactPreviewItem) {
+  if (item.kind !== 'web') return false
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  const extension = previewFileExtension(item)
+  return extension === 'html' || extension === 'htm' || extension === 'xhtml' || mimeType.includes('text/html')
+}
+
+function isDocxPreviewItem(item: ArtifactPreviewItem) {
+  const extension = previewFileExtension(item)
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  return extension === 'docx' || mimeType.includes('wordprocessingml.document')
+}
+
+function isPptxPreviewItem(item: ArtifactPreviewItem) {
+  const extension = previewFileExtension(item)
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  return extension === 'pptx' || mimeType.includes('presentationml.presentation')
+}
+
+function officePreviewUrl(item: ArtifactPreviewItem) {
+  if (item.url) return item.url
+  if (item.workspaceId && item.path) return artifactFileUrl(item.workspaceId, item.path)
+  return undefined
+}
+
+async function loadPreviewArrayBuffer(item: ArtifactPreviewItem) {
+  const url = officePreviewUrl(item)
+  if (!url) {
+    throw new Error('This file is missing a preview URL.')
+  }
+  const response = await fetch(url, url.startsWith('data:') ? undefined : { credentials: 'include' })
+  if (!response.ok) {
+    throw new Error(await extractPreviewErrorMessage(response))
+  }
+  return response.arrayBuffer()
+}
+
+function downloadFileName(item: ArtifactPreviewItem) {
+  const source = item.path || normalizePreviewUrl(item.url)?.pathname || item.title || 'preview'
+  const rawName = source.split(/[\\/]/).filter(Boolean).pop() || item.title || 'preview'
+  const hasExtension = /\.[A-Za-z0-9]{1,8}$/.test(rawName)
+  const fallbackExtension = item.mimeType?.includes('image/')
+    ? item.mimeType.split('/').pop()
+    : 'html'
+  const name = hasExtension ? rawName : `${rawName}.${fallbackExtension || 'html'}`
+  return sanitizeDownloadFileName(name)
+}
+
+function sanitizeDownloadFileName(value: string) {
+  return (
+    value
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160) || 'preview.html'
+  )
+}
+
+function getPreviewPanelWidthBounds(panel: HTMLElement | null) {
+  const containerWidth = panel?.parentElement?.clientWidth ?? window.innerWidth
+  const reservedThreadWidth = Math.min(520, Math.max(300, Math.round(containerWidth * 0.34)))
+  const maxWidth = Math.max(360, containerWidth - reservedThreadWidth)
+  const minWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.28)), maxWidth)
+  return { maxWidth, minWidth }
+}
+
+function clampPreviewPanelWidth(width: number, bounds: { maxWidth: number; minWidth: number }) {
+  return Math.min(bounds.maxWidth, Math.max(bounds.minWidth, width))
+}
+
+function readStoredPreviewPanelWidth() {
+  try {
+    const storedWidth = Number(window.localStorage.getItem(previewPanelWidthStorageKey))
+    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : defaultPreviewPanelWidth
+  } catch {
+    return defaultPreviewPanelWidth
+  }
+}
+
+function storePreviewPanelWidth(width: number) {
+  try {
+    window.localStorage.setItem(previewPanelWidthStorageKey, String(Math.round(width)))
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts.
+  }
+}
+
 function shouldSkipLineSelectionClick(event: ReactMouseEvent<HTMLElement>) {
   const target = event.target instanceof HTMLElement ? event.target : null
   if (target?.closest('button, input, textarea, select, a')) return true
   return Boolean(window.getSelection()?.toString())
+}
+
+async function extractPreviewErrorMessage(response: Response) {
+  const text = await response.text().catch(() => '')
+  if (!text.trim()) return 'HTTP ' + response.status
+  try {
+    const parsed = JSON.parse(text)
+    const payload = parsed?.error ?? parsed
+    if (typeof payload === 'string') return payload
+    if (payload && typeof payload === 'object') {
+      return payload.message ?? payload.details?.message ?? text
+    }
+  } catch {
+    // ignore
+  }
+  return text
+}
+
+function formatPreviewError(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return 'Preview request failed'
 }

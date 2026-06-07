@@ -144,34 +144,22 @@ export function enrichPreviewItem(
   item: ArtifactPreviewItem,
   workspaceId?: string,
 ): ArtifactPreviewItem {
-  const previewUrl = normalizePreviewUrl(item.url)
-  const pathFromWorkspaceUrl =
-    previewUrl &&
-    (previewUrl.pathname === '/api/artifacts/preview-file' ||
-      previewUrl.pathname === '/api/artifacts/file')
-      ? previewUrl.searchParams.get('path')?.trim() || undefined
-      : undefined
-  const resolvedPath = item.path ?? pathFromWorkspaceUrl
-  const resolvedWorkspaceId = item.workspaceId ?? workspaceId
   const next: ArtifactPreviewItem = {
     ...item,
-    path: resolvedPath,
-    workspaceId: resolvedWorkspaceId,
+    workspaceId: item.workspaceId ?? workspaceId,
   }
-  if (!resolvedWorkspaceId || !resolvedPath) return next
+  if (!next.workspaceId || !next.path) return next
 
   if (next.kind === 'web' && isHtmlPreviewItem(next)) {
-    if (!previewUrl || previewUrl.pathname === '/api/artifacts/preview-file') {
-      next.url = artifactPreviewFileUrl(resolvedWorkspaceId, resolvedPath)
+    const url = normalizePreviewUrl(next.url)
+    if (!url || url.pathname === '/api/artifacts/preview-file') {
+      next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
     }
     return next
   }
 
-  if (
-    (next.kind === 'file' || next.kind === 'image') &&
-    (!previewUrl || previewUrl.pathname === '/api/artifacts/file')
-  ) {
-    next.url = artifactFileUrl(resolvedWorkspaceId, resolvedPath)
+  if ((next.kind === 'file' || next.kind === 'image') && !next.url) {
+    next.url = artifactFileUrl(next.workspaceId, next.path)
   }
 
   return next

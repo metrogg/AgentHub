@@ -1,6 +1,6 @@
 services:
   tuwunel:
-    image: ${AGENTHUB_TUWUNEL_IMAGE:-ghcr.io/matrix-construct/tuwunel:latest}
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/tuwunel:20260216
     container_name: agenthub-tuwunel
     restart: unless-stopped
     ports:
@@ -27,7 +27,7 @@ services:
       retries: 20
 
   minio:
-    image: ${AGENTHUB_MINIO_IMAGE:-quay.io/minio/minio:latest}
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/minio:20260216
     container_name: agenthub-minio
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]

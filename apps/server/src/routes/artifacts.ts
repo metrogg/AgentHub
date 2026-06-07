@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { writeFile, unlink } from 'node:fs/promises'
-import { basename, dirname, extname, resolve, isAbsolute, join, normalize, posix, sep } from 'node:path'
+import { basename, extname, resolve, isAbsolute, join, normalize, posix, sep } from 'node:path'
 import { Buffer } from 'node:buffer'
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
@@ -20,35 +20,26 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     const rawPath = c.req.query('path')?.trim()
     const workspaceId = c.req.query('workspaceId')?.trim()
     if (!rawPath) throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少预览路径', { field: 'path' })
+    if (!workspaceId) {
+      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少 workspaceId', { field: 'workspaceId' })
+    }
+
     const ext = extname(rawPath).toLowerCase()
     if (ext !== '.html' && ext !== '.htm') {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '仅支持 HTML 文件预览')
     }
 
     const user = c.get('user')
-    let filePath: string
-    if (workspaceId) {
-      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-      if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
-        throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
-      }
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
+      throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
+    }
 
-      const allowedRoot = resolve(ws.projectPath)
-      filePath = resolveWorkspaceFilePath(rawPath, allowedRoot)
-      const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
-      if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
-        throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
-      }
-    } else {
-      const normalizedPath = normalize(rawPath)
-      if (!isAbsolute(normalizedPath)) {
-        throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少 workspaceId', { field: 'workspaceId' })
-      }
-      filePath = resolve(normalizedPath)
-      const previewRoot = dirname(filePath)
-      if (!(await isPreviewRootAllowed(previewRoot, user.sub))) {
-        throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '预览目录不在允许范围内')
-      }
+    const allowedRoot = resolve(ws.projectPath)
+    const filePath = resolveWorkspaceFilePath(rawPath, allowedRoot)
+    const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
+    if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
     }
 
     if (!existsSync(filePath) || !statSync(filePath).isFile()) {

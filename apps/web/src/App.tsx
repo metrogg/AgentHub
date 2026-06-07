@@ -17,7 +17,7 @@ import ExecutionLogsPage from './pages/ExecutionLogsPage'
 import { WorkspaceChatPage } from './pages/WorkspaceChatPage'
 import { api } from './lib/api'
 import { cacheAccountProfileFromSettingsValue } from './lib/accountProfile'
-import { reconcileAgentLibraryWithServer, syncOpenClawAgentsIntoLibrary } from './lib/agentLibrary'
+import { reconcileAgentLibraryWithServer } from './lib/agentLibrary'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
 import { openWorkspaceFolderAsSession, useAppActions } from './lib/app-actions'
 import { ensureCodingToolsStartupLifecycle } from './lib/codingToolsLifecycle'
@@ -27,7 +27,6 @@ import { shortcutFor, shortcutMatches, useShortcutSettings, type ShortcutActionI
 import { settingsDialogEvent } from './lib/settingsDialog'
 import { useChatStore } from './stores/chatStore'
 import { GlobalNewSessionDialog } from './components/chat/GlobalNewSessionDialog'
-import { GlobalConfirmDialog } from './components/ConfirmDialog'
 import { GripHorizontal, Settings2, X } from 'lucide-react'
 
 export default function App() {
@@ -89,9 +88,7 @@ function AppShell() {
             applyAppearanceSettings(defaultAppearanceSettings)
           }
         }
-        return reconcileAgentLibraryWithServer(settings).then(() =>
-          syncOpenClawAgentsIntoLibrary().catch(() => undefined),
-        )
+        return reconcileAgentLibraryWithServer(settings)
       })
       .catch(() => undefined)
   }, [])
@@ -131,7 +128,6 @@ function AppShell() {
   return (
     <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
       <GlobalNewSessionDialog />
-      <GlobalConfirmDialog />
       <NativeDesktopBridge />
       <GlobalShortcutBridge />
       {desktop && <DesktopAppMenu />}

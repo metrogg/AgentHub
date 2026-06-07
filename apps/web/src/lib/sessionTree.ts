@@ -1,7 +1,5 @@
 import { type Session, SessionType } from './api'
 
-export type AgentSessionKind = 'regular' | 'agent-direct' | 'orchestrator-task'
-
 export type SessionGroup = {
   parent: Session
   children: Session[]
@@ -56,28 +54,12 @@ function agentSessionVisibility(
   groupSessionIds: Set<string>,
 ): 'top' | 'child' | 'hidden' {
   if (session.type !== SessionType.Direct || !session.workspaceId) return 'top'
-  if (isAgentDirectSession(session)) return 'top'
-  if (isOrchestratorTaskSession(session))
+  const metadata = session.metadata ?? {}
+  if (metadata.kind === 'agent-direct') return 'top'
+  if (isStableOrchestratorTaskSession(session, metadata))
     return groupSessionIds.has(readGroupSessionId(session) ?? '') ? 'child' : 'hidden'
+  if (!session.workspaceAgentId && metadata.kind === 'orchestrator-task') return 'hidden'
   return 'hidden'
-}
-
-export function classifyAgentSession(session: Session | null | undefined): AgentSessionKind {
-  if (isAgentDirectSession(session)) return 'agent-direct'
-  if (isOrchestratorTaskSession(session)) return 'orchestrator-task'
-  return 'regular'
-}
-
-export function isAgentDirectSession(session: Session | null | undefined) {
-  if (session?.type !== SessionType.Direct || !session.workspaceId || !session.workspaceAgentId) {
-    return false
-  }
-  return session.metadata?.kind === 'agent-direct'
-}
-
-export function isOrchestratorTaskSession(session: Session | null | undefined) {
-  if (!session) return false
-  return isStableOrchestratorTaskSession(session)
 }
 
 export function isStableOrchestratorTaskSession(

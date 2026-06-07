@@ -31,14 +31,12 @@ import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import type { SandboxContainerSpec } from './execution/sandbox-provider'
-import { previewDirectoryUrl } from './artifact-preview'
 import { buildSharedTaskDirectoryProtocolBlock } from './orchestrator/shared-task-directory'
 import {
   DEFAULT_ENV_ALLOWLIST,
   validateEnvelope,
   buildExecutionCwd,
 } from './execution/agent-execution-envelope'
-import { buildOpenClawArgs, extractOpenClawResultMessage } from './openclaw-adapter'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -57,7 +55,6 @@ interface CodeAgentRunOptions {
   modelProvider?: string | null
   nativeOpenCodeRef?: boolean
   agentRoleType?: string
-  roleProfile?: Record<string, unknown> | null
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
@@ -89,12 +86,10 @@ interface CodeAgentCommandResult {
 interface CodeAgentRuntimeOptions {
   ignoreModelEnv?: boolean
   skipLocalCodexConfig?: boolean
-  roleProfile?: Record<string, unknown> | null
   sandboxEnv?: Record<string, string>
   sandboxConfigDir?: string
   sandboxTempDir?: string
   sandboxContainer?: SandboxContainerSpec
-  workspaceId?: string
 }
 
 const activeDockerSandboxes = new Map<number, string>()
@@ -328,26 +323,13 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
   },
 }
 
-const openClawAdapter: CodeAgentAdapter = {
-  command: 'openclaw',
-  displayName: 'OpenClaw',
-  envKey: 'AGENTHUB_MODEL_API_KEY',
-  docsHint:
-    'OpenClaw uses the local OpenClaw agent identity and config. AgentHub passes --agent and --message to the OpenClaw CLI.',
-  promptMode: 'file',
-  buildArgs: buildOpenClawArgs,
-}
-
 export const __codeAgentAdapterTestHooks = {
   buildClaudeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
     adapters['claude-code'].buildArgs(prompt, options),
   buildOpencodeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
     adapters.opencode.buildArgs(prompt, options),
-  buildOpenClawArgs: (prompt: string, options?: CodeAgentRunOptions) =>
-    openClawAdapter.buildArgs(prompt, options),
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
-  extractOpenClawResultMessage,
   isOpenCodeNativeModelRef,
   formatModelTargetLabel,
   createNativeOpenCodeModelTarget,
@@ -468,7 +450,7 @@ export async function* streamCodeAgentReply(
   signal?: AbortSignal,
   envelope?: AgentExecutionEnvelope,
   continueSession?: boolean,
-  options?: { rawFinalOutput?: boolean; workspaceId?: string },
+  options?: { rawFinalOutput?: boolean },
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   let type = profile.codeAgentType
   if (!type) {
@@ -600,12 +582,10 @@ export async function* streamCodeAgentReply(
     {
       ignoreModelEnv,
       skipLocalCodexConfig,
-      roleProfile: profile.roleProfile ?? null,
       sandboxEnv: envelope?.sandboxEnv,
       sandboxConfigDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_CONFIG,
       sandboxTempDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_TMP,
       sandboxContainer: envelope?.sandboxContainer,
-      workspaceId: options?.workspaceId ?? envelope?.a2a?.workspaceId,
     },
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
@@ -1320,7 +1300,6 @@ async function runCodeAgentCommand(
     modelId: modelTarget?.modelId,
     modelProvider: modelTarget?.providerKey,
     nativeOpenCodeRef: Boolean(modelTarget?.nativeOpenCodeRef),
-    roleProfile: runtimeOptions.roleProfile,
     outputPath: outputPathRuntime,
     sandboxPolicy,
     toolConfig,
@@ -1658,7 +1637,6 @@ async function runCodeAgentCommand(
     outputFileMessage ||
       claudeFinalMessage.trim() ||
       parsed.finalMessage ||
-      extractOpenClawResultMessage(parsed.output) ||
       extractClaudeResultMessage(parsed.output) ||
       extractCodexAssistantMessage(parsed.output) ||
       '',
@@ -1673,7 +1651,6 @@ async function runCodeAgentCommand(
     timedOut,
     beforeFiles,
     cwd,
-    workspaceId: runtimeOptions.workspaceId,
     liveCommands,
     liveFiles,
     liveToolCalls,
@@ -1705,9 +1682,8 @@ function buildFileBackedPrompt(promptFile?: string) {
   return [
     'Read the attached prompt file and follow it exactly.',
     `The attached file is ${fileName}.`,
-    promptFile ? `Prompt file path: ${promptFile}.` : '',
     'Use it as the full task specification and conversation context.',
-  ].filter(Boolean).join('\n')
+  ].join('\n')
 }
 
 function writeCodeAgentPromptFile(command: string, prompt: string, tempRoot = tmpdir()) {
@@ -1809,7 +1785,6 @@ async function buildCodeAgentRunMetadata(input: {
   code: number
   cwd?: string
   durationMs: number
-  workspaceId?: string
   liveCommands?: CodeAgentRunMetadata['commands']
   liveFiles?: CodeAgentRunMetadata['files']
   liveToolCalls?: NonNullable<CodeAgentRunMetadata['toolCalls']>
@@ -1829,12 +1804,7 @@ async function buildCodeAgentRunMetadata(input: {
       ...(await diffWorkspaceFiles(input.cwd, input.beforeFiles)),
     ]),
   )
-  const artifacts = buildArtifactsFromMetadata({
-    cwd: input.cwd,
-    files,
-    output: input.output,
-    workspaceId: input.workspaceId,
-  })
+  const artifacts = buildArtifactsFromMetadata({ cwd: input.cwd, files, output: input.output })
   const status: CodeAgentRunMetadata['status'] = input.timedOut
     ? 'timed-out'
     : input.code === 0
@@ -2740,7 +2710,6 @@ function buildArtifactsFromMetadata(input: {
   cwd?: string
   files: CodeAgentRunMetadata['files']
   output: string
-  workspaceId?: string
 }): AgentArtifact[] {
   const artifacts: AgentArtifact[] = []
   const createdAt = new Date().toISOString()
@@ -2768,7 +2737,7 @@ function buildArtifactsFromMetadata(input: {
       })
     }
     if (isHtmlFile(file.path)) {
-      const url = staticPreviewUrl(input.cwd, file.path, input.workspaceId)
+      const url = staticPreviewUrl(input.cwd, file.path)
       if (url) {
         artifacts.push({
           id: `preview:${file.path}`,
@@ -2825,13 +2794,10 @@ function isHtmlFile(path: string) {
   return /\.html?$/i.test(path)
 }
 
-function staticPreviewUrl(cwd: string | undefined, path: string, workspaceId?: string) {
+function staticPreviewUrl(cwd: string | undefined, path: string) {
   if (!cwd) return null
   const absolutePath = isAbsolute(path) ? path : resolve(cwd, path)
-  if (workspaceId) {
-    return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(absolutePath)}`
-  }
-  return previewDirectoryUrl(absolutePath)
+  return `/api/artifacts/preview-file?path=${encodeURIComponent(absolutePath)}`
 }
 
 function detectPreviewUrls(output: string) {

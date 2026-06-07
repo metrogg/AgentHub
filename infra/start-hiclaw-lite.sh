@@ -41,46 +41,6 @@ log_ok()    { echo -e "${GREEN}[OK]${NC}   $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-find_node_bin() {
-  local candidate version major
-  for candidate in node.exe node; do
-    if command -v "$candidate" &>/dev/null; then
-      version="$("$candidate" -v 2>/dev/null | sed 's/^v//')"
-      major="${version%%.*}"
-      if [ -n "$major" ] && [ "$major" -ge 22 ] 2>/dev/null; then
-        echo "$candidate"
-        return 0
-      fi
-    fi
-  done
-  return 1
-}
-
-to_windows_path() {
-  if command -v wslpath &>/dev/null; then
-    wslpath -w "$1"
-  else
-    echo "$1"
-  fi
-}
-
-find_openclaw_entry() {
-  local candidate wrapper_dir
-  if [ -f "$PROJECT_ROOT/.openclaw-runtime/openclaw.mjs" ]; then
-    echo "$PROJECT_ROOT/.openclaw-runtime/openclaw.mjs"
-    return 0
-  fi
-  if command -v openclaw &>/dev/null; then
-    wrapper_dir="$(cd "$(dirname "$(command -v openclaw)")" && pwd)"
-    candidate="$wrapper_dir/node_modules/openclaw/openclaw.mjs"
-    if [ -f "$candidate" ]; then
-      echo "$candidate"
-      return 0
-    fi
-  fi
-  return 1
-}
-
 # ─── Step 0: 检查依赖 ──────────────────────────────────────────────────
 echo ""
 echo "=== AgentHub HiClaw-lite 启动 ==="
@@ -103,23 +63,19 @@ if ! docker compose version &>/dev/null; then
   COMPOSE_CMD="docker-compose"
 fi
 
-NODE_BIN="$(find_node_bin || true)"
-OPENCLAW_ENTRY="$(find_openclaw_entry || true)"
+OPENCLAW_BIN=""
+if command -v openclaw &>/dev/null; then
+  OPENCLAW_BIN="$(command -v openclaw)"
+elif [ -f "$PROJECT_ROOT/.openclaw-runtime/openclaw.mjs" ]; then
+  OPENCLAW_BIN="node $PROJECT_ROOT/.openclaw-runtime/openclaw.mjs"
+fi
 
-if [ -z "$NODE_BIN" ]; then
-  log_error "Node.js 22+ 未找到。请安装 node.exe 24+ 或 node 22+"
+if [ -z "$OPENCLAW_BIN" ]; then
+  log_error "openclaw 未找到。请运行: npm install -g openclaw"
   exit 1
 fi
 
-if [ -z "$OPENCLAW_ENTRY" ]; then
-  log_error "openclaw 未找到。请先运行: npm install -g openclaw 或 bash infra/setup-openclaw.sh"
-  exit 1
-fi
-
-OPENCLAW_ENTRY_WIN="$(to_windows_path "$OPENCLAW_ENTRY")"
-
-log_ok "node: $("$NODE_BIN" -v 2>/dev/null || echo 'unknown')"
-log_ok "openclaw: $NODE_BIN $OPENCLAW_ENTRY_WIN ($("$NODE_BIN" "$OPENCLAW_ENTRY_WIN" --version 2>/dev/null || echo 'unknown'))"
+log_ok "openclaw: $OPENCLAW_BIN ($($OPENCLAW_BIN --version 2>/dev/null || echo 'unknown'))"
 log_ok "docker compose: $COMPOSE_CMD"
 
 # ─── Step 1: 启动基础设施 ──────────────────────────────────────────────
@@ -398,7 +354,7 @@ log_info "启动 OpenClaw Manager (port $MANAGER_PORT)..."
   export OPENCLAW_NO_RESPAWN=1
   export HOME="$MANAGER_WORKSPACE"
   cd "$MANAGER_WORKSPACE"
-  exec "$NODE_BIN" "$OPENCLAW_ENTRY_WIN" gateway run --verbose --force > "$MANAGER_WORKSPACE/openclaw.log" 2>&1
+  exec $OPENCLAW_BIN gateway run --verbose --force > "$MANAGER_WORKSPACE/openclaw.log" 2>&1
 ) &
 MANAGER_PID=$!
 echo $MANAGER_PID > "$PID_DIR/openclaw-manager.pid"
@@ -411,7 +367,7 @@ log_info "启动 OpenClaw Worker (port $WORKER_PORT)..."
   export OPENCLAW_NO_RESPAWN=1
   export HOME="$WORKER_WORKSPACE"
   cd "$WORKER_WORKSPACE"
-  exec "$NODE_BIN" "$OPENCLAW_ENTRY_WIN" gateway run --verbose --force > "$WORKER_WORKSPACE/openclaw.log" 2>&1
+  exec $OPENCLAW_BIN gateway run --verbose --force > "$WORKER_WORKSPACE/openclaw.log" 2>&1
 ) &
 WORKER_PID=$!
 echo $WORKER_PID > "$PID_DIR/openclaw-worker.pid"

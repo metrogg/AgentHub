@@ -7,7 +7,6 @@ export interface AgentProfile {
   roleType?: string
   description?: string
   systemPrompt?: string
-  roleProfile?: Record<string, unknown> | null
   color?: string
   modelId?: string | null
   runtimeType: 'code-agent'
@@ -31,7 +30,6 @@ export interface ExecutionContext {
   history: Array<{ senderType: string; content: string }>
   profile: AgentProfile
   signal: AbortSignal
-  workspaceId?: string | null
   workspacePath?: string | null
   envelope?: AgentExecutionEnvelope
   continueSession?: boolean

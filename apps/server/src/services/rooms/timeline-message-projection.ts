@@ -251,9 +251,9 @@ function timelineEventToMessage(input: {
 }): MessageRow | null {
   const { event, participant, room } = input
   if (!PROJECTABLE_EVENT_TYPES.has(event.type)) return null
+
   const metadata = asRecord(event.metadata)
-  if (metadata?.hiddenFromChat === true) return null
-  if (isDirectRuntimeInternalEvent(event, room, metadata)) return null
+  if (metadata.hiddenFromChat === true) return null
   const kind = asString(metadata.kind)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic') return null
@@ -299,17 +299,6 @@ function timelineEventToMessage(input: {
     replyToMessageId: asString(metadata.replyToMessageId) ?? null,
     createdAt: event.createdAt,
   }
-}
-
-function isDirectRuntimeInternalEvent(
-  event: TimelineEventRow,
-  room: RoomRow,
-  metadata: Record<string, unknown> | null,
-) {
-  if (room.kind !== 'direct') return false
-  if (event.type === 'worker.message' && metadata?.kind === 'worker-runtime.message') return true
-  if (event.type === 'task.progress' && metadata?.kind === 'worker-runtime.progress') return true
-  return false
 }
 
 function senderTypeFromTimeline(event: TimelineEventRow): MessageRow['senderType'] {

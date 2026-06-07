@@ -6,24 +6,21 @@ import {
   CheckCircle2,
   ChevronRight,
   Database,
+  ExternalLink,
   FileDiff,
   FileText,
   GitBranch,
-  ExternalLink,
   Loader2,
   Monitor,
   PackageOpen,
   RefreshCw,
   Search,
+  X,
   XCircle,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ArtifactPreviewSurface } from '../components/artifacts/ArtifactPreviewSurface'
 import SessionList from '../components/chat/SessionList'
-import {
-  WorkspaceFileExplorer,
-  type WorkspaceFileExplorerWorkspace,
-} from '../components/workspace/WorkspaceFileExplorer'
 import {
   api,
   type OrchestratorRunListItem,
@@ -78,9 +75,8 @@ export default function ArtifactsPage() {
   const [message, setMessage] = useState('')
   const [query, setQuery] = useState('')
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<AssetTypeFilter>('all')
-  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null)
+  const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
 
   async function refresh() {
     setLoading(true)
@@ -180,62 +176,6 @@ export default function ArtifactsPage() {
   const partialCount = assets.filter((asset) => asset.status === 'failed' && asset.kind !== 'blackboard').length
   const handoffCount = assets.filter((asset) => asset.kind === 'handoff').length
   const blackboardCount = assets.filter((asset) => asset.kind === 'blackboard').length
-  const previewAsset = useMemo(() => {
-    if (!previewAssetId) return null
-    return assets.find((asset) => asset.id === previewAssetId) ?? null
-  }, [assets, previewAssetId])
-  const previewItem = useMemo(
-    () => (previewAsset ? assetToPreviewItem(previewAsset) : null),
-    [previewAsset],
-  )
-  useEffect(() => {
-    if (!previewAssetId || previewAsset) return
-    setPreviewAssetId(null)
-  }, [previewAsset, previewAssetId])
-  const workspaceOptions = useMemo<WorkspaceFileExplorerWorkspace[]>(() => {
-    const workspaceMap = new Map<string, WorkspaceFileExplorerWorkspace>()
-    const sourceRuns = selectedRuns.length > 0 ? selectedRuns : runs
-    for (const run of sourceRuns) {
-      if (!run.workspaceId) continue
-      workspaceMap.set(run.workspaceId, {
-        id: run.workspaceId,
-        name: run.workspaceName || run.sessionTitle || run.workspaceId,
-      })
-    }
-    for (const asset of assets) {
-      if (!asset.workspaceId || workspaceMap.has(asset.workspaceId)) continue
-      workspaceMap.set(asset.workspaceId, {
-        id: asset.workspaceId,
-        name: asset.workspaceName || asset.workspaceId,
-      })
-    }
-    return Array.from(workspaceMap.values())
-  }, [assets, runs, selectedRuns])
-  const selectedWorkspace = useMemo(() => {
-    const preferredId =
-      selectedWorkspaceId ??
-      previewAsset?.workspaceId ??
-      (selectedRunId !== 'all' ? selectedRuns[0]?.workspaceId : null) ??
-      workspaceOptions[0]?.id ??
-      null
-    return workspaceOptions.find((workspace) => workspace.id === preferredId) ?? workspaceOptions[0] ?? null
-  }, [previewAsset?.workspaceId, selectedRunId, selectedRuns, selectedWorkspaceId, workspaceOptions])
-  const workspaceQuickFiles = useMemo(
-    () =>
-      selectedWorkspace
-        ? assets
-            .filter((asset) => asset.workspaceId === selectedWorkspace.id && (asset.path || asset.url))
-            .slice(0, 6)
-            .map(assetToPreviewItem)
-        : [],
-    [assets, selectedWorkspace],
-  )
-
-  useEffect(() => {
-    if (!selectedWorkspaceId) return
-    if (workspaceOptions.some((workspace) => workspace.id === selectedWorkspaceId)) return
-    setSelectedWorkspaceId(null)
-  }, [selectedWorkspaceId, workspaceOptions])
 
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f7f8f6] text-neutral-950">
@@ -277,17 +217,13 @@ export default function ArtifactsPage() {
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto grid w-full max-w-[1700px] gap-4 px-5 py-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <div className="min-w-0 space-y-4">
-              <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+          <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-5 py-5">
+            <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
               <div className="grid gap-3 2xl:grid-cols-[18rem_minmax(0,1fr)_24rem]">
                 <label className="relative flex h-10 items-center rounded-lg border border-neutral-200 bg-white">
                   <select
                     value={selectedRunId}
-                    onChange={(event) => {
-                      setSelectedRunId(event.target.value)
-                      setSelectedWorkspaceId(null)
-                    }}
+                    onChange={(event) => setSelectedRunId(event.target.value)}
                     className="h-full w-full appearance-none bg-transparent pl-3 pr-8 text-sm text-neutral-700 outline-none"
                     aria-label="选择运行"
                   >
@@ -337,35 +273,6 @@ export default function ArtifactsPage() {
               </div>
             )}
 
-            {previewItem && previewAsset && (
-              <section className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
-                <div className="flex min-w-0 items-center justify-between gap-3 border-b border-neutral-200 bg-[#f8f8f5] px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-neutral-950">
-                      {previewItem.title}
-                    </div>
-                    <div className="mt-1 truncate text-xs text-neutral-500">
-                      {previewAsset.path || previewAsset.url || previewAsset.description}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setPreviewAssetId(null)}
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
-                    aria-label="Close preview"
-                  >
-                    <XCircle className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="h-[min(52rem,62vh)] min-h-[24rem]">
-                  <ArtifactPreviewSurface
-                    item={previewItem}
-                    workspaceId={previewAsset.workspaceId}
-                  />
-                </div>
-              </section>
-            )}
-
             {loading && assets.length === 0 ? (
               <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取产物资产库" />
             ) : filteredAssets.length === 0 ? (
@@ -380,8 +287,7 @@ export default function ArtifactsPage() {
                     key={asset.id}
                     asset={asset}
                     language={language}
-                    selected={asset.id === previewAssetId}
-                    onPreview={() => setPreviewAssetId(asset.id)}
+                    onPreview={() => setPreviewItem(assetToPreviewItem(asset))}
                   />
                 ))}
               </section>
@@ -393,48 +299,33 @@ export default function ArtifactsPage() {
                 正在同步黑板摘要
               </div>
             )}
-            </div>
-
-            <aside className="min-w-0 xl:sticky xl:top-5 xl:self-start">
-              <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-                <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <FileText className="h-4 w-4 shrink-0 text-neutral-500" />
-                    <h2 className="truncate text-sm font-semibold text-neutral-950">工作区文件</h2>
-                  </div>
-                  {workspaceOptions.length > 1 && (
-                    <label className="relative max-w-[11rem] shrink-0">
-                      <select
-                        value={selectedWorkspace?.id ?? ''}
-                        onChange={(event) => {
-                          setSelectedWorkspaceId(event.target.value || null)
-                          setPreviewAssetId(null)
-                        }}
-                        className="h-8 w-full appearance-none rounded-lg border border-neutral-200 bg-white pl-2 pr-7 text-xs text-neutral-600 outline-none transition hover:border-neutral-300"
-                        aria-label="选择工作区"
-                      >
-                        {workspaceOptions.map((workspace) => (
-                          <option key={workspace.id} value={workspace.id}>
-                            {workspace.name}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronRight className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-neutral-400" />
-                    </label>
-                  )}
-                </div>
-                <WorkspaceFileExplorer
-                  workspace={selectedWorkspace}
-                  quickFiles={workspaceQuickFiles}
-                  listMaxHeightClassName="max-h-[22rem]"
-                  previewHeightClassName="h-52"
-                  emptyHint="选择一个运行或产物后查看对应工作区文件。"
-                />
-              </section>
-            </aside>
           </div>
         </div>
       </main>
+      {previewItem && (
+        <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(58rem,calc(100vw-2rem))] flex-col border-l border-neutral-200 bg-white shadow-2xl">
+          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-neutral-950">{previewItem.title}</div>
+              <div className="truncate text-xs text-neutral-500">{previewItem.subtitle ?? previewItem.path ?? previewItem.url ?? '产物预览'}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPreviewItem(null)}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+              aria-label="关闭预览"
+              title="关闭预览"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <ArtifactPreviewSurface
+            className="min-h-0 flex-1"
+            item={previewItem}
+            workspaceId={previewItem.workspaceId}
+          />
+        </aside>
+      )}
     </div>
   )
 }
@@ -442,25 +333,18 @@ export default function ArtifactsPage() {
 function AssetCard({
   asset,
   language,
-  selected,
   onPreview,
 }: {
   asset: AssetItem
   language: 'zh' | 'en'
-  selected: boolean
   onPreview: () => void
 }) {
   const Icon = assetIcon(asset.kind)
-  const downloadable = Boolean(asset.path && asset.workspaceId)
   const openUrl = assetOpenUrl(asset)
+  const downloadable = Boolean(asset.path && asset.workspaceId)
   const previewable = asset.kind !== 'blackboard' && (Boolean(openUrl) || Boolean(asset.path) || Boolean(asset.source))
   return (
-    <article
-      className={cn(
-        'flex min-h-[18rem] flex-col rounded-xl border bg-white p-4 shadow-sm transition hover:border-neutral-300',
-        selected ? 'border-neutral-900 ring-2 ring-neutral-900/10' : 'border-neutral-200',
-      )}
-    >
+    <article className="flex min-h-[18rem] flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-300">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl', assetTone(asset.kind))}>

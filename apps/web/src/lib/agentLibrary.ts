@@ -24,8 +24,6 @@ export interface AgentLibraryState {
   relations: SavedAgentRelation[]
 }
 
-export type WorkspaceCliCodeAgentType = 'codex' | 'claude-code' | 'opencode' | 'gemini'
-
 export const agentLibraryStorageKey = 'agenthub.agentLibrary'
 export const agentLibraryChangeEvent = 'agenthub:agent-library-change'
 export const agentLibrarySyncErrorEvent = 'agenthub:agent-library-sync-error'
@@ -149,50 +147,6 @@ export async function syncAgentLibraryStateToServer(state: AgentLibraryState) {
   await api.saveSettings({ [agentLibraryServerSettingKey]: JSON.stringify(normalized) })
 }
 
-export async function syncOpenClawAgentsIntoLibrary() {
-  if (typeof window === 'undefined') return { added: 0, total: 0 }
-
-  const catalog = await api.getOpenClawAgents()
-  if (!catalog.ok || catalog.items.length === 0) {
-    return { added: 0, total: catalog.items.length }
-  }
-
-  const current = loadAgentLibraryState()
-  const agents = [...current.agents]
-  let added = 0
-
-  for (const item of catalog.items) {
-    const existing = agents.find(
-      (agent) =>
-        agent.id === openClawSavedAgentId(item.id) ||
-        (agent.roleProfile?.source === 'openclaw' &&
-          agent.roleProfile?.openclawAgentId === item.id),
-    )
-    if (existing) continue
-
-    const next = normalizeSavedAgent({
-      ...item.agentHubDraft,
-      id: uniqueSavedAgentId(openClawSavedAgentId(item.id), agents),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    if (!next) continue
-    agents.push(next)
-    added += 1
-  }
-
-  if (added > 0) {
-    saveAgentLibraryState({
-      schemaVersion: 2,
-      agents,
-      relations: current.relations,
-    })
-    await flushAgentLibraryServerSync()
-  }
-
-  return { added, total: catalog.items.length }
-}
-
 function writeAgentLibraryStateToStorage(state: AgentLibraryState) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(agentLibraryStorageKey, JSON.stringify(state))
@@ -255,9 +209,6 @@ export function createSavedAgent(
   const now = new Date().toISOString()
   const runtimeType = normalizeRuntimeType(input.runtimeType)
   const managerAgent = isManagerAgent(input)
-  const codeAgentType = managerAgent
-    ? null
-    : (runtimeType === 'code-agent' ? normalizeCodeAgentType(input.codeAgentType) : null)
   return normalizeSavedAgent({
     id:
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -289,9 +240,6 @@ export function createSavedAgent(
 export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
   const runtimeType = normalizeRuntimeType(agent.runtimeType)
   const managerAgent = isManagerAgent(agent)
-  const codeAgentType = managerAgent
-    ? null
-    : (runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType) : null)
   return {
     name: agent.name,
     role: agent.role,
@@ -346,9 +294,6 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
   if (!input.name?.trim() || !input.role?.trim()) return null
   const runtimeType = normalizeRuntimeType(input.runtimeType)
   const managerAgent = isManagerAgent(input)
-  const codeAgentType = managerAgent
-    ? null
-    : (runtimeType === 'code-agent' ? normalizeCodeAgentType(input.codeAgentType) : null)
   return {
     id: input.id || `${Date.now()}-${Math.random()}`,
     name: input.name.trim(),
@@ -426,13 +371,12 @@ function dedupeSavedAgents(agents: SavedAgentConfig[]) {
   const seen = new Set<string>()
   return agents.filter((agent) => {
     const runtimeType = normalizeRuntimeType(agent.runtimeType)
-    const codeAgentType = runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType) : ''
+    const codeAgentType = runtimeType === 'code-agent' ? (agent.codeAgentType ?? '').trim().toLowerCase() : ''
     const key = [
       agent.name.trim().toLowerCase(),
       agent.role.trim().toLowerCase(),
       runtimeType,
       codeAgentType,
-      openClawIdentityKey(agent),
     ].join('|')
     if (seen.has(key)) return false
     seen.add(key)
@@ -440,14 +384,8 @@ function dedupeSavedAgents(agents: SavedAgentConfig[]) {
   })
 }
 
-function openClawIdentityKey(agent: SavedAgentConfig) {
-  if (agent.roleProfile?.source !== 'openclaw') return ''
-  const id = agent.roleProfile?.openclawAgentId
-  return typeof id === 'string' ? id.trim().toLowerCase() : ''
-}
-
-function normalizeRuntimeType(_value?: string | null): SavedAgentConfig['runtimeType'] {
-  return 'code-agent'
+function normalizeRuntimeType(value?: string | null): SavedAgentConfig['runtimeType'] {
+  return value === 'llm' ? 'llm' : 'code-agent'
 }
 
 function normalizeSandboxPolicy(value?: string | null): SavedAgentConfig['sandboxPolicy'] {

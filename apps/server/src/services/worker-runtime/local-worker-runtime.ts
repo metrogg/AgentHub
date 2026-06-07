@@ -1,5 +1,4 @@
 import type { workspaceAgents } from '@agenthub/db'
-import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { buildAgentProfile } from '../agents/profile-builder'
 import { isCodeAgentProfile, runtimeRegistry } from '../runtime'
 import type { AgentExecutionEnvelope } from '../execution/agent-execution-envelope'
@@ -84,7 +83,6 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
     }
 
     let sessionId: string | undefined
-    let codeAgentRun: CodeAgentRunMetadata | undefined
 
     try {
       for await (const chunk of runtime.execute({
@@ -96,7 +94,6 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
         })),
         profile,
         signal: signal ?? new AbortController().signal,
-        workspaceId: context.workspaceId,
         workspacePath: context.workspacePath ?? undefined,
         envelope,
         continueSession: context.continueSession,
@@ -125,15 +122,10 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
           if (chunk.metadata?.sessionId && typeof chunk.metadata.sessionId === 'string') {
             sessionId = chunk.metadata.sessionId
           }
-          if (isCodeAgentRunMetadata(chunk.metadata)) {
-            codeAgentRun = chunk.metadata
-            yield {
-              type: 'metadata',
-              metadata: {
-                codeAgentRun,
-                ...(sessionId ? { sessionId } : {}),
-              },
-            }
+          yield {
+            type: 'progress',
+            message: 'Worker runtime metadata updated.',
+            metadata: chunk.metadata,
           }
           continue
         }
@@ -149,15 +141,6 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
         status: 'completed',
         message,
         artifacts,
-        metadata: codeAgentRun
-          ? {
-              codeAgentRun: {
-                ...codeAgentRun,
-                artifacts: artifacts.length ? artifacts : codeAgentRun.artifacts,
-                finalMessage: codeAgentRun.finalMessage ?? message,
-              },
-            }
-          : undefined,
         sessionId,
       }
     } catch (error: any) {
@@ -171,27 +154,8 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
         status: 'failed',
         message,
         artifacts,
-        metadata: codeAgentRun
-          ? {
-              codeAgentRun: {
-                ...codeAgentRun,
-                status: codeAgentRun.status === 'running' ? 'failed' : codeAgentRun.status,
-                artifacts: artifacts.length ? artifacts : codeAgentRun.artifacts,
-                finalMessage: codeAgentRun.finalMessage ?? message,
-              },
-            }
-          : undefined,
         sessionId,
       }
     }
   }
-}
-
-function isCodeAgentRunMetadata(value: Record<string, unknown>): value is CodeAgentRunMetadata {
-  return (
-    value.type === 'code-agent-run' &&
-    typeof value.status === 'string' &&
-    typeof value.runtime === 'string' &&
-    typeof value.command === 'string'
-  )
 }

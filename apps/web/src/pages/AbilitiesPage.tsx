@@ -69,7 +69,6 @@ const cliCommands: Record<CodeAgentType, string> = {
   'claude-code': 'claude',
   opencode: 'opencode',
   gemini: 'gemini',
-  openclaw: 'openclaw',
 }
 
 export default function AbilitiesPage() {
@@ -99,7 +98,7 @@ export default function AbilitiesPage() {
       setSettingsInfo(settingsResult)
       setAgents(loadAgentLibrary())
     } catch (error: any) {
-      setMessage(error?.message || '读取能力商店失败')
+      setMessage(error?.message || '读取能力中心失败')
     } finally {
       setLoading(false)
     }
@@ -162,11 +161,8 @@ export default function AbilitiesPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <Blocks className="h-4 w-4 text-emerald-700" />
-                <h1 className="truncate text-lg font-semibold tracking-normal">能力商店</h1>
+                <h1 className="truncate text-lg font-semibold tracking-normal">能力中心</h1>
               </div>
-              <p className="mt-1 text-xs text-neutral-500">
-                已安装 / 已配置能力的审计库；远程发现与安装请前往 Skills 市场。
-              </p>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-500">
                 <span>{cards.length} 项能力</span>
                 <span>{enabledCount} 项已启用</span>
@@ -180,7 +176,7 @@ export default function AbilitiesPage() {
                 className="inline-flex h-9 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
               >
                 <PackageCheck className="h-4 w-4" />
-                发现 Skills
+                Skills 市场
               </button>
               <button
                 type="button"
@@ -251,7 +247,7 @@ export default function AbilitiesPage() {
             )}
 
             {loading && cards.length === 0 ? (
-              <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取能力商店" />
+              <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取能力中心" />
             ) : filteredCards.length === 0 ? (
               <EmptyState icon={<Search className="h-5 w-5" />} text="没有匹配的能力" />
             ) : (
@@ -352,7 +348,7 @@ function buildCapabilityCards({
       license: '按来源仓库或 SKILL.md 审计',
       enabled: boundAgents.length > 0,
       statusText: boundAgents.length > 0 ? `${boundAgents.length} 个 Agent` : '已安装未绑定',
-      actionLabel: '查看已安装 Skill',
+      actionLabel: '去 Skills 市场',
       actionPath: `/skills?view=installed&skill=${encodeURIComponent(skill.id)}`,
     })
   }
@@ -599,7 +595,6 @@ function codeAgentLabel(type: CodeAgentType) {
     'claude-code': 'Claude Code',
     opencode: 'OpenCode',
     gemini: 'Gemini CLI',
-    openclaw: 'OpenClaw',
   }
   return map[type]
 }

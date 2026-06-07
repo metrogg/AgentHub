@@ -1,5 +1,4 @@
 import type { TimelineEventType } from '../rooms'
-import type { CodeAgentType } from '@agenthub/shared'
 
 // ─── Manager Runtime Types ───────────────────────────────────────────
 

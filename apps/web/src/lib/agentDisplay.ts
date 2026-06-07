@@ -21,7 +21,6 @@ export function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']):
   if (runtime === 'claude-code') return 'Claude Code'
   if (runtime === 'opencode') return 'OpenCode'
   if (runtime === 'gemini') return 'Gemini CLI'
-  if (runtime === 'openclaw') return 'OpenClaw'
   return 'Codex'
 }
 
@@ -35,7 +34,6 @@ export function codeAgentLabel(value: NonNullable<WorkspaceAgent['codeAgentType'
     'claude-code': 'Claude Code',
     opencode: 'OpenCode',
     gemini: 'Gemini CLI',
-    openclaw: 'OpenClaw',
   }
   return map[value] ?? value
 }

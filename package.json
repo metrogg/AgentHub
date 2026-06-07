@@ -22,7 +22,6 @@
     "build": "bun run --filter '*' build",
     "build:desktop": "bun --filter @agenthub/desktop tauri:build",
     "test": "bun test",
-    "test:e2e": "playwright test",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",
     "db:generate": "bun --filter @agenthub/db generate",
@@ -30,7 +29,6 @@
     "db:studio": "bun --filter @agenthub/db studio"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
     "@types/adm-zip": "^0.5.8",
     "@types/bun": "latest",
     "concurrently": "^9.2.1",

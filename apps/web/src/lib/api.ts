@@ -494,83 +494,6 @@ export interface AgentAdapterCatalogResponse {
   items: AgentAdapterCatalogItem[]
 }
 
-export interface OpenClawAgentSummary {
-  id: string
-  name: string
-  role: string
-  workspace: string | null
-  agentDir: string | null
-  bindings: number
-  isDefault: boolean
-  routes: string[]
-  agentHubDraft: AgentConfigInput & {
-    runtimeType: 'code-agent'
-    codeAgentType: 'openclaw'
-  }
-}
-
-export interface OpenClawAgentsCatalogResponse {
-  ok: boolean
-  command: string
-  installed: boolean
-  items: OpenClawAgentSummary[]
-  diagnostics?: string
-  message: string
-}
-
-export type LocalAgentRuntimeFamily = 'coordinator' | 'worker'
-export type LocalAgentRuntimeAdapterStatus = 'candidate' | 'available' | 'blocked'
-
-export interface LocalAgentRuntimeCatalogItem {
-  adapterMessage: string
-  adapterStatus: LocalAgentRuntimeAdapterStatus
-  addedAt: string | null
-  command: string
-  configMessage: string
-  diagnostics?: string
-  docsHint: string
-  docsUrl: string
-  enabled: boolean
-  id: string
-  installCommand: string
-  installed: boolean
-  missingAdapterSteps: string[]
-  name: string
-  packageName: string
-  permissions: string[]
-  ready: boolean
-  recommendedUse: string
-  registered: boolean
-  runtimeBase: 'openclaw' | 'copaw'
-  runtimeFamily: LocalAgentRuntimeFamily
-  version: string | null
-}
-
-export interface LocalAgentRuntimeBinding {
-  adapterStatus: LocalAgentRuntimeAdapterStatus
-  addedAt: string
-  command: string
-  enabled: boolean
-  id: string
-  packageName: string
-  runtimeBase: 'openclaw' | 'copaw'
-  runtimeFamily: LocalAgentRuntimeFamily
-  version: string | null
-}
-
-export interface LocalAgentRuntimeCatalogResponse {
-  platform: string
-  localCliProbesEnabled: boolean
-  items: LocalAgentRuntimeCatalogItem[]
-}
-
-export interface LocalAgentRuntimeAddResponse {
-  ok: boolean
-  binding: LocalAgentRuntimeBinding
-  catalog: LocalAgentRuntimeCatalogResponse
-  message: string
-}
-
 export interface CliInstallAction {
   code?: number
   items?: CodingToolStatus[]
@@ -1500,39 +1423,6 @@ export type WorkspaceFolderOpenResult =
   | { cancelled: true; projectPath: null; workspace?: null }
   | { cancelled: false; projectPath: string; workspace?: Workspace | null }
 
-export interface WorkspaceFileEntry {
-  name: string
-  path: string
-  type: 'directory' | 'file'
-  size: number
-  sizeLabel: string
-  modifiedAt: string
-  extension?: string
-  hidden: boolean
-}
-
-export interface WorkspaceFileListResponse {
-  workspaceId: string
-  rootName: string
-  path: string
-  parentPath: string | null
-  items: WorkspaceFileEntry[]
-  total: number
-  truncated: boolean
-}
-
-export interface WorkspaceFileContentResponse {
-  workspaceId: string
-  name: string
-  path: string
-  mimeType: string
-  size: number
-  sizeLabel: string
-  binary: boolean
-  content: string
-  truncated: boolean
-}
-
 export interface ClarificationQuestion {
   id: string
   question: string
@@ -2289,17 +2179,6 @@ export const api = {
         })
       : request<CodingToolStatusResponse>('/coding-tools/status'),
   getAgentAdapters: () => request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
-  getOpenClawAgents: () => request<OpenClawAgentsCatalogResponse>('/coding-tools/openclaw/agents'),
-  getLocalAgentRuntimes: () =>
-    request<LocalAgentRuntimeCatalogResponse>('/coding-tools/local-agent-runtimes'),
-  addLocalAgentRuntime: (id: string, data?: { command?: string }) =>
-    request<LocalAgentRuntimeAddResponse>(
-      `/coding-tools/local-agent-runtimes/${encodeURIComponent(id)}/add`,
-      {
-        method: 'POST',
-        body: data ? JSON.stringify(data) : undefined,
-      },
-    ),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
   ensureCodingToolsStartupLifecycle: () =>
@@ -2374,14 +2253,6 @@ export const api = {
   getWorkspaceSessions: (id: string) => request<{ items: Session[] }>(`/workspaces/${id}/sessions`),
   getWorkspaceActiveRuns: (id: string) =>
     request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
-  listWorkspaceFiles: (id: string, path?: string | null) =>
-    request<WorkspaceFileListResponse>(
-      `/workspaces/${id}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`,
-    ),
-  readWorkspaceFile: (id: string, path: string) =>
-    request<WorkspaceFileContentResponse>(
-      `/workspaces/${id}/files/content?path=${encodeURIComponent(path)}`,
-    ),
   updateWorkspace: (
     id: string,
     data: { name?: string; goal?: string; projectPath?: string | null },

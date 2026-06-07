@@ -1,5 +1,4 @@
 import type { AgentRunProfile } from '../agent-runner'
-import { CODE_AGENT_TYPES } from '@agenthub/shared'
 
 /**
  * 最小化的 Agent DB 行类型，兼容 workspaceAgents.$inferSelect 和 planner 生成的 agent 对象。
@@ -61,7 +60,6 @@ export function buildAgentProfile(
     modelId: agent.modelId ?? null,
     runtimeType: normalizeRuntimeType(agent.runtimeType),
     codeAgentType: normalizeCodeAgentType(agent),
-    roleProfile: agent.roleProfile ?? null,
     a2aEndpoint: resolveA2AEndpoint(agent),
     capabilityTags: agent.capabilityTags ?? [],
     skillIds: agent.skillIds ?? [],
