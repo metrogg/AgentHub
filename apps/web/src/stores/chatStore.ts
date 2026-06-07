@@ -19,6 +19,7 @@ import {
 import {
   applyRoomTimelineMessageControl,
   codeAgentRunFromWorkerRuntimeEvent,
+  mergeRoomTimelineStreamMessages,
   projectRoomTimeline,
   type RoomTimelineProjection,
 } from '../lib/roomTimeline'
@@ -138,7 +139,7 @@ function upsertMessage(messages: Message[], message: Message): Message[] {
 }
 
 function mergeMessages(messages: Message[], incoming: Message[]): Message[] {
-  return incoming.reduce((items, message) => upsertMessage(items, message), messages)
+  return sortMessages(mergeRoomTimelineStreamMessages(messages, incoming))
 }
 
 function createQuotedMessagePreview(
@@ -1247,7 +1248,7 @@ function applyLiveMessageMetadataProjection(
   }
 }
 
-function applyDirectRoomRuntimeProjection(
+function applyRoomRuntimeProjection(
   current: LiveRuntimeProjection,
   input: {
     room: Room
@@ -1255,7 +1256,7 @@ function applyDirectRoomRuntimeProjection(
     participantsById: Map<string, RoomParticipant>
   },
 ): LiveRuntimeProjection {
-  if (input.room.kind !== 'direct') return current
+  if (input.room.kind !== 'direct' && input.room.kind !== 'task') return current
   const run = codeAgentRunFromWorkerRuntimeEvent(input.event)
   if (!run) return current
   if (run.status !== 'running') return clearLiveRuntimeProjection()
@@ -1396,12 +1397,21 @@ function reduceRuntimeActivityProjection(
 }
 
 export function runtimeActivityLabel(phase?: string | null) {
-  if (phase === 'planning') return '正在规划任务'
-  if (phase === 'thinking') return '正在理解目标'
+  if (phase === 'planning') return '正在判断是否需要分工'
+  if (phase === 'thinking') return '正在读取群聊上下文'
   if (phase === 'executing') return '正在执行任务'
   if (phase === 'synthesizing') return '正在汇总结果'
   if (phase === 'replying') return '正在回复'
   return '正在处理'
+}
+
+export function runtimeActivityDetail(phase?: string | null) {
+  if (phase === 'thinking') return '读取上下文 / 检查成员 / 准备下一步'
+  if (phase === 'planning') return '评估目标 / 匹配成员 / 准备线程'
+  if (phase === 'synthesizing') return '读取成员产出 / 汇总结论 / 准备复盘'
+  if (phase === 'executing') return 'Worker 正在执行任务'
+  if (phase === 'replying') return '正在组织回复'
+  return '正在处理请求'
 }
 
 export function describeRuntimeActivity(activity: AgentActivity | null | undefined) {
@@ -1410,6 +1420,7 @@ export function describeRuntimeActivity(activity: AgentActivity | null | undefin
     agentName: activity.agentName ?? 'Agent',
     phase: activity.phase,
     label: runtimeActivityLabel(activity.phase),
+    detail: runtimeActivityDetail(activity.phase),
   }
 }
 
@@ -1464,8 +1475,8 @@ export function buildHeaderAgentStatusProjection(input: {
     const phase = agentActivity?.phase ?? 'replying'
     if (phase === 'thinking' || phase === 'planning') {
       return {
-        label: phase === 'planning' ? '规划中' : '思考中',
-        detail: agentActivity?.agentName ?? 'Manager',
+        label: phase === 'planning' ? '编排中' : '理解中',
+        detail: runtimeActivityDetail(phase),
         tone: 'thinking',
         live: true,
       }
@@ -1516,7 +1527,7 @@ export function buildHeaderAgentStatusProjection(input: {
 
   if (taskBoard && sessionId === taskBoard.sessionId) {
     if (taskBoard.status === 'planning') {
-      return { label: '规划中', detail: 'Manager', tone: 'thinking', live: true }
+      return { label: '编排中', detail: runtimeActivityDetail('planning'), tone: 'thinking', live: true }
     }
     if (taskBoard.status === 'synthesizing') {
       return { label: '汇总中', detail: 'Synthesizer', tone: 'synthesizing', live: true }
@@ -2298,7 +2309,8 @@ function applyResourceSnapshotToTaskBoard(
 
 export const __chatStoreTestHooks = {
   applyAgUiEventToState,
-  applyDirectRoomRuntimeProjection,
+  applyDirectRoomRuntimeProjection: applyRoomRuntimeProjection,
+  applyRoomRuntimeProjection,
   applyAgUiRunStatus,
   applyTaskBoardRunStatus,
   applyResourceSnapshotToTaskBoard,
@@ -2312,6 +2324,7 @@ export const __chatStoreTestHooks = {
   mergeSessionsWithRunProjection,
   mergeSessionsWithRuntimeProjection,
   reduceRuntimeActivityProjection,
+  runtimeActivityDetail,
   runtimeActivityLabel,
   runtimeActivityFromSnapshot,
   taskBoardFromRun,
@@ -3611,7 +3624,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         if (projectedSessionId === sessionId) {
           set((s) =>
-            applyDirectRoomRuntimeProjection(
+            applyRoomRuntimeProjection(
               {
                 agentTyping: s.agentTyping,
                 agentActivity: s.agentActivity,

@@ -340,24 +340,6 @@ export class MatrixRoomEventDispatcher {
       if (isConsumedResult(resumeResult)) return true
     }
 
-    if (event.senderType === 'human' && room.kind === 'direct') {
-      const [session] = room.sessionId
-        ? await db.select().from(sessions).where(eq(sessions.id, room.sessionId)).limit(1)
-        : []
-      const workspaceAgentId = room.workspaceId && session?.workspaceAgentId ? session.workspaceAgentId : null
-      if (!workspaceAgentId) {
-        logger.warn({ roomId: room.id, eventId: event.id }, 'Direct room human message has no workspaceAgentId binding')
-        return false
-      }
-      await workerRuntimeService.runDirectRoom({
-        roomId: room.id,
-        ownerId: room.ownerId,
-        workspaceAgentId,
-        prompt: event.body,
-      })
-      return true
-    }
-
     for (const participantId of mentionedParticipantIds) {
       const [participant] = await db
         .select()

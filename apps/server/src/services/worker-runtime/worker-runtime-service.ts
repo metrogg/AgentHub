@@ -229,6 +229,7 @@ export class WorkerRuntimeService {
             workerParticipantId: workerParticipant.id,
           })
         : new EphemeralCodeAgentWorkerRuntime(agent)
+    const codeAgentRuntime = codeAgentRuntimeForAgent(agent)
     this.roomRuntimeKind.set(room.id, runtime.kind)
 
     const abortController = new AbortController()
@@ -243,6 +244,26 @@ export class WorkerRuntimeService {
 
     const appendedEventIds: string[] = []
     try {
+      const startedEvent = await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: workerParticipant.id,
+        senderType: 'worker',
+        type: 'task.progress',
+        body: '',
+        metadata: {
+          kind: 'worker-runtime.started',
+          status: 'running',
+          progressPercent: 5,
+          workspaceAgentId: agent.id,
+          runtimeType: codeAgentRuntime ?? runtime.runtimeType,
+          workerRuntimeType: runtime.runtimeType,
+          codeAgentType: agent.codeAgentType ?? null,
+          hiddenFromChat: true,
+          uiPresentation: 'room-status',
+        },
+      })
+      appendedEventIds.push(startedEvent.id)
+
       const iterator = runtime.executeTask(
         {
           roomId: room.id,
@@ -271,40 +292,54 @@ export class WorkerRuntimeService {
           next = await iterator.next()
           continue
         }
-        const timelineEvent = await appendWorkerRuntimeEvent({
+        const eventMetadata = asRecordOrNull(event.metadata)
+        const eventCodeAgentRun = codeAgentRunMetadataFromRecord(eventMetadata)
+        if (eventCodeAgentRun) latestCodeAgentRun = eventCodeAgentRun
+        const timelineEvent = await roomService.appendTimelineEvent({
           roomId: room.id,
-          participantId: workerParticipant.id,
-          workspaceId: room.workspaceId ?? agent.workspaceId,
-          workspaceAgentId: agent.id,
-          workerInstanceId: workerParticipant.workerInstanceId ?? null,
-          runtimeType: runtime.runtimeType,
-          event,
+          senderParticipantId: workerParticipant.id,
+          senderType: 'worker',
+          type: 'task.progress',
+          body: event.message ?? '',
+          metadata: {
+            ...(eventMetadata ?? {}),
+            kind: `worker-runtime.${event.type}`,
+            workspaceAgentId: agent.id,
+            runtimeType: eventCodeAgentRun?.runtime ?? readCodeAgentRuntime(eventMetadata) ?? codeAgentRuntime ?? runtime.runtimeType,
+            hiddenFromChat: true,
+            ...(event.type === 'progress'
+              ? { progressPercent: event.progressPercent }
+              : event.type === 'artifact'
+                ? { artifact: event.artifact }
+                : {}),
+          },
         })
         appendedEventIds.push(timelineEvent.id)
         next = await iterator.next()
       }
 
       const result = next.value
+      const resultMetadata = asRecordOrNull(result.metadata)
+      const finalCodeAgentRun = finalizeCodeAgentRunMetadata({
+        run: codeAgentRunMetadataFromRecord(resultMetadata) ?? latestCodeAgentRun,
+        status: result.status,
+        message: result.message ?? null,
+      })
+      const hasResultMessage = hasExplicitText(result.message)
       const resultEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
         senderParticipantId: workerParticipant.id,
         senderType: 'worker',
-        type: result.status === 'completed' ? 'worker.message' : 'task.progress',
-        body:
-          result.message ??
-          (result.status === 'completed'
-            ? '执行完成。'
-            : result.status === 'waiting_for_human'
-              ? '等待用户澄清。'
-              : '执行失败。'),
+        type: hasResultMessage && result.status === 'completed' ? 'worker.message' : 'task.progress',
+        body: result.message ?? '',
         metadata: {
           kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
+          codeAgentRun: finalCodeAgentRun,
           workspaceAgentId: agent.id,
           runtimeType: runtime.runtimeType,
           artifacts: result.artifacts ?? [],
-          ...(result.status === 'waiting_for_human' ? { hiddenFromChat: true } : {}),
-          ...(result.metadata ?? {}),
+          ...(!hasResultMessage || result.status !== 'completed' ? { hiddenFromChat: true } : {}),
         },
       })
       appendedEventIds.push(resultEvent.id)
@@ -312,15 +347,14 @@ export class WorkerRuntimeService {
       logger.error({ err: error?.message, roomId: room.id, agentId: agent.id }, 'Direct room execution failed')
       const failEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
-        senderParticipantId: workerParticipant.id,
-        senderType: 'worker',
-        type: 'task.progress',
-        body: `[错误：${error?.message || '执行失败'}]`,
+        senderType: 'system',
+        type: 'system',
+        body: error?.message || '',
         metadata: {
           kind: 'worker-runtime.failed',
           workspaceAgentId: agent.id,
           runtimeType: runtime.runtimeType,
-          hiddenFromChat: true,
+          error: error?.message || String(error),
         },
       })
       appendedEventIds.push(failEvent.id)
@@ -479,17 +513,13 @@ export class WorkerRuntimeService {
 
       const result = next.value
       finalStatus = result.status
+      const hasResultMessage = hasExplicitText(result.message)
       const completedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
-        senderParticipantId: workerParticipant.id,
-        senderType: 'worker',
-        type: 'worker.message',
-        body:
-          result.status === 'completed'
-            ? result.message || '处理完成。'
-            : result.status === 'waiting_for_human'
-              ? '已通过 Matrix @mention 发送给 Resident Worker，等待其在房间里回复。'
-              : '我这边还没启动成功，请检查这个 Worker 的 CLI 基底、模型绑定和认证状态。',
+        senderParticipantId: hasResultMessage ? workerParticipant.id : null,
+        senderType: hasResultMessage ? 'worker' : 'system',
+        type: hasResultMessage ? 'worker.message' : 'task.progress',
+        body: result.message ?? '',
         metadata: {
           kind:
             result.status === 'completed'
@@ -505,6 +535,7 @@ export class WorkerRuntimeService {
           artifacts: result.artifacts ?? [],
           sessionId: result.sessionId ?? null,
           rawError: result.status === 'completed' || result.status === 'waiting_for_human' ? null : result.message ?? null,
+          hiddenFromChat: !hasResultMessage,
         },
       })
       appendedEventIds.push(completedEvent.id)
@@ -524,10 +555,9 @@ export class WorkerRuntimeService {
       logger.error({ err: error?.message, roomId: room.id, agentId: agent.id }, 'Group mention worker execution failed')
       const failEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
-        senderParticipantId: workerParticipant.id,
-        senderType: 'worker',
-        type: 'worker.message',
-        body: '我这边还没启动成功，请检查这个 Worker 的 CLI 基底、模型绑定和认证状态。',
+        senderType: 'system',
+        type: 'system',
+        body: error?.message || '',
         metadata: {
           kind: 'worker-runtime.group-mention-failed',
           sourceEventId: input.sourceEventId,
@@ -829,7 +859,7 @@ export class WorkerRuntimeService {
           ? {
               ...rawResult,
               status: 'waiting_for_human',
-              message: rawResult.message || '等待用户澄清后继续。',
+              message: rawResult.message,
               metadata: {
                 ...(rawResult.metadata ?? {}),
                 waitingForHuman: true,
@@ -838,18 +868,13 @@ export class WorkerRuntimeService {
               },
             }
           : rawResult
+      const hasResultMessage = hasExplicitText(result.message)
       const completedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
-        senderParticipantId: workerParticipant.id,
-        senderType: 'worker',
-        type: result.status === 'completed' ? 'worker.message' : 'task.progress',
-        body:
-          result.message ||
-          (result.status === 'completed'
-            ? '任务完成。'
-            : result.status === 'waiting_for_human'
-              ? '等待用户澄清。'
-              : '任务失败。'),
+        senderParticipantId: hasResultMessage ? workerParticipant.id : null,
+        senderType: hasResultMessage ? 'worker' : 'system',
+        type: hasResultMessage && result.status === 'completed' ? 'worker.message' : 'task.progress',
+        body: result.message ?? '',
         metadata: {
           kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
@@ -858,6 +883,7 @@ export class WorkerRuntimeService {
           runtimeLeaseId: lease?.id ?? null,
           runtimeType: result.runtimeType,
           artifacts: result.artifacts ?? [],
+          hiddenFromChat: !hasResultMessage,
           ...(result.metadata ?? {}),
         },
       })
@@ -1728,6 +1754,10 @@ type WorkspaceAgentRow = typeof workspaceAgents.$inferSelect
 type CodeAgentRuntime = CodeAgentRunMetadata['runtime']
 type CodeAgentRunStatus = CodeAgentRunMetadata['status']
 const DIRECT_CODE_AGENT_PROGRESS_MIN_INTERVAL_MS = 15_000
+
+function hasExplicitText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0
+}
 
 function asRecordOrNull(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)

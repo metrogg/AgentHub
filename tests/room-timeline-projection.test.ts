@@ -49,6 +49,22 @@ const worker: RoomParticipant = {
   updatedAt: '2026-06-04T00:00:00.000Z',
 }
 
+const manager: RoomParticipant = {
+  id: 'participant-manager-1',
+  roomId: 'room-1',
+  providerUserId: '@manager:local.agenthub',
+  participantType: 'manager',
+  userId: null,
+  workspaceAgentId: null,
+  workerInstanceId: null,
+  displayName: 'Manager',
+  role: 'manager',
+  status: 'joined',
+  metadata: {},
+  joinedAt: '2026-06-04T00:00:00.000Z',
+  updatedAt: '2026-06-04T00:00:00.000Z',
+}
+
 function event(partial: Partial<TimelineEvent> & Pick<TimelineEvent, 'id' | 'type' | 'sequence'>): TimelineEvent {
   return {
     roomId: 'room-1',
@@ -63,6 +79,106 @@ function event(partial: Partial<TimelineEvent> & Pick<TimelineEvent, 'id' | 'typ
 }
 
 describe('room timeline projection', () => {
+  test('collapses consecutive manager partial messages with the same trace into one bubble', () => {
+    const projection = projectRoomTimeline({
+      room,
+      participants: [manager],
+      sessionId: 'child-session-1',
+      timeline: [
+        event({
+          id: 'manager-partial-1',
+          type: 'manager.message',
+          sequence: 1,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'Thinking',
+          metadata: {
+            kind: 'manager-runtime.room_message',
+            traceId: 'trace-1',
+            messageType: 'reply',
+          },
+        }),
+        event({
+          id: 'manager-partial-2',
+          type: 'manager.message',
+          sequence: 2,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'Thinking through the plan',
+          metadata: {
+            kind: 'manager-runtime.room_message',
+            traceId: 'trace-1',
+            messageType: 'reply',
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(1)
+    expect(projection.messages[0]?.id).toBe('room:manager-partial-1')
+    expect(projection.messages[0]?.content).toBe('Thinking through the plan')
+    expect(projection.messages[0]?.metadata?.roomTimeline).toMatchObject({
+      eventId: 'manager-partial-2',
+      eventType: 'manager.message',
+    })
+    expect(projection.messages[0]?.metadata?.roomTimelineStream).toMatchObject({
+      traceId: 'trace-1',
+      senderParticipantId: 'participant-manager-1',
+      eventIds: ['manager-partial-1', 'manager-partial-2'],
+    })
+  })
+
+  test('does not collapse same-trace messages across a visible boundary', () => {
+    const projection = projectRoomTimeline({
+      room,
+      participants: [manager],
+      sessionId: 'child-session-1',
+      timeline: [
+        event({
+          id: 'manager-partial-1',
+          type: 'manager.message',
+          sequence: 1,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'First',
+          metadata: {
+            kind: 'manager-runtime.room_message',
+            traceId: 'trace-2',
+            messageType: 'reply',
+          },
+        }),
+        event({
+          id: 'human-message',
+          type: 'human.message',
+          sequence: 2,
+          senderParticipantId: null,
+          senderType: 'human',
+          body: 'Interrupt',
+          metadata: {},
+        }),
+        event({
+          id: 'manager-partial-2',
+          type: 'manager.message',
+          sequence: 3,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'Second',
+          metadata: {
+            kind: 'manager-runtime.room_message',
+            traceId: 'trace-2',
+            messageType: 'reply',
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages.map((message) => message.id)).toEqual([
+      'room:manager-partial-1',
+      'room:human-message',
+      'room:manager-partial-2',
+    ])
+  })
+
   test('projects direct room final worker runtime events as code-agent cards and hides live metadata', () => {
     const liveMetadataEvent = event({
       id: 'event-live-metadata',

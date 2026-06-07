@@ -111,8 +111,7 @@ export function managerAssignActionsFromPlan(input: {
       dependsOn: (task.dependencies ?? []).filter((dependency) => taskKeys.has(dependency)),
       taskTitle: task.title,
       taskDescription: task.description,
-      message: `@${worker.name} 请接手：${task.title}\n\n${task.description}`,
-      reason: task.agentSelection?.rationale?.join('\n') || `Dynamic Manager plan assigned ${task.title} to ${worker.name}.`,
+      reason: task.agentSelection?.rationale?.join('\n'),
       metadata: {
         source: 'dynamic-orchestrator-plan',
         planTitle: input.plan.title,

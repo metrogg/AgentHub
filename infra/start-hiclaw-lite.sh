@@ -183,37 +183,63 @@ copy_agent_files() {
   local source_dir="$1"
   local target_dir="$2"
   local file
+  local copied=0
 
   mkdir -p "$target_dir/skills"
 
   for file in SOUL.md AGENTS.md HEARTBEAT.md TOOLS.md; do
     if [ -f "$source_dir/$file" ] && [ ! -f "$target_dir/$file" ]; then
       cp "$source_dir/$file" "$target_dir/$file"
-      log_ok "$(basename "$target_dir") $file"
+      copied=1
     fi
   done
 
   if [ -d "$source_dir/skills" ]; then
-    cp -rn "$source_dir/skills/"* "$target_dir/skills/" 2>/dev/null || true
-    log_ok "$(basename "$target_dir") skills/"
+    if compgen -G "$source_dir/skills/*" >/dev/null; then
+      cp -rn "$source_dir/skills/"* "$target_dir/skills/" 2>/dev/null || true
+      copied=1
+    fi
+  fi
+
+  if [ "$copied" -eq 1 ]; then
+    log_ok "$(basename "$target_dir") agent files ready"
+  else
+    log_info "$(basename "$target_dir") agent files already up to date"
   fi
 }
 
 wait_for_tuwunel() {
   local i code
-  for i in $(seq 1 60); do
+  for i in $(seq 1 40); do
     code="$(curl -s -o /dev/null -w '%{http_code}' "$TUWUNEL_URL/_matrix/client/versions" 2>/dev/null || echo 000)"
     if [ "$code" = "200" ]; then
       log_ok "Tuwunel ready ($TUWUNEL_URL)"
       return 0
     fi
-    if [ "$i" -eq 60 ]; then
+    if [ "$i" -eq 40 ]; then
       log_error "Tuwunel start timed out. Check: docker logs agenthub-tuwunel"
       return 1
     fi
     echo -n "."
-    sleep 1
+    sleep 0.5
   done
+}
+
+reuse_or_login() {
+  local user="$1"
+  local pass="$2"
+  local login_resp token
+
+  login_resp="$(curl -s -X POST "$TUWUNEL_URL/_matrix/client/v3/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"type\":\"m.login.password\",\"identifier\":{\"type\":\"m.id.user\",\"user\":\"$user\"},\"password\":\"$pass\"}" 2>/dev/null || true)"
+  token="$(printf '%s' "$login_resp" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 || true)"
+  if [ -n "$token" ]; then
+    printf '%s\n' "$token"
+    return 0
+  fi
+
+  register_or_login "$user" "$pass"
 }
 
 register_or_login() {
@@ -318,22 +344,22 @@ $COMPOSE_CMD -f docker-compose.hiclaw-lite.yml up -d
 log_ok "Docker containers started"
 
 echo ""
-log_info "[2/6] Waiting for Tuwunel to become ready (max 60s)..."
+log_info "[2/6] Waiting for Tuwunel to become ready (max 20s)..."
 wait_for_tuwunel
 
 echo ""
-log_info "[3/6] Registering Matrix accounts..."
+log_info "[3/6] Preparing Matrix accounts..."
 
-MANAGER_TOKEN="$(register_or_login "$MANAGER_USER" "$MANAGER_PASS")"
+MANAGER_TOKEN="$(reuse_or_login "$MANAGER_USER" "$MANAGER_PASS")"
 log_ok "Manager account: @$MANAGER_USER:$MATRIX_DOMAIN"
 
-WORKER_TOKEN="$(register_or_login "$WORKER_USER" "$WORKER_PASS")"
+WORKER_TOKEN="$(reuse_or_login "$WORKER_USER" "$WORKER_PASS")"
 log_ok "Worker account: @$WORKER_USER:$MATRIX_DOMAIN"
 
 echo ""
-log_info "[3.5/6] Registering Admin Matrix account..."
+log_info "[3.5/6] Preparing Admin Matrix account..."
 
-ADMIN_TOKEN="$(register_or_login "$ADMIN_USER" "$ADMIN_PASS")"
+ADMIN_TOKEN="$(reuse_or_login "$ADMIN_USER" "$ADMIN_PASS")"
 log_ok "Admin account: @$ADMIN_USER:$MATRIX_DOMAIN"
 
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -398,7 +424,7 @@ done
 start_openclaw "Manager" "$MANAGER_WORKSPACE" "$MANAGER_RUNTIME_HOME" "$MANAGER_RUNTIME_CONFIG" "$PID_DIR/openclaw-manager.pid" "$MANAGER_WORKSPACE/openclaw.log"
 start_openclaw "Worker" "$WORKER_WORKSPACE" "$WORKER_RUNTIME_HOME" "$WORKER_RUNTIME_CONFIG" "$PID_DIR/openclaw-worker.pid" "$WORKER_WORKSPACE/openclaw.log"
 
-sleep 2
+sleep 1
 
 if kill -0 "$(cat "$PID_DIR/openclaw-manager.pid")" 2>/dev/null; then
   log_ok "Manager running"

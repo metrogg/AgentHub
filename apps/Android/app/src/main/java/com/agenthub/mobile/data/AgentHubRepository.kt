@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Response
@@ -27,6 +30,7 @@ class AgentHubRepository(
 
     private var currentSocket: WebSocket? = null
     private var syncJob: Job? = null
+    private var messageRefreshJob: Job? = null
 
     fun connect(config: ConnectionConfig) {
         scope.launch {
@@ -62,6 +66,8 @@ class AgentHubRepository(
     fun disconnect() {
         syncJob?.cancel()
         syncJob = null
+        messageRefreshJob?.cancel()
+        messageRefreshJob = null
         currentSocket?.cancel()
         currentSocket = null
         _uiState.update {
@@ -494,9 +500,10 @@ class AgentHubRepository(
 
     private fun handleEvent(event: WsEvent) {
         val payload = event.payload ?: return
-        val eventSessionId = payload["sessionId"]?.jsonPrimitive?.content
+        val eventSessionId = payload["sessionId"]?.jsonPrimitive?.contentOrNull
         val currentSessionId = _uiState.value.selectedSessionId
-        if (eventSessionId != null && eventSessionId != currentSessionId) return
+        val belongsToOtherSession = eventSessionId != null && eventSessionId != currentSessionId
+        if (belongsToOtherSession && event.type != "room:timeline" && event.type != "ag-ui:event") return
 
         when (event.type) {
             "agent:typing" -> _uiState.update { it.copy(agentTyping = true) }
@@ -556,6 +563,63 @@ class AgentHubRepository(
             "message:cancelled" -> _uiState.update {
                 it.copy(streamingMessage = null, streamingCodeAgentRun = null, agentTyping = false)
             }
+            "room:timeline" -> handleRoomTimelineEvent(payload, eventSessionId, currentSessionId)
+            "ag-ui:event" -> {
+                refreshSessions()
+                refreshWorkbench()
+            }
+        }
+    }
+
+    private fun handleRoomTimelineEvent(
+        payload: JsonObject,
+        eventSessionId: String?,
+        currentSessionId: String?,
+    ) {
+        val sessionId = eventSessionId ?: return
+        if (sessionId != currentSessionId) {
+            refreshSessions()
+            return
+        }
+        val config = _uiState.value.connection ?: return
+        val roomEvent = payload["event"] as? JsonObject
+        val senderType = roomEvent?.get("senderType")?.jsonPrimitive?.contentOrNull
+        val eventType = roomEvent?.get("type")?.jsonPrimitive?.contentOrNull
+        val metadata = roomEvent?.get("metadata") as? JsonObject
+        val hiddenFromChat = metadata?.get("hiddenFromChat")?.jsonPrimitive?.booleanOrNull == true
+        val clearTyping = !hiddenFromChat && (senderType == "manager" || senderType == "worker" || senderType == "system")
+        if (senderType == "human" && eventType == "human.message") {
+            _uiState.update { it.copy(agentTyping = true) }
+        }
+        scheduleSelectedMessageRefresh(config, sessionId, clearTyping)
+    }
+
+    private fun scheduleSelectedMessageRefresh(
+        config: ConnectionConfig,
+        sessionId: String,
+        clearTyping: Boolean,
+    ) {
+        messageRefreshJob?.cancel()
+        messageRefreshJob = scope.launch {
+            delay(150)
+            runCatching { client.listMessages(config, sessionId) }
+                .onSuccess { messages ->
+                    _uiState.update { state ->
+                        if (state.selectedSessionId != sessionId) {
+                            state
+                        } else {
+                            state.copy(
+                                messages = messages,
+                                streamingMessage = null,
+                                streamingCodeAgentRun = null,
+                                agentTyping = if (clearTyping) false else state.agentTyping,
+                                error = null,
+                            )
+                        }
+                    }
+                    refreshSessions()
+                }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
         }
     }
 

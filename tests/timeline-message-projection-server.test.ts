@@ -36,6 +36,22 @@ const worker = {
   updatedAt: new Date('2026-06-04T00:00:00.000Z'),
 } as const
 
+const manager = {
+  id: 'participant-manager-1',
+  roomId: 'direct-room-1',
+  providerUserId: '@manager:agenthub.local',
+  participantType: 'manager',
+  userId: null,
+  workspaceAgentId: null,
+  workerInstanceId: null,
+  displayName: 'Manager',
+  role: 'manager',
+  status: 'joined',
+  metadata: {},
+  joinedAt: new Date('2026-06-04T00:00:00.000Z'),
+  updatedAt: new Date('2026-06-04T00:00:00.000Z'),
+} as const
+
 function event(partial: Record<string, unknown>) {
   return {
     id: 'event-1',
@@ -53,6 +69,57 @@ function event(partial: Record<string, unknown>) {
 }
 
 describe('server room timeline message projection', () => {
+  test('collapses consecutive manager partial messages with the same trace into one bubble', () => {
+    const messages = projectTimelineMessages({
+      room: directRoom as any,
+      participants: [manager as any],
+      sessionId: 'direct-session-1',
+      timeline: [
+        event({
+          id: 'manager-partial-1',
+          providerEventId: '$manager-partial-1',
+          type: 'manager.message',
+          sequence: 1,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'Thinking',
+          metadata: {
+            kind: 'manager-runtime.room_message',
+            traceId: 'trace-1',
+            messageType: 'reply',
+          },
+        }),
+        event({
+          id: 'manager-partial-2',
+          providerEventId: '$manager-partial-2',
+          type: 'manager.message',
+          sequence: 2,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'Thinking through the plan',
+          metadata: {
+            kind: 'manager-runtime.room_message',
+            traceId: 'trace-1',
+            messageType: 'reply',
+          },
+        }),
+      ],
+    })
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.id).toBe('room:manager-partial-1')
+    expect(messages[0]?.content).toBe('Thinking through the plan')
+    expect(messages[0]?.metadata?.roomTimeline).toMatchObject({
+      eventId: 'manager-partial-2',
+      eventType: 'manager.message',
+    })
+    expect(messages[0]?.metadata?.roomTimelineStream).toMatchObject({
+      traceId: 'trace-1',
+      senderParticipantId: 'participant-manager-1',
+      eventIds: ['manager-partial-1', 'manager-partial-2'],
+    })
+  })
+
   test('hides direct room running worker runtime status events, including old unmarked events', () => {
     const messages = projectTimelineMessages({
       room: directRoom as any,
