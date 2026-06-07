@@ -3302,18 +3302,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ),
       }))
       await get().fetchSessions()
-      set((state) => {
-        if (
-          state.agentActivity?.sessionId === sessionId &&
-          (state.agentActivity.phase === 'planning' || state.agentActivity.phase === 'thinking')
-        ) {
-          return { agentTyping: true, taskBoard: state.taskBoard, agentTabs: state.agentTabs }
-        }
-        return {
-          agentTyping: false,
-          agentActivity: null,
-        }
-      })
     } catch (error) {
       set((s) => ({
         messages: s.messages.filter((message) => message.id !== optimisticId),
