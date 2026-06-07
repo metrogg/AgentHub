@@ -4940,15 +4940,15 @@ const AssistantMessage: FC = () => {
       <div className={cn('min-w-0 flex-1', isFlatMessageStyle ? 'pl-1' : '')}>
         <div
           className={cn(
-            'text-sm text-neutral-950',
+            'relative text-sm text-neutral-950',
             isFlatMessageStyle
               ? 'leading-6'
               : 'rounded-[18px] border border-neutral-200 bg-white px-4 py-3 leading-7 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
           )}
         >
+          <AssistantActionBar />
           <AssistantMessageParts />
         </div>
-        <AssistantActionBar />
         <BranchPicker />
         {timestamp && <div className="mt-1 text-[11px] text-neutral-400">{timestamp}</div>}
       </div>
@@ -5843,7 +5843,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             )}
           />
         )}
-        <div className="flex h-16 shrink-0 items-center gap-3 bg-[#f5f5f1] px-3 backdrop-blur">
+        <div className="flex h-16 shrink-0 items-center gap-3 bg-white px-3 backdrop-blur">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
               {previewIcon(item)}
@@ -5953,7 +5953,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           />
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col bg-[#f6f7f9] p-2">
+        <div className="flex min-h-0 flex-1 flex-col bg-white p-2">
           {item.description && (
             <div className="mb-2 rounded-2xl border border-neutral-200 bg-white/90 px-3 py-2 text-xs leading-5 text-neutral-600 shadow-sm">
               {item.description}
@@ -6527,15 +6527,44 @@ const CodeAgentRunCard: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
   return <CodeAgentLiveActivity data={data} />
 }
 
+const codeAgentProcessDetailsOpenByKey = new Map<string, boolean>()
+
+function codeAgentProcessDetailsKey(
+  sessionId: string | null | undefined,
+  data: ThreadCodeAgentRunData,
+) {
+  return [
+    sessionId ?? 'global',
+    data.runtime,
+    data.command,
+    data.cwd ?? '',
+  ].join('|')
+}
+
 const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
   const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
-  const [detailsOpen, setDetailsOpen] = useState(false)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const detailsKey = codeAgentProcessDetailsKey(currentSessionId, data)
+  const [detailsOpen, setDetailsOpenState] = useState(
+    () => codeAgentProcessDetailsOpenByKey.get(detailsKey) ?? false,
+  )
   const fullRun = getCachedCodeAgentRunMetadata(data.__agenthubFullRunId) ?? data
   const detailsData = useMemo(() => (detailsOpen ? fullRun : data), [data, detailsOpen, fullRun])
   const artifacts = readFlowArtifacts(fullRun.artifacts)
   const summary = buildCodeAgentRunSummary(data)
   const warning = detailsData.warning ?? data.warning
   const diagnostics = detailsData.diagnostics
+  const setDetailsOpen = (updater: boolean | ((value: boolean) => boolean)) => {
+    setDetailsOpenState((value) => {
+      const next = typeof updater === 'function' ? updater(value) : updater
+      codeAgentProcessDetailsOpenByKey.set(detailsKey, next)
+      return next
+    })
+  }
+
+  useEffect(() => {
+    setDetailsOpenState(codeAgentProcessDetailsOpenByKey.get(detailsKey) ?? false)
+  }, [detailsKey])
 
   return (
     <div className="not-prose mt-2 max-w-[48rem] text-sm leading-6 text-neutral-700">
@@ -7616,6 +7645,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       subtitle: previewKindName(artifact.previewKind),
       title: artifact.title,
       url: artifact.url,
+      path: previewPathFromUrl(artifact.url),
     }
   }
   if (artifact.type === 'deploy') {
@@ -7627,6 +7657,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       subtitle: `${artifact.provider} · ${deployStatusLabel(artifact.status)}`,
       title: artifact.title,
       url: artifact.url,
+      path: previewPathFromUrl(artifact.url),
     }
   }
   if (artifact.type === 'diff') {
@@ -7958,14 +7989,14 @@ const AssistantActionBar: FC = () => {
       hideWhenRunning
       autohide="not-last"
       autohideFloat="single-branch"
-      className="mt-2 flex flex-wrap items-center gap-1.5 text-neutral-500"
+      className="absolute right-2 top-2 z-10 flex min-h-9 min-w-[5.5rem] items-center justify-end gap-1.5 rounded-full bg-white/90 px-1.5 opacity-0 shadow-sm ring-1 ring-neutral-200/80 backdrop-blur transition-opacity hover:opacity-100 focus-within:opacity-100"
     >
       <MessageActionButton
         aria-label="回复"
         title="回复"
         onClick={reply}
         disabled={!canUseMessage}
-        icon={<MessageCircleReply className="h-3.5 w-3.5" />}
+        icon={<MessageCircleReply className="h-4 w-4" />}
       >
         回复
       </MessageActionButton>
@@ -7974,7 +8005,7 @@ const AssistantActionBar: FC = () => {
         title="引用为卡片"
         onClick={quote}
         disabled={!canUseMessage}
-        icon={<TextQuote className="h-3.5 w-3.5" />}
+        icon={<TextQuote className="h-4 w-4" />}
       >
         引用
       </MessageActionButton>
@@ -7988,13 +8019,13 @@ const MessageActionButton: FC<
   <button
     type="button"
     className={cn(
-      'inline-flex h-7 items-center gap-1 rounded-full bg-neutral-100 px-2.5 text-[11px] font-medium text-neutral-600 transition hover:bg-neutral-200 hover:text-neutral-950 disabled:pointer-events-none disabled:opacity-45',
+      'grid h-8 w-8 place-items-center rounded-full text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950 disabled:pointer-events-none disabled:opacity-45',
       className,
     )}
     {...props}
   >
     {icon}
-    <span>{children}</span>
+    <span className="sr-only">{children}</span>
   </button>
 )
 
@@ -8558,7 +8589,7 @@ function enrichPreviewItem(item: ArtifactPreviewItem, workspaceId?: string): Art
   }
   if (!next.workspaceId || !next.path) return next
 
-  if (next.kind === 'web' && isHtmlPreviewItem(next)) {
+  if ((next.kind === 'web' || next.kind === 'deploy') && isHtmlPreviewItem(next)) {
     const url = normalizePreviewUrl(next.url)
     if (!url || url.pathname === '/api/artifacts/preview-file') {
       next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
@@ -8591,7 +8622,7 @@ function previewFileExtension(item: ArtifactPreviewItem) {
 }
 
 function isHtmlPreviewItem(item: ArtifactPreviewItem) {
-  if (item.kind !== 'web') return false
+  if (item.kind !== 'web' && item.kind !== 'deploy') return false
   const mimeType = item.mimeType?.toLowerCase() ?? ''
   const extension = previewFileExtension(item)
   return extension === 'html' || extension === 'htm' || extension === 'xhtml' || mimeType.includes('text/html')

@@ -4,8 +4,49 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { app } from '../apps/server/src/app'
 import { previewDirectoryUrl } from '../apps/server/src/services/artifact-preview'
+import {
+  enrichPreviewItem,
+  previewItemFromAgentArtifact,
+} from '../apps/web/src/lib/artifactPreview'
 
 describe('artifact static preview', () => {
+  test('workspace-backed preview artifacts retain their file path for workspaceId enrichment', () => {
+    const filePath = 'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-06-task-1\\game.html'
+    const preview = previewItemFromAgentArtifact({
+      id: 'preview:game',
+      type: 'preview',
+      title: `Preview: ${filePath}`,
+      url: `/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`,
+      previewKind: 'static-html',
+    })
+
+    const enriched = enrichPreviewItem(preview, 'workspace-1')
+
+    expect(enriched.path).toBe(filePath)
+    expect(enriched.url).toBe(
+      `/api/artifacts/preview-file?workspaceId=workspace-1&path=${encodeURIComponent(filePath)}`,
+    )
+  })
+
+  test('static deploy artifacts retain their file path for workspaceId enrichment', () => {
+    const filePath = 'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-06-task-1\\game.html'
+    const deploy = previewItemFromAgentArtifact({
+      id: 'deploy:game',
+      type: 'deploy',
+      title: `Static deploy: ${filePath}`,
+      provider: 'static',
+      status: 'ready',
+      url: `/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`,
+    })
+
+    const enriched = enrichPreviewItem(deploy, 'workspace-1')
+
+    expect(enriched.path).toBe(filePath)
+    expect(enriched.url).toBe(
+      `/api/artifacts/preview-file?workspaceId=workspace-1&path=${encodeURIComponent(filePath)}`,
+    )
+  })
+
   test('preview-dir rejects an arbitrary directory not under a managed root or workspace', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-'))
     mkdirSync(join(root, 'assets'))

@@ -267,6 +267,22 @@ export class WorkerRuntimeService {
       })
       appendedEventIds.push(startedEvent.id)
 
+      // 通知前端 agent 已开始处理
+      if (room.sessionId) {
+        broadcastSessionEvent(room.sessionId, {
+          type: WsEvent.AgentTyping,
+          payload: {
+            sessionId: room.sessionId,
+            agentId: agent.id,
+            agentName: agent.name,
+            phase: 'executing',
+          },
+        })
+      }
+
+      // traceId 用于将所有流式 chunk 合并为同一条消息气泡
+      const streamingTraceId = startedEvent.id
+
       const iterator = runtime.executeTask(
         {
           roomId: room.id,
@@ -292,6 +308,24 @@ export class WorkerRuntimeService {
       while (!next.done) {
         const event = next.value
         if (event.type === 'message') {
+          // 流式文本 chunk：写入 timeline，traceId 让前端合并为同一气泡
+          const timelineEvent = await roomService.appendTimelineEvent({
+            roomId: room.id,
+            senderParticipantId: workerParticipant.id,
+            senderType: 'worker',
+            type: 'worker.message',
+            body: event.message,
+            metadata: {
+              kind: 'worker-runtime.message',
+              workspaceAgentId: agent.id,
+              runtimeType: codeAgentRuntime ?? runtime.runtimeType,
+              traceId: streamingTraceId,
+              senderParticipantId: workerParticipant.id,
+              agentName: agent.name,
+              skipAutoDispatch: true,
+            },
+          })
+          appendedEventIds.push(timelineEvent.id)
           next = await iterator.next()
           continue
         }
@@ -328,13 +362,16 @@ export class WorkerRuntimeService {
         status: result.status,
         message: result.message ?? null,
       })
-      const hasResultMessage = hasExplicitText(result.message)
+      // on success: same traceId merges this into the streaming text bubble (attaches codeAgentRun card)
+      // on failure: use task.progress (hidden) so failure state is recorded but not shown as a new bubble
+      const isSuccess = result.status === 'completed'
+      const hasResultMessage = !isSuccess && hasExplicitText(result.message)
       const resultEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
         senderParticipantId: workerParticipant.id,
         senderType: 'worker',
-        type: hasResultMessage && result.status === 'completed' ? 'worker.message' : 'task.progress',
-        body: result.message ?? '',
+        type: isSuccess ? 'worker.message' : 'task.progress',
+        body: hasResultMessage ? (result.message ?? '') : '',
         metadata: {
           kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
@@ -343,7 +380,9 @@ export class WorkerRuntimeService {
           runtimeType: finalCodeAgentRun?.runtime ?? codeAgentRuntime ?? runtime.runtimeType,
           workerRuntimeType: runtime.runtimeType,
           artifacts: result.artifacts ?? [],
-          ...(!hasResultMessage || result.status !== 'completed' ? { hiddenFromChat: true } : {}),
+          ...(isSuccess
+            ? { traceId: streamingTraceId, senderParticipantId: workerParticipant.id, agentName: agent.name, skipAutoDispatch: true }
+            : { hiddenFromChat: true }),
         },
       })
       appendedEventIds.push(resultEvent.id)
@@ -579,14 +618,16 @@ export class WorkerRuntimeService {
 
       const result = next.value
       finalStatus = result.status
-      // text was streamed incrementally — completed event is a status marker only
+      // completed event: write as worker.message with same traceId so the client merges it
+      // into the streaming text bubble (attaches the codeAgentRun execution card)
       const hasResultMessage = result.status !== 'completed' && hasExplicitText(result.message)
+      const codeAgentRunMeta = result.metadata?.type === 'code-agent-run' ? result.metadata : null
       const completedEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
-        senderParticipantId: hasResultMessage ? workerParticipant.id : null,
-        senderType: hasResultMessage ? 'worker' : 'system',
-        type: hasResultMessage ? 'worker.message' : 'task.progress',
-        body: result.message ?? '',
+        senderParticipantId: workerParticipant.id,
+        senderType: 'worker',
+        type: 'worker.message',
+        body: hasResultMessage ? (result.message ?? '') : '',
         metadata: {
           kind:
             result.status === 'completed'
@@ -602,7 +643,13 @@ export class WorkerRuntimeService {
           artifacts: result.artifacts ?? [],
           sessionId: result.sessionId ?? null,
           rawError: result.status === 'completed' || result.status === 'waiting_for_human' ? null : result.message ?? null,
-          hiddenFromChat: !hasResultMessage,
+          // same traceId → client merges this into the streaming text bubble
+          traceId: streamingTraceId,
+          senderParticipantId: workerParticipant.id,
+          agentName: agent.name,
+          // attach codeAgentRun so the execution card renders inside the text bubble
+          ...(codeAgentRunMeta ? { codeAgentRun: codeAgentRunMeta } : {}),
+          skipAutoDispatch: true,
         },
       })
       appendedEventIds.push(completedEvent.id)
