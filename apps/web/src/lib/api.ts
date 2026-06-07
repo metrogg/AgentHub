@@ -957,39 +957,6 @@ export interface ContainerRuntimeLogsResponse {
   message: string
 }
 
-export interface PrepareLocalContainerRuntimeResult {
-  ok: boolean
-  message: string
-  infra: {
-    ok: boolean
-    output: string
-    message: string
-  }
-  image: {
-    present: boolean
-    pulled?: boolean
-    built?: boolean
-    error: string | null
-    output?: string
-  }
-  diagnostics: ContainerRuntimeDiagnostics
-}
-
-export interface LocalMatrixActionResult {
-  ok: boolean
-  message: string
-  output?: string
-  config: {
-    provider: string
-    homeserverUrl: string
-    serverName: string
-    registrationTokenConfigured: boolean
-    autoInviteParticipants: boolean
-    autoJoinParticipants: boolean
-  }
-  diagnostics: MatrixDiagnostics
-}
-
 export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
 
 export interface ManagerRuntimeStatus {
@@ -1031,31 +998,6 @@ export interface ManagerRuntimeStatusResponse {
   activeHealth: ManagerRuntimeHealth | null
   providers: ManagerRuntimeProviderSummary[]
   message: string
-}
-
-export interface ManagerRuntimeActionResult {
-  ok: boolean
-  status: ManagerRuntimeStatus
-  health?: ManagerRuntimeHealth | null
-  message: string
-}
-
-export interface LocalRuntimePrepareResult {
-  ok: boolean
-  message: string
-  steps: Array<{
-    id: string
-    label: string
-    ok: boolean
-    message: string
-    output?: string
-  }>
-  diagnostics: {
-    matrix: MatrixDiagnostics
-    containerRuntime: ContainerRuntimeDiagnostics
-    controllerPlane: ControllerPlaneDiagnostics
-    managerRuntime: ManagerRuntimeStatusResponse
-  }
 }
 
 export interface OpencodeModelItem {
@@ -2091,12 +2033,6 @@ export const api = {
   getSettingsConsoleLogs: (limit = 160) =>
     request<SettingsConsoleLogsResponse>(`/settings/console-logs?limit=${encodeURIComponent(String(limit))}`),
   getMatrixDiagnostics: () => request<MatrixDiagnostics>('/rooms/matrix/diagnostics'),
-  configureLocalMatrix: () =>
-    request<LocalMatrixActionResult>('/settings/matrix/local/configure', { method: 'POST' }),
-  startLocalMatrix: () =>
-    request<LocalMatrixActionResult>('/settings/matrix/local/start', { method: 'POST', timeout: 70_000 }),
-  stopLocalMatrix: () =>
-    request<LocalMatrixActionResult>('/settings/matrix/local/stop', { method: 'POST', timeout: 70_000 }),
   getControllerPlaneStatus: () => request<ControllerPlaneDiagnostics>('/settings/controller-plane/status'),
   runResidentWorkerSelfTest: (
     workerInstanceId: string,
@@ -2119,36 +2055,11 @@ export const api = {
       },
     ),
   getContainerRuntimeStatus: () => request<ContainerRuntimeDiagnostics>('/settings/container-runtime/status'),
-  prepareLocalContainerRuntime: () =>
-    request<PrepareLocalContainerRuntimeResult>('/settings/container-runtime/prepare-local', {
-      method: 'POST',
-      timeout: 180_000,
-    }),
-  prepareLocalRuntime: () =>
-    request<LocalRuntimePrepareResult>('/settings/local-runtime/prepare', {
-      method: 'POST',
-      timeout: 240_000,
-    }),
   getContainerRuntimeLogs: (name: string, tail = 160) =>
     request<ContainerRuntimeLogsResponse>(
       `/settings/container-runtime/logs/${encodeURIComponent(name)}?tail=${encodeURIComponent(String(tail))}`,
     ),
   getManagerRuntimeStatus: () => request<ManagerRuntimeStatusResponse>('/settings/manager-runtime/status'),
-  startManagerRuntime: (type: ManagerRuntimeType) =>
-    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/start`, {
-      method: 'POST',
-      timeout: 70_000,
-    }),
-  stopManagerRuntime: (type: ManagerRuntimeType) =>
-    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/stop`, {
-      method: 'POST',
-      timeout: 30_000,
-    }),
-  checkManagerRuntimeHealth: (type: ManagerRuntimeType) =>
-    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/health`, {
-      method: 'POST',
-      timeout: 20_000,
-    }),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

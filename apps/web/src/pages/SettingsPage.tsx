@@ -34,7 +34,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, friendlyErrorMessage, type ContainerRuntimeDiagnostics, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsConsoleLogsResponse, type SettingsGeneralInfo } from '../lib/api'
+import { api, friendlyErrorMessage, type ContainerRuntimeDiagnostics, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsConsoleLogsResponse, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -2606,6 +2606,18 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const managerReady = Boolean(managerRuntime?.activeStatus.running && !managerRuntime.activeStatus.error)
   const runtimeInfraReady = Boolean(containerRuntime?.docker.available && containerRuntime.imagePresent)
   const localRuntimeReady = Boolean(matrixOk && runtimeInfraReady && managerReady)
+  const startScriptCommand = 'bash infra/start-hiclaw-lite.sh'
+  const stopScriptCommand = 'bash infra/stop-hiclaw-lite.sh'
+  const containerEnvCommand = containerRuntime
+    ? [
+        'AGENTHUB_CONTAINER_RUNTIME=docker',
+        'AGENTHUB_MANAGER_BACKEND=docker',
+        'AGENTHUB_WORKER_BACKEND=docker',
+        `AGENTHUB_CONTAINER_CONTROLLER_URL=${containerRuntime.controllerUrlForContainers}`,
+        `AGENTHUB_CONTAINER_MATRIX_URL=${containerRuntime.matrixUrlForContainers}`,
+        `AGENTHUB_CONTAINER_LLM_BASE_URL=${containerRuntime.llmBaseUrlForContainers}`,
+      ].join('\n')
+    : ''
   const localRuntimeSteps = [
     {
       id: 'matrix',
@@ -2647,6 +2659,25 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     if (!autoScroll) return
     tableRef.current?.scrollTo({ top: tableRef.current.scrollHeight, behavior: 'smooth' })
   }, [autoScroll, filteredLogs.length])
+
+  async function copyCommandSnippet(label: string, command: string) {
+    if (!command.trim()) {
+      showNotice('命令尚未就绪')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(command)
+      appendLog({
+        level: 'Info',
+        source: '前端',
+        module: 'settings/terminal-command',
+        content: `copied ${label}: ${command}`,
+      })
+      showNotice(`${label}已复制`)
+    } catch {
+      showNotice('复制失败')
+    }
+  }
 
   function appendLog(row: Omit<ConsoleLogRow, 'id' | 'time' | 'createdAt'> & { createdAt?: string }) {
     const createdAt = typeof row.createdAt === 'string'
@@ -2922,204 +2953,6 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
-  async function configureLocalMatrix() {
-    setBusy('matrix-configure')
-    try {
-      const result = await api.configureLocalMatrix()
-      setMatrixDiagnostics(result.diagnostics)
-      appendLog({
-        level: result.ok ? 'Info' : 'Warn',
-        source: '后端',
-        module: 'matrix/configure',
-        content: result.message,
-      })
-      showNotice(result.message)
-      await refreshDiagnostics(false)
-    } catch (error: any) {
-      appendLog({
-        level: 'Error',
-        source: '后端',
-        module: 'matrix/configure',
-        content: error?.message || '应用本地 Matrix 配置失败',
-      })
-      showNotice(error?.message || t('操作失败'))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function startLocalMatrix() {
-    setBusy('matrix-start')
-    try {
-      const result = await api.startLocalMatrix()
-      setMatrixDiagnostics(result.diagnostics)
-      appendLog({
-        level: result.ok ? 'Info' : 'Warn',
-        source: '后端',
-        module: 'matrix/start',
-        content: result.output ? `${result.message} · ${result.output}` : result.message,
-      })
-      showNotice(result.message)
-      await refreshDiagnostics(false)
-    } catch (error: any) {
-      appendLog({
-        level: 'Error',
-        source: '后端',
-        module: 'matrix/start',
-        content: error?.message || '启动 Tuwunel 失败',
-      })
-      showNotice(error?.message || t('操作失败'))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function prepareLocalRuntime() {
-    setBusy('local-runtime-prepare')
-    showNotice('正在准备本机运行环境，请稍候...')
-    appendLog({
-      level: 'Info',
-      source: '前端',
-      module: 'settings/local-runtime/prepare',
-      content: '开始准备本机运行环境：应用 Matrix 配置、启动 Tuwunel / MinIO、检查 OpenClaw runtime 并等待 Manager 健康检查。',
-    })
-    try {
-      const result = await api.prepareLocalRuntime()
-      setMatrixDiagnostics(result.diagnostics.matrix)
-      setControllerPlane(result.diagnostics.controllerPlane)
-      setManagerRuntime(result.diagnostics.managerRuntime)
-      setContainerRuntime(result.diagnostics.containerRuntime)
-      appendLog({
-        level: result.ok ? 'Info' : 'Warn',
-        source: '后端',
-        module: 'settings/local-runtime/prepare',
-        content: [
-          result.message,
-          ...result.steps.map((step) => `${step.ok ? 'OK' : 'FAIL'} ${step.label}: ${step.message}`),
-        ].join('\n'),
-      })
-      showNotice(result.message)
-      await refreshDiagnostics(false)
-    } catch (error: any) {
-      appendLog({
-        level: 'Error',
-        source: '后端',
-        module: 'settings/local-runtime/prepare',
-        content: formatSettingsError(error, '准备本机运行环境失败'),
-      })
-      showNotice(formatSettingsError(error, '准备本机运行环境失败'))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function stopLocalMatrix() {
-    setBusy('matrix-stop')
-    try {
-      const result = await api.stopLocalMatrix()
-      setMatrixDiagnostics(result.diagnostics)
-      appendLog({
-        level: result.ok ? 'Info' : 'Warn',
-        source: '后端',
-        module: 'matrix/stop',
-        content: result.output ? `${result.message} · ${result.output}` : result.message,
-      })
-      showNotice(result.message)
-      await refreshDiagnostics(false)
-    } catch (error: any) {
-      appendLog({
-        level: 'Error',
-        source: '后端',
-        module: 'matrix/stop',
-        content: error?.message || '停止 Tuwunel 失败',
-      })
-      showNotice(error?.message || t('操作失败'))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function runManagerRuntimeAction(type: ManagerRuntimeType, action: 'start' | 'stop' | 'health') {
-    const busyKey = `manager-${type}-${action}`
-    setBusy(busyKey)
-    try {
-      const result =
-        action === 'start'
-          ? await api.startManagerRuntime(type)
-          : action === 'stop'
-            ? await api.stopManagerRuntime(type)
-            : await api.checkManagerRuntimeHealth(type)
-      appendLog({
-        level: result.ok ? 'Info' : 'Warn',
-        source: '后端',
-        module: `manager-runtime/${type}/${action}`,
-        content: result.health?.error ? `${result.message} · ${result.health.error}` : result.message,
-      })
-      showNotice(result.message)
-      await refreshDiagnostics(false)
-    } catch (error: any) {
-      appendLog({
-        level: 'Error',
-        source: '后端',
-        module: `manager-runtime/${type}/${action}`,
-        content: error?.message || 'Manager Runtime 操作失败',
-      })
-      showNotice(error?.message || t('操作失败'))
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  async function copyContainerEnv() {
-    if (!containerRuntime) return
-    const lines = [
-      'AGENTHUB_CONTAINER_RUNTIME=docker',
-      'AGENTHUB_MANAGER_BACKEND=docker',
-      'AGENTHUB_WORKER_BACKEND=docker',
-      `AGENTHUB_CONTAINER_CONTROLLER_URL=${containerRuntime.controllerUrlForContainers}`,
-      `AGENTHUB_CONTAINER_MATRIX_URL=${containerRuntime.matrixUrlForContainers}`,
-      `AGENTHUB_CONTAINER_LLM_BASE_URL=${containerRuntime.llmBaseUrlForContainers}`,
-    ]
-    try {
-      await navigator.clipboard.writeText(lines.join('\n'))
-      appendLog({ level: 'Info', source: '前端', module: 'container-runtime', content: 'copied container runtime env' })
-      showNotice(t('容器运行时环境变量已复制'))
-    } catch {
-      showNotice(t('复制失败'))
-    }
-  }
-
-  async function prepareLocalContainerRuntime() {
-    setBusy('container-prepare')
-    try {
-      const result = await api.prepareLocalContainerRuntime()
-      setContainerRuntime(result.diagnostics)
-      appendLog({
-        level: result.ok ? 'Info' : 'Warn',
-        source: '后端',
-        module: 'container-runtime/prepare-local',
-        content: [
-          result.message,
-          result.infra.output ? `infra=${result.infra.output}` : null,
-          result.image.output ? `image=${result.image.output.slice(-1500)}` : null,
-          result.image.error ? `imageError=${result.image.error}` : null,
-        ].filter(Boolean).join('\n'),
-      })
-      showNotice(result.message)
-      await refreshDiagnostics(false)
-    } catch (error: any) {
-      appendLog({
-        level: 'Error',
-        source: '后端',
-        module: 'container-runtime/prepare-local',
-        content: formatSettingsError(error, '准备本地容器运行时失败'),
-      })
-      showNotice(formatSettingsError(error, '准备本地容器运行时失败'))
-    } finally {
-      setBusy(null)
-    }
-  }
-
   async function viewContainerLogs(name: string) {
     setBusy(`container-logs-${name}`)
     try {
@@ -3176,24 +3009,23 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-base font-semibold" style={{ color: 'var(--settings-text)' }}>
               <Server className="h-4 w-4" />
-              本机 HiClaw-lite 运行向导
+              HiClaw-lite 终端命令与诊断
             </div>
             <div className="mt-2 max-w-3xl text-sm leading-6" style={{ color: 'var(--settings-muted-text)' }}>
-              AgentHub Server 负责 Controller / UI backend；Tuwunel 提供真实 Matrix Room；OpenClaw Manager 常驻监听群聊。按顺序先准备 Matrix / Tuwunel，再准备容器运行时，最后启动 Manager。三步全绿后，才能直接创建群聊、@Manager 和 @Worker。
+              AgentHub Server 负责 Controller / UI backend；Tuwunel 提供真实 Matrix Room；OpenClaw Manager 常驻监听群聊。启停统一在终端运行脚本，控制台只保留命令复制、状态诊断和日志查看。
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void prepareLocalRuntime()}
-              disabled={busy === 'local-runtime-prepare'}
-              className="settings-soft-button h-9 px-4 text-sm"
-            >
-              {busy === 'local-runtime-prepare' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Server className="h-4 w-4" />}
-              一键准备本机运行
+            <button type="button" onClick={() => void copyCommandSnippet('启动脚本', startScriptCommand)} className="settings-soft-button h-9 px-4 text-sm">
+              <Copy className="h-4 w-4" />
+              复制启动命令
             </button>
-            <button type="button" disabled={busy === 'refresh'} onClick={() => void refreshDiagnostics()} className="settings-soft-button h-9 px-4 text-sm">
-              <RefreshCw className={cn('h-4 w-4', busy === 'refresh' && 'animate-spin')} />
+            <button type="button" onClick={() => void copyCommandSnippet('停止脚本', stopScriptCommand)} className="settings-soft-button h-9 px-4 text-sm">
+              <TerminalSquare className="h-4 w-4" />
+              复制停止命令
+            </button>
+            <button type="button" disabled={busy === "refresh"} onClick={() => void refreshDiagnostics()} className="settings-soft-button h-9 px-4 text-sm">
+              <RefreshCw className={cn('h-4 w-4', busy === "refresh" && "animate-spin")} />
               刷新状态
             </button>
           </div>
@@ -3222,11 +3054,15 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
 
         <div
           className="mt-4 rounded-xl border px-3 py-2 text-xs leading-5"
-          style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}
+          style={{ background: "var(--settings-panel-muted)", borderColor: "var(--settings-border)", color: "var(--settings-muted-text)" }}
         >
+          <div className="mb-2 space-y-1 font-mono text-[11px]" style={{ color: "var(--settings-text)" }}>
+            <div>启动：{startScriptCommand}</div>
+            <div>停止：{stopScriptCommand}</div>
+          </div>
           {localRuntimeReady
-            ? '当前主路径已可用：新群聊会走真实 Matrix Room，容器运行时已就绪，Manager 由 OpenClaw 常驻进程接管。'
-            : '当前还没完全就绪：先点“一键准备本机运行”；如果 Docker、OpenClaw 镜像或 Manager 失败，下面日志会明确显示卡在哪一步。'}
+            ? '当前主路径已可用：新群聊会走真实 Matrix Room，容器运行时已就绪，Manager 由 OpenClaw 常驻进程接管；后续启动或重启仍以终端脚本为准。'
+            : '控制台不再直接启动本机服务。请在项目根目录运行启动脚本；下方诊断会显示 Matrix、Docker / OpenClaw runtime 或 Manager 卡在哪一步。'}
         </div>
       </div>
 
@@ -3374,9 +3210,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               title="Manager Runtime"
               status={managerRuntimeStatus}
               detail={managerRuntimeDetail}
-              action="健康检查"
-              busy={busy === `manager-${managerRuntime?.activeRuntimeType ?? 'openclaw'}-health`}
-              onAction={() => void runManagerRuntimeAction(managerRuntime?.activeRuntimeType ?? 'openclaw', 'health')}
+              action="复制启动命令"
+              busy={false}
+              onAction={() => void copyCommandSnippet('启动脚本', startScriptCommand)}
             />
           </div>
           <div className="min-w-[17rem] flex-1">
@@ -3385,9 +3221,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               title="容器运行时"
               status={containerRuntimeStatus}
               detail={containerRuntimeDetail}
-              action="复制环境变量"
-              busy={busy === 'refresh'}
-              onAction={() => void copyContainerEnv()}
+              action="复制容器环境"
+              busy={false}
+              onAction={() => void copyCommandSnippet('容器环境变量', containerEnvCommand)}
             />
           </div>
           <div className="min-w-[17rem] flex-1">
@@ -3453,49 +3289,16 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                   {managerRuntime.message}
                 </div>
               </div>
-              {managerRuntime.activeStatus.connectionMode === 'external-endpoint' ? (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void runManagerRuntimeAction('openclaw', 'health')}
-                    disabled={busy === 'manager-openclaw-health'}
-                    className="settings-soft-button h-8 px-3 text-xs"
-                  >
-                    {busy === 'manager-openclaw-health' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                    检查连接
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void runManagerRuntimeAction('openclaw', 'start')}
-                    disabled={busy === 'manager-openclaw-start'}
-                    className="settings-soft-button h-8 px-3 text-xs"
-                  >
-                    {busy === 'manager-openclaw-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
-                    启动本地 OpenClaw
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void runManagerRuntimeAction('openclaw', 'health')}
-                    disabled={busy === 'manager-openclaw-health'}
-                    className="settings-soft-button h-8 px-3 text-xs"
-                  >
-                    {busy === 'manager-openclaw-health' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                    检查本地 OpenClaw
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void runManagerRuntimeAction('openclaw', 'stop')}
-                    disabled={busy === 'manager-openclaw-stop'}
-                    className="settings-soft-button h-8 px-3 text-xs"
-                  >
-                    {busy === 'manager-openclaw-stop' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                    停止本地 OpenClaw
-                  </button>
-                </div>
-              )}
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => void copyCommandSnippet('启动脚本', startScriptCommand)} className="settings-soft-button h-8 px-3 text-xs">
+                  <Copy className="h-3.5 w-3.5" />
+                  复制启动脚本
+                </button>
+                <button type="button" onClick={() => void copyCommandSnippet('停止脚本', stopScriptCommand)} className="settings-soft-button h-8 px-3 text-xs">
+                  <TerminalSquare className="h-3.5 w-3.5" />
+                  复制停止脚本
+                </button>
+              </div>
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -3611,20 +3414,20 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               <div>
                 <div className="font-semibold">容器运行时控制面</div>
                 <div className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-                  {'推荐顺序：准备本地容器运行时 -> 复制环境变量 -> 重启 AgentHub Server -> 启动 OpenClaw Manager。AgentHub Server 仍在本机运行；Docker 只承载 Tuwunel / MinIO / OpenClaw Manager / OpenClaw Worker。'}
+                  {'推荐顺序：在项目根目录运行启动脚本 -> 按需复制容器环境变量 -> 重启 AgentHub Server。AgentHub Server 仍在本机运行；Docker 只承载 Tuwunel / MinIO / OpenClaw Manager / OpenClaw Worker。'}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => void prepareLocalContainerRuntime()} disabled={busy === 'container-prepare'} className="settings-soft-button h-8 px-3 text-xs">
-                  {busy === 'container-prepare' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
-                  准备本地容器运行时
-                </button>
-                <button type="button" onClick={() => void copyContainerEnv()} className="settings-soft-button h-8 px-3 text-xs">
+                <button type="button" onClick={() => void copyCommandSnippet('容器环境变量', containerEnvCommand)} className="settings-soft-button h-8 px-3 text-xs">
                   <Copy className="h-3.5 w-3.5" />
-                  复制容器环境变量
+                  复制容器环境
                 </button>
-                <button type="button" onClick={() => void refreshDiagnostics()} disabled={busy === 'refresh'} className="settings-soft-button h-8 px-3 text-xs">
-                  <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
+                <button type="button" onClick={() => void copyCommandSnippet('启动脚本', startScriptCommand)} className="settings-soft-button h-8 px-3 text-xs">
+                  <TerminalSquare className="h-3.5 w-3.5" />
+                  复制启动脚本
+                </button>
+                <button type="button" onClick={() => void refreshDiagnostics()} disabled={busy === "refresh"} className="settings-soft-button h-8 px-3 text-xs">
+                  <RefreshCw className={cn('h-3.5 w-3.5', busy === "refresh" && "animate-spin")} />
                   刷新
                 </button>
               </div>
@@ -3671,7 +3474,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
 
             {!containerRuntime.docker.available && (
               <div className="mt-3 rounded-xl border px-3 py-2 text-xs leading-5" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
-                当前 Docker 不可用。先点“准备本地容器运行时”启动 Tuwunel / MinIO 并构建 OpenClaw 镜像；如果你刚切换了容器后端环境变量，重启 AgentHub Server 才会让当前进程读到新配置。
+                当前 Docker 不可用。请在项目根目录运行 `bash infra/start-hiclaw-lite.sh` 启动 Tuwunel / MinIO 并构建 OpenClaw 镜像；如果你刚切换了容器后端环境变量，重启 AgentHub Server 才会让当前进程读到新配置。
               </div>
             )}
           </div>
@@ -3702,17 +3505,13 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => void configureLocalMatrix()} disabled={busy === 'matrix-configure'} className="settings-soft-button h-8 px-3 text-xs">
-                    {busy === 'matrix-configure' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Settings className="h-3.5 w-3.5" />}
-                    应用本地配置
+                  <button type="button" onClick={() => void copyCommandSnippet('启动脚本', startScriptCommand)} className="settings-soft-button h-8 px-3 text-xs">
+                    <Copy className="h-3.5 w-3.5" />
+                    复制启动脚本
                   </button>
-                  <button type="button" onClick={() => void startLocalMatrix()} disabled={busy === 'matrix-start'} className="settings-soft-button h-8 px-3 text-xs">
-                    {busy === 'matrix-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
-                    启动 Tuwunel
-                  </button>
-                  <button type="button" onClick={() => void stopLocalMatrix()} disabled={busy === 'matrix-stop'} className="settings-soft-button h-8 px-3 text-xs">
-                    {busy === 'matrix-stop' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                    停止 Tuwunel
+                  <button type="button" onClick={() => void copyCommandSnippet('停止脚本', stopScriptCommand)} className="settings-soft-button h-8 px-3 text-xs">
+                    <TerminalSquare className="h-3.5 w-3.5" />
+                    复制停止脚本
                   </button>
                 </div>
               </div>

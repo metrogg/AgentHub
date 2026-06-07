@@ -52,13 +52,15 @@ export function projectRoomTimeline(input: {
 }): RoomTimelineProjection {
   const participantsById = new Map(input.participants.map((participant) => [participant.id, participant]))
   const controls = timelineProjectionControls(input.timeline)
-  const messages = dedupeProjectedTimelineMessages(input.timeline
-    .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
-    .filter((event) => !isMessageControlEvent(event))
-    .filter((event) => !timelineEventIsRedacted(event, controls))
-    .map((event) => timelineEventToMessage(event, input.room, input.sessionId, participantsById))
-    .filter((message): message is Message => Boolean(message))
-    .map((message) => applyTimelineControlsToMessage(message, controls)))
+  const messages = collapseTimelineStreamMessages(
+    dedupeProjectedTimelineMessages(input.timeline
+      .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
+      .filter((event) => !isMessageControlEvent(event))
+      .filter((event) => !timelineEventIsRedacted(event, controls))
+      .map((event) => timelineEventToMessage(event, input.room, input.sessionId, participantsById))
+      .filter((message): message is Message => Boolean(message))
+      .map((message) => applyTimelineControlsToMessage(message, controls))),
+  )
   const events = input.timeline.flatMap((event) => timelineEventToAgUiEvents(event, input.room, input.sessionId))
   return {
     room: input.room,
@@ -67,6 +69,30 @@ export function projectRoomTimeline(input: {
     events,
     messageControl: input.timeline.length === 1 ? timelineEventToMessageControl(input.timeline[0]!) : undefined,
   }
+}
+
+export function mergeRoomTimelineStreamMessages(messages: Message[], incoming: Message[]): Message[] {
+  let output = [...messages]
+  for (const message of incoming) {
+    const existingIndex = output.findIndex((item) => item.id === message.id)
+    if (existingIndex >= 0) {
+      output = output.map((item, index) => (index === existingIndex ? message : item))
+      continue
+    }
+
+    const previous = output[output.length - 1]
+    const streamKey = roomTimelineStreamKey(message)
+    if (previous && streamKey && roomTimelineStreamKey(previous) === streamKey) {
+      output = [
+        ...output.slice(0, -1),
+        mergeTimelineStreamMessage(previous, message),
+      ]
+      continue
+    }
+
+    output = [...output, message]
+  }
+  return output
 }
 
 export function applyRoomTimelineMessageControl(
@@ -321,6 +347,101 @@ function controlTargetIds(control: RoomTimelineMessageControl) {
   ]
 }
 
+function collapseTimelineStreamMessages(messages: Message[]) {
+  const output: Message[] = []
+  for (const message of messages) {
+    const previous = output[output.length - 1]
+    const streamKey = roomTimelineStreamKey(message)
+    if (previous && streamKey && roomTimelineStreamKey(previous) === streamKey) {
+      output[output.length - 1] = mergeTimelineStreamMessage(previous, message)
+      continue
+    }
+    output.push(message)
+  }
+  return output
+}
+
+function roomTimelineStreamKey(message: Message) {
+  const metadata = asRecord(message.metadata) ?? {}
+  const roomTimeline = asRecord(metadata.roomTimeline)
+  const eventType = asString(roomTimeline?.eventType)
+  if (eventType !== 'manager.message' && eventType !== 'worker.message') return null
+  if (asString(metadata.actionType)) return null
+
+  const messageType = asString(metadata.messageType)
+  if (
+    messageType &&
+    messageType !== MessageType.Text &&
+    messageType !== MessageType.Markdown &&
+    messageType !== 'reply' &&
+    messageType !== 'clarify'
+  ) {
+    return null
+  }
+
+  const traceId = asString(metadata.traceId)
+  const senderParticipantId =
+    asString(metadata.senderParticipantId) ??
+    asString(metadata.senderWorkerInstanceId) ??
+    asString(metadata.senderWorkspaceAgentId) ??
+    message.senderId
+  if (!traceId || !senderParticipantId) return null
+  return `${traceId}:${senderParticipantId}`
+}
+
+function mergeTimelineStreamMessage(base: Message, next: Message): Message {
+  const baseMetadata = asRecord(base.metadata) ?? {}
+  const nextMetadata = asRecord(next.metadata) ?? {}
+  const baseRoomTimeline = asRecord(baseMetadata.roomTimeline)
+  const nextRoomTimeline = asRecord(nextMetadata.roomTimeline)
+  const baseStream = asRecord(baseMetadata.roomTimelineStream)
+  const nextStream = asRecord(nextMetadata.roomTimelineStream)
+  const eventIds = uniqueStrings([
+    ...asStringArray(baseStream?.eventIds),
+    ...asStringArray(nextStream?.eventIds),
+    asString(baseRoomTimeline?.eventId),
+    asString(nextRoomTimeline?.eventId),
+  ])
+  const providerEventIds = uniqueStrings([
+    ...asStringArray(baseStream?.providerEventIds),
+    ...asStringArray(nextStream?.providerEventIds),
+    asString(baseRoomTimeline?.providerEventId),
+    asString(nextRoomTimeline?.providerEventId),
+  ])
+  const content = mergeTimelineStreamContent(base.content, next.content)
+  const traceId = asString(nextMetadata.traceId) ?? asString(baseMetadata.traceId)
+  const senderParticipantId =
+    asString(nextMetadata.senderParticipantId) ?? asString(baseMetadata.senderParticipantId)
+
+  return {
+    ...base,
+    type: next.type,
+    content,
+    metadata: {
+      ...baseMetadata,
+      ...nextMetadata,
+      displayContent: content,
+      roomTimeline: nextMetadata.roomTimeline ?? baseMetadata.roomTimeline,
+      roomTimelineStream: {
+        traceId,
+        senderParticipantId,
+        eventIds,
+        providerEventIds,
+        latestEventId: asString(nextRoomTimeline?.eventId) ?? eventIds[eventIds.length - 1] ?? null,
+        latestProviderEventId: asString(nextRoomTimeline?.providerEventId) ?? providerEventIds[providerEventIds.length - 1] ?? null,
+      },
+    },
+  }
+}
+
+function mergeTimelineStreamContent(base: string, next: string) {
+  if (!base) return next
+  if (!next) return base
+  if (next.startsWith(base)) return next
+  if (base.startsWith(next)) return base
+  return `${base}${next}`
+}
+
 function timelineEventToMessage(
   event: TimelineEvent,
   room: Room,
@@ -464,17 +585,6 @@ function isLiveCodeAgentRunMetadataEvent(event: TimelineEvent) {
     asString(metadata?.kind) === 'worker-runtime.progress' &&
     asString(metadata?.type) === 'code-agent-run'
   )
-}
-
-function isDirectWorkerRuntimeRunningStatusEvent(
-  event: TimelineEvent,
-  room: Room,
-  metadata: Record<string, unknown> | null,
-) {
-  if (room.kind !== 'direct' || event.type !== 'task.progress') return false
-  const kind = asString(metadata?.kind)
-  if (kind !== 'worker-runtime.started' && kind !== 'worker-runtime.progress') return false
-  return codeAgentStatusFromWorkerRuntimeEvent(event, metadata) === 'running'
 }
 
 function shouldAttachCodeAgentRunToMessage(
@@ -925,6 +1035,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))))
 }
 
 function asNumber(value: unknown): number | undefined {
