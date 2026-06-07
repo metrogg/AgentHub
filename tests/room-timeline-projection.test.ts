@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { MessageType, SenderType } from '../packages/shared/src/index'
 import type { Room, RoomParticipant, TimelineEvent } from '../apps/web/src/lib/api'
-import { projectRoomTimeline } from '../apps/web/src/lib/roomTimeline'
+import { codeAgentRunFromWorkerRuntimeEvent, projectRoomTimeline } from '../apps/web/src/lib/roomTimeline'
 
 const room: Room = {
   id: 'room-1',
@@ -20,6 +20,17 @@ const room: Room = {
   metadata: {},
   createdAt: '2026-06-04T00:00:00.000Z',
   updatedAt: '2026-06-04T00:00:00.000Z',
+}
+
+const directRoom: Room = {
+  ...room,
+  id: 'direct-room-1',
+  kind: 'direct',
+  sessionId: 'direct-session-1',
+  runId: null,
+  taskId: null,
+  taskThreadId: null,
+  title: 'Direct Builder',
 }
 
 const worker: RoomParticipant = {
@@ -52,6 +63,82 @@ function event(partial: Partial<TimelineEvent> & Pick<TimelineEvent, 'id' | 'typ
 }
 
 describe('room timeline projection', () => {
+  test('projects direct room final worker runtime events as code-agent cards and hides live metadata', () => {
+    const liveMetadataEvent = event({
+      id: 'event-live-metadata',
+      type: 'task.progress',
+      sequence: 2,
+      body: 'Worker runtime metadata updated.',
+      metadata: {
+        kind: 'worker-runtime.progress',
+        hiddenFromChat: true,
+        type: 'code-agent-run',
+        status: 'running',
+        runtime: 'opencode',
+        command: 'opencode run',
+        durationMs: 20,
+        exitCode: 0,
+        commands: [{ id: 'cmd-1', command: 'bun test' }],
+        files: [{ path: 'src/app.ts', status: 'modified' }],
+        steps: [{ id: 'step-1', kind: 'command', status: 'running', title: 'Run tests' }],
+      },
+    })
+    const liveRun = codeAgentRunFromWorkerRuntimeEvent(liveMetadataEvent)
+    expect(liveRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: 'opencode',
+      command: 'opencode run',
+    })
+
+    const projection = projectRoomTimeline({
+      room: directRoom,
+      participants: [worker],
+      sessionId: 'direct-session-1',
+      timeline: [
+        event({
+          id: 'event-started',
+          type: 'task.progress',
+          sequence: 1,
+          body: 'Direct Builder started opencode runtime.',
+          metadata: {
+            kind: 'worker-runtime.started',
+            status: 'running',
+            runtimeType: 'opencode',
+            workspaceAgentId: 'agent-1',
+          },
+        }),
+        liveMetadataEvent,
+        event({
+          id: 'event-completed',
+          type: 'worker.message',
+          sequence: 3,
+          body: 'done',
+          metadata: {
+            kind: 'worker-runtime.completed',
+            status: 'completed',
+            runtimeType: 'opencode',
+            workspaceAgentId: 'agent-1',
+            codeAgentRun: {
+              ...liveRun,
+              status: 'completed',
+              finalMessage: 'done',
+            },
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages.map((message) => message.id)).toEqual(['room:event-completed'])
+    expect(projection.messages[0]?.metadata?.codeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'completed',
+      runtime: 'opencode',
+      command: 'opencode run',
+      finalMessage: 'done',
+    })
+  })
+
   test('projects manager/worker timeline into visible messages and task board events', () => {
     const projection = projectRoomTimeline({
       room,

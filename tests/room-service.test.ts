@@ -242,6 +242,100 @@ describe('RoomService Matrix room adapter contract', () => {
     expect(events.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
   })
 
+  test('routes direct room human messages to Worker runtime using the session agent over stale room metadata', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Direct Dispatch Workspace',
+        goal: 'Verify direct agent chat dispatch',
+      })
+      .returning()
+    const [staleAgent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Old Direct Worker',
+        role: 'Old worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const [currentAgent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Current Direct Worker',
+        role: 'Current worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'codex',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Current Direct Worker',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: currentAgent!.id,
+        metadata: { kind: 'agent-direct' },
+      })
+      .returning()
+
+    const room = await roomService.ensureRoomForSession(session!.id, 'default-user')
+    await roomService.addWorkerParticipant(room.id, staleAgent!.id)
+    await db
+      .update(rooms)
+      .set({
+        metadata: {
+          ...(room.metadata ?? {}),
+          compatibility: {
+            source: 'session',
+            sessionType: 'direct',
+            workspaceAgentId: staleAgent!.id,
+          },
+        },
+      })
+      .where(eq(rooms.id, room.id))
+
+    const directCalls: any[] = []
+    const originalRunDirectRoom = workerRuntimeService.runDirectRoom
+    ;(workerRuntimeService as any).runDirectRoom = async (input: any) => {
+      directCalls.push(input)
+      return { roomId: input.roomId, appendedEventIds: [] }
+    }
+
+    try {
+      const { event } = await appendHumanMessageRoomFirst({
+        session: session!,
+        userId: 'default-user',
+        userName: 'Tester',
+        content: 'please respond',
+        type: 'text',
+      })
+
+      await waitForCondition(
+        () => directCalls.length,
+        (count) => count === 1,
+        { description: 'direct room dispatch should run after appending the human timeline event' },
+      )
+      expect(directCalls).toHaveLength(1)
+      expect(directCalls[0]).toMatchObject({
+        roomId: room.id,
+        ownerId: 'default-user',
+        workspaceAgentId: currentAgent!.id,
+        prompt: 'please respond',
+      })
+      expect(directCalls[0].workspaceAgentId).not.toBe(staleAgent!.id)
+      expect(event.metadata?.kind).toBe('chat.message')
+    } finally {
+      ;(workerRuntimeService as any).runDirectRoom = originalRunDirectRoom
+    }
+  })
+
   test('creates a task room and task.assigned timeline event for a task thread', async () => {
     const [workspace] = await db
       .insert(workspaces)
@@ -600,6 +694,111 @@ describe('RoomService Matrix room adapter contract', () => {
       const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room!.id))
       expect(events[0]?.metadata?.matrix?.usedParticipantToken).toBe(true)
       expect(events[0]?.metadata?.matrix?.senderUserId).toBe('@worker-matrix-agent-1:agenthub.local')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('Matrix adapter rejoins a locally joined sender before sending when homeserver membership drifted to leave', async () => {
+    const calls: Array<{ method: string; path: string; auth: string | null; body: any }> = []
+    const originalFetch = globalThis.fetch
+    let joinsBeforeAppend = 0
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      const auth = init?.headers
+        ? ((init.headers as Record<string, string>).Authorization ?? null)
+        : null
+      calls.push({ method: init?.method ?? 'GET', path: parsed.pathname, auth, body })
+      if (parsed.pathname.endsWith('/register')) {
+        const username = body.username
+        return Response.json({
+          user_id: `@${username}:agenthub.local`,
+          access_token: `token-${username}`,
+        })
+      }
+      if (parsed.pathname.includes('/profile/')) return Response.json({})
+      if (parsed.pathname.includes('/invite')) return Response.json({})
+      if (parsed.pathname.includes('/_matrix/client/v3/join/')) {
+        return Response.json({ room_id: '!drift-room:agenthub.local' })
+      }
+      if (parsed.pathname.includes('/send/m.room.message/')) {
+        const joinCalls = calls.filter((call) => call.path.includes('/join/')).length
+        if (joinCalls <= joinsBeforeAppend) {
+          return Response.json(
+            {
+              errcode: 'M_FORBIDDEN',
+              error: "Auth check failed: sender's membership `leave` is not `join`",
+            },
+            { status: 403 },
+          )
+        }
+        return Response.json({ event_id: '$drift-event-1' })
+      }
+      return Response.json({}, { status: 404 })
+    }) as typeof fetch
+
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Drift Workspace',
+        goal: 'Verify Matrix rejoin before send',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        id: 'matrix-drift-agent-1',
+        workspaceId: workspace!.id,
+        name: 'Drift Worker',
+        role: 'Worker',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!drift-room:agenthub.local',
+        kind: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        title: 'Drift Direct Room',
+      })
+      .returning()
+    const adapter = new MatrixRoomAdapter({
+      homeserverUrl: 'http://matrix.test',
+      accessToken: 'admin-token',
+      serverName: 'agenthub.local',
+      autoInviteParticipants: true,
+      autoJoinParticipants: true,
+    })
+
+    try {
+      const worker = await adapter.addParticipant({
+        roomId: room!.id,
+        participantType: 'worker',
+        workspaceAgentId: agent!.id,
+        displayName: 'Drift Worker',
+        role: 'member',
+      })
+      joinsBeforeAppend = calls.filter((call) => call.path.includes('/join/')).length
+
+      await adapter.appendTimelineEvent({
+        roomId: room!.id,
+        senderParticipantId: worker.id,
+        senderType: 'worker',
+        type: 'worker.message',
+        body: 'still here',
+      })
+
+      const joinCalls = calls.filter((call) => call.path.includes('/join/'))
+      const sendCalls = calls.filter((call) => call.path.includes('/send/m.room.message/'))
+      expect(joinCalls.length).toBeGreaterThan(joinsBeforeAppend)
+      expect(sendCalls).toHaveLength(1)
+      expect(sendCalls[0]?.auth).toContain('worker-matrix-drift-agent-1')
     } finally {
       globalThis.fetch = originalFetch
     }

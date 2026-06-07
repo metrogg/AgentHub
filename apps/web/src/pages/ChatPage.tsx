@@ -63,9 +63,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (!sessionId) return
     if (sessionId === currentSessionId) return
-    if (!sessionsBootstrapped) return
-    const exists = sessions.some((s) => s.id === sessionId)
-    if (!exists) {
+    // If sessions are loaded and this session doesn't exist, redirect immediately
+    if (sessionsBootstrapped && sessions.length > 0 && !sessions.some((s) => s.id === sessionId)) {
       navigate('/', { replace: true })
       return
     }

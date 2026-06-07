@@ -18,6 +18,7 @@ import {
 } from '../lib/api'
 import {
   applyRoomTimelineMessageControl,
+  codeAgentRunFromWorkerRuntimeEvent,
   projectRoomTimeline,
   type RoomTimelineProjection,
 } from '../lib/roomTimeline'
@@ -1246,6 +1247,63 @@ function applyLiveMessageMetadataProjection(
   }
 }
 
+function applyDirectRoomRuntimeProjection(
+  current: LiveRuntimeProjection,
+  input: {
+    room: Room
+    event: TimelineEvent
+    participantsById: Map<string, RoomParticipant>
+  },
+): LiveRuntimeProjection {
+  if (input.room.kind !== 'direct') return current
+  const run = codeAgentRunFromWorkerRuntimeEvent(input.event)
+  if (!run) return current
+  if (run.status !== 'running') return clearLiveRuntimeProjection()
+
+  const metadata = asRecord(input.event.metadata)
+  const participant = input.event.senderParticipantId
+    ? input.participantsById.get(input.event.senderParticipantId)
+    : undefined
+  const agentName =
+    asString(metadata?.agentName) ??
+    asString(metadata?.senderName) ??
+    participant?.displayName ??
+    'Agent'
+
+  return {
+    ...clearRuntimeActivity(),
+    streamingMessage: {
+      id: `room-runtime:${input.event.id}`,
+      content: '',
+      agentId:
+        asString(metadata?.workspaceAgentId) ??
+        participant?.workspaceAgentId ??
+        input.event.senderParticipantId ??
+        undefined,
+      agentName,
+    },
+    streamingCodeAgentRun: mergeCodeAgentRuns(current.streamingCodeAgentRun, run),
+  }
+}
+
+function mergeCodeAgentRuns(
+  current: CodeAgentRunMetadata | null,
+  next: CodeAgentRunMetadata,
+): CodeAgentRunMetadata {
+  if (!current || current.runtime !== next.runtime) return next
+  return {
+    ...current,
+    ...next,
+    commands: next.commands.length ? next.commands : current.commands,
+    files: next.files.length ? next.files : current.files,
+    toolCalls: next.toolCalls?.length ? next.toolCalls : current.toolCalls,
+    artifacts: next.artifacts?.length ? next.artifacts : current.artifacts,
+    logs: next.logs?.length ? next.logs : current.logs,
+    steps: next.steps?.length ? next.steps : current.steps,
+    finalMessage: next.finalMessage ?? current.finalMessage,
+  }
+}
+
 function reduceRuntimeActivityProjection(
   current: RuntimeActivityProjection,
   event: AgUiEventPayload,
@@ -2240,6 +2298,7 @@ function applyResourceSnapshotToTaskBoard(
 
 export const __chatStoreTestHooks = {
   applyAgUiEventToState,
+  applyDirectRoomRuntimeProjection,
   applyAgUiRunStatus,
   applyTaskBoardRunStatus,
   applyResourceSnapshotToTaskBoard,
@@ -2964,7 +3023,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 resolvedSnapshot.taskBoard,
               )
             : upsertSessionList(s.sessions, session),
-          messages: normalizedMessages,
+          messages: mergeMessages(normalizedMessages, s.messages.filter((m) => !m.id.startsWith('local-'))),
           loadingMessages: false,
           ...(resolvedSnapshot
               ? {
@@ -3000,7 +3059,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 resolvedSnapshot.taskBoard,
               )
             : upsertSessionList(s.sessions, session),
-          messages: normalizedMessages,
+          messages: mergeMessages(normalizedMessages, s.messages.filter((m) => !m.id.startsWith('local-'))),
           loadingMessages: false,
           ...(resolvedSnapshot
             ? {
@@ -3193,18 +3252,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ),
       }))
       await get().fetchSessions()
-      set((state) => {
-        if (
-          state.agentActivity?.sessionId === sessionId &&
-          (state.agentActivity.phase === 'planning' || state.agentActivity.phase === 'thinking')
-        ) {
-          return { agentTyping: true, taskBoard: state.taskBoard, agentTabs: state.agentTabs }
-        }
-        return {
-          agentTyping: false,
-          agentActivity: null,
-        }
-      })
+      // Delay clearing agentTyping to let WS streaming events arrive first.
+      // If a WS MessageCompleted/MessageStream arrives before the timeout,
+      // it will handle cleanup. If not (sync reply), this timeout clears it.
+      window.setTimeout(() => {
+        set((s) => {
+          if (s.streamingMessage || s.streamingCodeAgentRun || s.currentSessionId !== sessionId) return {}
+          return { agentTyping: false, agentActivity: null }
+        })
+      }, 3000)
     } catch (error) {
       set((s) => ({
         messages: s.messages.filter((message) => message.id !== optimisticId),
@@ -3249,6 +3305,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         )
         set((s) => ({
           messages: s.messages.filter((message) => !removed.has(message.id)),
+        }))
+      }
+      if (result.message) {
+        updateCachedMessages(sessionId, (messages) => upsertMessage(messages, result.message!))
+        set((s) => ({
+          messages: upsertMessage(s.messages, result.message!),
         }))
       }
       await get().fetchSessions()
@@ -3547,6 +3609,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }))
           }
         }
+        if (projectedSessionId === sessionId) {
+          set((s) =>
+            applyDirectRoomRuntimeProjection(
+              {
+                agentTyping: s.agentTyping,
+                agentActivity: s.agentActivity,
+                streamingMessage: s.streamingMessage,
+                streamingCodeAgentRun: s.streamingCodeAgentRun,
+              },
+              {
+                room: projected.projection.room,
+                event: ((e.payload ?? {}) as RoomTimelineWsPayload).event!,
+                participantsById: projected.projection.participantsById,
+              },
+            ),
+          )
+        }
         if (roomTimelineShouldRefreshResources(projected.projection, projectedSessionId, sessionId)) {
           scheduleSessionRefresh(async () => {
             if (get().currentSessionId === projectedSessionId) {
@@ -3594,7 +3673,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
                       resolvedSnapshot.taskBoard,
                     )
                   : upsertSessionList(s.sessions, session),
-                messages: normalizedMessages,
+                // Merge instead of replace: preserve any in-flight streaming message
+                // that hasn't been persisted to the server yet.
+                messages: s.streamingMessage
+                  ? mergeMessages(normalizedMessages, s.messages.filter((m) => m.id === s.streamingMessage!.id))
+                  : normalizedMessages,
                 ...(resolvedSnapshot
                   ? {
                       taskBoard: resolvedSnapshot.taskBoard,

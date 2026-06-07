@@ -29,6 +29,8 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
     const runtime = runtimeRegistry.resolveForProfile(profile)
     const chunks: string[] = []
     const artifacts: WorkerRuntimeResult['artifacts'] = []
+    let latestMetadata: Record<string, unknown> | null = null
+    let terminalStatusFromMetadata: WorkerRuntimeResult['status'] | null = null
 
     yield {
       type: 'progress',
@@ -119,23 +121,23 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
           continue
         }
         if (chunk.kind === 'metadata') {
+          latestMetadata = chunk.metadata
+          terminalStatusFromMetadata = workerStatusFromCodeAgentMetadata(chunk.metadata) ?? terminalStatusFromMetadata
           if (chunk.metadata?.sessionId && typeof chunk.metadata.sessionId === 'string') {
             sessionId = chunk.metadata.sessionId
           }
           continue
         }
         chunks.push(chunk.text)
-        yield {
-          type: 'message',
-          message: chunk.text,
-        }
       }
       const message = chunks.join('').trim()
+      const status = terminalStatusFromMetadata ?? 'completed'
       return {
         runtimeType: profile.runtimeType,
-        status: 'completed',
-        message,
+        status,
+        message: message || (status === 'completed' ? undefined : 'Worker execution failed.'),
         artifacts,
+        metadata: latestMetadata ?? undefined,
         sessionId,
       }
     } catch (error: any) {
@@ -153,4 +155,12 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
       }
     }
   }
+}
+
+function workerStatusFromCodeAgentMetadata(metadata: Record<string, unknown>) {
+  if (metadata.type !== 'code-agent-run') return null
+  if (metadata.status === 'completed') return 'completed'
+  if (metadata.status === 'cancelled') return 'cancelled'
+  if (metadata.status === 'failed' || metadata.status === 'timed-out') return 'failed'
+  return null
 }

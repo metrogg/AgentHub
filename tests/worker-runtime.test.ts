@@ -8,6 +8,7 @@ const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
 const roomBridgeApi = await import('../apps/server/src/services/rooms/room-chat-bridge')
 const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime')
+const localWorkerRuntimeApi = await import('../apps/server/src/services/worker-runtime/local-worker-runtime')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const workerRuntimeResourcesApi = await import('../apps/server/src/services/orchestrator/worker-runtime-resources')
 const workerProtocolApi = await import('../apps/server/src/services/worker-runtime/worker-result-listener')
@@ -44,6 +45,194 @@ type WorkerRuntimeEvent = workerRuntimeApi.WorkerRuntimeEvent
 type WorkerRuntimeResult = workerRuntimeApi.WorkerRuntimeResult
 
 describe('WorkerRuntime task room integration', () => {
+  test('direct rooms emit started and final code-agent run metadata without showing live metadata bubbles', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Direct Runtime Workspace',
+        goal: 'Run direct rooms',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Direct Builder',
+        role: 'Direct worker',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const [directSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Direct Builder',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        metadata: { kind: 'agent-direct' },
+      })
+      .returning()
+    const room = await roomService.ensureRoomForSession(directSession!.id, 'default-user')
+    await roomService.addWorkerParticipant(room.id, agent!.id)
+
+    const originalExecuteTask = localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype.executeTask
+    ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
+      async function* () {
+        yield {
+          type: 'progress',
+          message: 'Worker runtime metadata updated.',
+          metadata: {
+            type: 'code-agent-run',
+            status: 'running',
+            runtime: 'opencode',
+            command: 'opencode run',
+            durationMs: 10,
+            exitCode: 0,
+            commands: [{ id: 'cmd-1', command: 'bun test' }],
+            files: [{ path: 'src/app.ts', status: 'modified' }],
+            steps: [{ id: 'step-1', kind: 'command', status: 'running', title: 'Run tests' }],
+          },
+        }
+        return {
+          runtimeType: 'code-agent',
+          status: 'completed',
+          message: 'done',
+          artifacts: [],
+        }
+      }
+
+    try {
+      const service = new WorkerRuntimeService()
+      await service.runDirectRoom({
+        roomId: room.id,
+        ownerId: 'default-user',
+        workspaceAgentId: agent!.id,
+        prompt: 'please run',
+      })
+
+      const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+      const startedEvent = events.find((event) => event.metadata?.kind === 'worker-runtime.started')
+      expect(startedEvent).toBeTruthy()
+      expect(startedEvent?.metadata?.runtimeType).toBe('opencode')
+      expect(startedEvent?.metadata?.hiddenFromChat).toBe(true)
+
+      const liveMetadataEvent = events.find(
+        (event) =>
+          event.metadata?.kind === 'worker-runtime.progress' &&
+          event.metadata?.type === 'code-agent-run',
+      )
+      expect(liveMetadataEvent?.metadata?.hiddenFromChat).toBe(true)
+      expect(liveMetadataEvent?.metadata?.runtimeType).toBe('opencode')
+
+      const completedEvent = events.find((event) => event.metadata?.kind === 'worker-runtime.completed')
+      expect(completedEvent?.metadata?.runtimeType).toBe('opencode')
+      expect(completedEvent?.metadata?.codeAgentRun).toMatchObject({
+        type: 'code-agent-run',
+        status: 'completed',
+        runtime: 'opencode',
+        command: 'opencode run',
+        finalMessage: 'done',
+      })
+    } finally {
+      ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
+        originalExecuteTask
+    }
+  })
+
+  test('direct rooms mark failed code-agent runs as failed terminal events', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Direct Runtime Failure Workspace',
+        goal: 'Run direct room failures',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Direct Failure Worker',
+        role: 'Direct worker',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'claude-code',
+      })
+      .returning()
+    const [directSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Direct Failure Worker',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        metadata: { kind: 'agent-direct' },
+      })
+      .returning()
+    const room = await roomService.ensureRoomForSession(directSession!.id, 'default-user')
+    await roomService.addWorkerParticipant(room.id, agent!.id)
+
+    const originalExecuteTask = localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype.executeTask
+    ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
+      async function* () {
+        yield {
+          type: 'progress',
+          message: 'Worker runtime metadata updated.',
+          metadata: {
+            type: 'code-agent-run',
+            status: 'failed',
+            runtime: 'claude-code',
+            command: 'claude',
+            durationMs: 42,
+            exitCode: 1,
+            commands: [],
+            files: [],
+            logs: [{ id: 'log-1', stream: 'stderr', text: 'ConnectionRefused' }],
+            steps: [{ id: 'step-1', kind: 'status', status: 'failed', title: 'Run Claude Code' }],
+          },
+        }
+        return {
+          runtimeType: 'code-agent',
+          status: 'failed',
+          message: 'API Error: Unable to connect to API (ConnectionRefused)',
+          artifacts: [],
+        }
+      }
+
+    try {
+      const service = new WorkerRuntimeService()
+      await service.runDirectRoom({
+        roomId: room.id,
+        ownerId: 'default-user',
+        workspaceAgentId: agent!.id,
+        prompt: 'please fail',
+      })
+
+      const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+      const failedEvent = events.find((event) => event.metadata?.kind === 'worker-runtime.failed')
+      expect(failedEvent?.type).toBe('task.progress')
+      expect(failedEvent?.metadata?.status).toBe('failed')
+      expect(failedEvent?.metadata?.codeAgentRun).toMatchObject({
+        type: 'code-agent-run',
+        status: 'failed',
+        runtime: 'claude-code',
+        command: 'claude',
+        finalMessage: 'API Error: Unable to connect to API (ConnectionRefused)',
+      })
+      expect(events.filter((event) => event.metadata?.kind === 'worker-runtime.message')).toHaveLength(0)
+      expect(events.filter((event) => event.metadata?.kind === 'worker-runtime.progress' && event.metadata?.hiddenFromChat !== true)).toHaveLength(0)
+      expect(events.find((event) => event.metadata?.kind === 'worker-runtime.completed')).toBeUndefined()
+    } finally {
+      ;(localWorkerRuntimeApi.EphemeralCodeAgentWorkerRuntime.prototype as any).executeTask =
+        originalExecuteTask
+    }
+  })
+
   test('task resources become active as soon as WorkerRuntime starts the task room', async () => {
     const { room, thread } = await createTaskRoomFixture()
     const runtime = new DeferredWorkerRuntime()

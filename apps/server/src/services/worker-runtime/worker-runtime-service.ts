@@ -15,6 +15,7 @@ import {
   workspaceAgents,
   workspaces,
 } from '@agenthub/db'
+import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
@@ -157,7 +158,8 @@ export class WorkerRuntimeService {
     this.roomRuntimeKind.delete(roomId)
     return true
   }
-  /**
+
+  /**
    * Run Agent in a direct room (agent-direct session).
    * This is the HiClaw-style worker execution for private chats:
    * the worker listens to the room timeline and executes autonomously.
@@ -239,7 +241,29 @@ export class WorkerRuntimeService {
     this.runningControllers.set(room.id, abortController)
 
     const appendedEventIds: string[] = []
+    let latestCodeAgentRun: CodeAgentRunMetadata | null = null
+    let lastCodeAgentProgressEventAt = 0
     try {
+      const startedEvent = await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: workerParticipant.id,
+        senderType: 'worker',
+        type: 'task.progress',
+        body: `${agent.name} started ${codeAgentRuntime ?? runtime.runtimeType} runtime.`,
+        metadata: {
+          kind: 'worker-runtime.started',
+          status: 'running',
+          progressPercent: 5,
+          workspaceAgentId: agent.id,
+          runtimeType: codeAgentRuntime ?? runtime.runtimeType,
+          workerRuntimeType: runtime.runtimeType,
+          codeAgentType: agent.codeAgentType ?? null,
+          hiddenFromChat: true,
+          uiPresentation: 'room-status',
+        },
+      })
+      appendedEventIds.push(startedEvent.id)
+
       const iterator = runtime.executeTask(
         {
           roomId: room.id,
@@ -275,6 +299,7 @@ export class WorkerRuntimeService {
           type: 'task.progress',
           body: event.message ?? '',
           metadata: {
+            ...(eventMetadata ?? {}),
             kind: `worker-runtime.${event.type}`,
             workspaceAgentId: agent.id,
             runtimeType: runtime.runtimeType,
@@ -287,11 +312,20 @@ export class WorkerRuntimeService {
           },
         })
         appendedEventIds.push(timelineEvent.id)
+        if (event.type === 'progress' && isThrottleableCodeAgentProgress(eventCodeAgentRun, event.message)) {
+          lastCodeAgentProgressEventAt = Date.now()
+        }
         next = await iterator.next()
       }
 
       // Final result event
       const result = next.value
+      const resultMetadata = asRecordOrNull(result.metadata)
+      const finalCodeAgentRun = finalizeCodeAgentRunMetadata({
+        run: codeAgentRunMetadataFromRecord(resultMetadata) ?? latestCodeAgentRun,
+        status: result.status,
+        message: result.message ?? null,
+      })
       const resultEvent = await roomService.appendTimelineEvent({
         roomId: room.id,
         senderParticipantId: workerParticipant.id,
@@ -299,10 +333,17 @@ export class WorkerRuntimeService {
         type: result.status === 'completed' || result.status === 'failed' ? 'worker.message' : 'task.progress',
         body: result.message ?? (result.status === 'completed' ? '执行完成。' : '执行失败。'),
         metadata: {
-          kind: 'worker-runtime.completed',
+          ...(resultMetadata ?? {}),
+          kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
           workspaceAgentId: agent.id,
-          runtimeType: runtime.runtimeType,
+          runtimeType:
+            readCodeAgentRuntime(resultMetadata) ??
+            finalCodeAgentRun?.runtime ??
+            codeAgentRuntime ??
+            runtime.runtimeType,
+          workerRuntimeType: runtime.runtimeType,
+          codeAgentType: agent.codeAgentType ?? null,
           artifacts: result.artifacts ?? [],
           ...(result.status === 'waiting_for_human' ? { hiddenFromChat: true } : {}),
         },
@@ -683,21 +724,21 @@ export class WorkerRuntimeService {
       senderType: 'worker',
       type: 'task.progress',
       body: `${agent.name} 已接单。`,
-        metadata: {
-          kind: 'worker-runtime.started',
-          status: 'running',
-          taskThreadStatus: 'active',
-          progressPercent: 5,
+      metadata: {
+        kind: 'worker-runtime.started',
+        status: 'running',
+        taskThreadStatus: 'active',
+        progressPercent: 5,
         runId: room.runId ?? null,
         taskId: room.taskId ?? null,
         taskThreadId: room.taskThreadId ?? null,
         workspaceAgentId: agent.id,
-          workerInstanceId: thread?.workerInstanceId ?? null,
-          runtimeLeaseId: lease?.id ?? null,
-          runtimeType: runtime.runtimeType,
-          hiddenFromChat: true,
-        },
-      })
+        workerInstanceId: thread?.workerInstanceId ?? null,
+        runtimeLeaseId: lease?.id ?? null,
+        runtimeType: runtime.runtimeType,
+        hiddenFromChat: true,
+      },
+    })
     appendedEventIds.push(startedEvent.id)
 
     await syncRunControllerAtTaskRoomStart({
@@ -850,10 +891,7 @@ export class WorkerRuntimeService {
               ? '等待用户澄清。'
               : '任务失败。'),
         metadata: {
-          kind:
-            result.status === 'waiting_for_human'
-              ? 'worker-runtime.waiting-for-human'
-              : 'worker-runtime.completed',
+          kind: workerRuntimeTerminalKind(result.status),
           status: result.status,
           workspaceAgentId: agent.id,
           workerInstanceId: thread?.workerInstanceId ?? null,
@@ -1376,16 +1414,16 @@ async function appendWorkerRuntimeEvent(input: {
     senderType: 'worker',
     type: 'task.progress',
     body: input.event.message,
-      metadata: {
-        kind: input.event.type === 'failed' ? 'worker-runtime.failed' : 'worker-runtime.progress',
-        workspaceAgentId: input.workspaceAgentId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeType: input.runtimeType,
-        progressPercent: input.event.type === 'progress' ? input.event.progressPercent ?? null : null,
-        hiddenFromChat: true,
-        ...(input.event.metadata ?? {}),
-      },
-    })
+    metadata: {
+      kind: input.event.type === 'failed' ? 'worker-runtime.failed' : 'worker-runtime.progress',
+      workspaceAgentId: input.workspaceAgentId,
+      workerInstanceId: input.workerInstanceId ?? null,
+      runtimeType: input.runtimeType,
+      progressPercent: input.event.type === 'progress' ? input.event.progressPercent ?? null : null,
+      hiddenFromChat: true,
+      ...(input.event.metadata ?? {}),
+    },
+  })
 }
 
 const DEFAULT_WORKER_RUNTIME_HEARTBEAT_MS = 60_000
@@ -1692,6 +1730,13 @@ function terminalSharedTaskTimestamps(status: WorkerRuntimeResult['status']) {
   return { updatedAt: now }
 }
 
+function workerRuntimeTerminalKind(status: WorkerRuntimeResult['status']) {
+  if (status === 'waiting_for_human') return 'worker-runtime.waiting-for-human'
+  if (status === 'cancelled') return 'worker-runtime.cancelled'
+  if (status === 'failed') return 'worker-runtime.failed'
+  return 'worker-runtime.completed'
+}
+
 async function refreshWorkerContractMirror(input: {
   workerInstanceId: string | null
   source: string
@@ -1717,6 +1762,123 @@ async function refreshWorkerContractMirror(input: {
 
 function artifactsForRunController(value: unknown) {
   return Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []
+}
+
+type WorkspaceAgentRow = typeof workspaceAgents.$inferSelect
+type CodeAgentRuntime = CodeAgentRunMetadata['runtime']
+type CodeAgentRunStatus = CodeAgentRunMetadata['status']
+const DIRECT_CODE_AGENT_PROGRESS_MIN_INTERVAL_MS = 15_000
+
+function asRecordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function codeAgentRuntimeForAgent(agent: WorkspaceAgentRow): CodeAgentRuntime | null {
+  return readCodeAgentRuntime({ runtimeType: agent.codeAgentType })
+}
+
+function readCodeAgentRuntime(value: unknown): CodeAgentRuntime | null {
+  const record = asRecordOrNull(value)
+  const runtime =
+    readString(record?.runtime) ??
+    readString(record?.runtimeType) ??
+    readString(record?.codeAgentType)
+  if (
+    runtime === 'codex' ||
+    runtime === 'claude-code' ||
+    runtime === 'opencode' ||
+    runtime === 'gemini'
+  ) {
+    return runtime
+  }
+  return null
+}
+
+function codeAgentRunMetadataFromRecord(value: unknown): CodeAgentRunMetadata | null {
+  const record = asRecordOrNull(value)
+  if (!record || record.type !== 'code-agent-run') return null
+  const runtime = readCodeAgentRuntime(record)
+  const status = readCodeAgentRunStatus(record.status)
+  if (!runtime || !status) return null
+  return {
+    type: 'code-agent-run',
+    status,
+    runtime,
+    command: readString(record.command) ?? runtime,
+    cwd: readString(record.cwd) ?? undefined,
+    durationMs: readNumber(record.durationMs) ?? 0,
+    exitCode: readNumber(record.exitCode) ?? (status === 'failed' || status === 'timed-out' ? 1 : 0),
+    commands: Array.isArray(record.commands) ? (record.commands as CodeAgentRunMetadata['commands']) : [],
+    files: Array.isArray(record.files) ? (record.files as CodeAgentRunMetadata['files']) : [],
+    toolCalls: Array.isArray(record.toolCalls) ? (record.toolCalls as CodeAgentRunMetadata['toolCalls']) : [],
+    artifacts: Array.isArray(record.artifacts) ? (record.artifacts as CodeAgentRunMetadata['artifacts']) : [],
+    finalMessage: readString(record.finalMessage) ?? undefined,
+    partialSuccess: typeof record.partialSuccess === 'boolean' ? record.partialSuccess : undefined,
+    warning: readString(record.warning) ?? undefined,
+    reviewRequired: typeof record.reviewRequired === 'boolean' ? record.reviewRequired : undefined,
+    logs: Array.isArray(record.logs) ? (record.logs as CodeAgentRunMetadata['logs']) : [],
+    steps: Array.isArray(record.steps) ? (record.steps as CodeAgentRunMetadata['steps']) : [],
+    diagnostics: readString(record.diagnostics) ?? undefined,
+  }
+}
+
+function finalizeCodeAgentRunMetadata(input: {
+  run: CodeAgentRunMetadata | null
+  status: WorkerRuntimeResult['status']
+  message: string | null
+}): CodeAgentRunMetadata | null {
+  if (!input.run) return null
+  const status = codeAgentRunStatusFromWorkerStatus(input.status)
+  return {
+    ...input.run,
+    status,
+    finalMessage: input.message ?? input.run.finalMessage,
+    exitCode:
+      input.run.exitCode ||
+      (status === 'failed' || status === 'timed-out' || status === 'cancelled' ? 1 : 0),
+  }
+}
+
+function shouldThrottleDirectCodeAgentProgress(input: {
+  run: CodeAgentRunMetadata | null
+  message: string | undefined
+  lastAppendedAt: number
+}) {
+  if (!isThrottleableCodeAgentProgress(input.run, input.message)) return false
+  if (input.lastAppendedAt <= 0) return false
+  return Date.now() - input.lastAppendedAt < DIRECT_CODE_AGENT_PROGRESS_MIN_INTERVAL_MS
+}
+
+function isThrottleableCodeAgentProgress(
+  run: CodeAgentRunMetadata | null,
+  message: string | undefined,
+) {
+  return run?.status === 'running' && message === 'Worker runtime metadata updated.'
+}
+
+function codeAgentRunStatusFromWorkerStatus(status: WorkerRuntimeResult['status']): CodeAgentRunStatus {
+  if (status === 'completed') return 'completed'
+  if (status === 'cancelled') return 'cancelled'
+  return 'failed'
+}
+
+function readCodeAgentRunStatus(value: unknown): CodeAgentRunStatus | null {
+  if (
+    value === 'running' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled' ||
+    value === 'timed-out'
+  ) {
+    return value
+  }
+  return null
+}
+
+function readNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function readString(value: unknown) {

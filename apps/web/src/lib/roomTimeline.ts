@@ -1,4 +1,5 @@
 import { MessageType, SenderType } from '@agenthub/shared'
+import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import type { Message, Room, RoomParticipant, TimelineEvent } from './api'
 
 export interface RoomTimelineProjection {
@@ -328,6 +329,7 @@ function timelineEventToMessage(
 ): Message | null {
   const eventMetadata = asRecord(event.metadata)
   if (eventMetadata?.hiddenFromChat === true) return null
+  if (isLiveCodeAgentRunMetadataEvent(event)) return null
   const kind = asString(eventMetadata?.kind)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic') return null
@@ -353,6 +355,7 @@ function timelineEventToMessage(
   const senderName = displayNameForEvent(event, participant)
   const content = visibleBodyForEvent(event)
   if (!content.trim()) return null
+  const codeAgentRun = codeAgentRunFromWorkerRuntimeEvent(event)
 
   return {
     id: `room:${event.id}`,
@@ -368,6 +371,7 @@ function timelineEventToMessage(
     content,
     metadata: {
       ...(event.metadata ?? {}),
+      ...(shouldAttachCodeAgentRunToMessage(event, codeAgentRun) ? { codeAgentRun } : {}),
       roomTimeline: {
         roomId: room.id,
         roomKind: room.kind,
@@ -388,6 +392,180 @@ function timelineEventToMessage(
     },
     createdAt: event.createdAt,
   }
+}
+
+export function codeAgentRunFromWorkerRuntimeEvent(
+  event: TimelineEvent,
+): CodeAgentRunMetadata | null {
+  const metadata = asRecord(event.metadata)
+  const nested = codeAgentRunMetadataFromRecord(asRecord(metadata?.codeAgentRun))
+  if (nested) return nested
+  const direct = codeAgentRunMetadataFromRecord(metadata)
+  if (direct) return direct
+
+  const kind = asString(metadata?.kind)
+  if (!kind?.startsWith('worker-runtime.')) return null
+  const runtime = readCodeAgentRuntime(metadata)
+  if (!runtime) return null
+  const status = codeAgentStatusFromWorkerRuntimeEvent(event, metadata)
+  if (!status) return null
+  const isFinal = status !== 'running'
+  const stepTitle =
+    kind === 'worker-runtime.started'
+      ? 'Start Agent runtime'
+      : kind === 'worker-runtime.failed'
+        ? 'Runtime failed'
+        : kind === 'worker-runtime.completed'
+          ? 'Runtime completed'
+          : event.type === 'worker.message'
+            ? 'Agent output'
+            : 'Runtime progress'
+
+  return {
+    type: 'code-agent-run',
+    status,
+    runtime,
+    command: asString(metadata?.command) ?? runtime,
+    cwd: asString(metadata?.cwd) ?? undefined,
+    durationMs: asNumber(metadata?.durationMs) ?? 0,
+    exitCode: asNumber(metadata?.exitCode) ?? (status === 'failed' || status === 'timed-out' ? 1 : 0),
+    commands: [],
+    files: [],
+    toolCalls: [],
+    artifacts: Array.isArray(metadata?.artifacts)
+      ? (metadata.artifacts as CodeAgentRunMetadata['artifacts'])
+      : [],
+    finalMessage: isFinal ? (event.body || asString(metadata?.finalMessage) || undefined) : undefined,
+    logs: event.body
+      ? [
+          {
+            id: `timeline-${event.id}`,
+            stream: 'event',
+            text: event.body,
+          },
+        ]
+      : [],
+    steps: [
+      {
+        id: `timeline-${event.id}`,
+        kind: event.type === 'worker.message' ? 'log' : 'status',
+        status,
+        title: stepTitle,
+        detail: event.body || undefined,
+      },
+    ],
+  }
+}
+
+function isLiveCodeAgentRunMetadataEvent(event: TimelineEvent) {
+  const metadata = asRecord(event.metadata)
+  return (
+    event.type === 'task.progress' &&
+    asString(metadata?.kind) === 'worker-runtime.progress' &&
+    asString(metadata?.type) === 'code-agent-run'
+  )
+}
+
+function isDirectWorkerRuntimeRunningStatusEvent(
+  event: TimelineEvent,
+  room: Room,
+  metadata: Record<string, unknown> | null,
+) {
+  if (room.kind !== 'direct' || event.type !== 'task.progress') return false
+  const kind = asString(metadata?.kind)
+  if (kind !== 'worker-runtime.started' && kind !== 'worker-runtime.progress') return false
+  return codeAgentStatusFromWorkerRuntimeEvent(event, metadata) === 'running'
+}
+
+function shouldAttachCodeAgentRunToMessage(
+  event: TimelineEvent,
+  run: CodeAgentRunMetadata | null,
+) {
+  if (!run) return false
+  const kind = asString(asRecord(event.metadata)?.kind)
+  return (
+    run.status !== 'running' &&
+    (kind === 'worker-runtime.completed' ||
+      kind === 'worker-runtime.failed' ||
+      event.type === 'worker.message')
+  )
+}
+
+function codeAgentRunMetadataFromRecord(
+  value: Record<string, unknown> | null | undefined,
+): CodeAgentRunMetadata | null {
+  if (!value || value.type !== 'code-agent-run') return null
+  const runtime = readCodeAgentRuntime(value)
+  const status = readCodeAgentStatus(value.status)
+  if (!runtime || !status) return null
+  return {
+    type: 'code-agent-run',
+    status,
+    runtime,
+    command: asString(value.command) ?? runtime,
+    cwd: asString(value.cwd) ?? undefined,
+    durationMs: asNumber(value.durationMs) ?? 0,
+    exitCode: asNumber(value.exitCode) ?? (status === 'failed' || status === 'timed-out' ? 1 : 0),
+    commands: Array.isArray(value.commands) ? (value.commands as CodeAgentRunMetadata['commands']) : [],
+    files: Array.isArray(value.files) ? (value.files as CodeAgentRunMetadata['files']) : [],
+    toolCalls: Array.isArray(value.toolCalls) ? (value.toolCalls as CodeAgentRunMetadata['toolCalls']) : [],
+    artifacts: Array.isArray(value.artifacts) ? (value.artifacts as CodeAgentRunMetadata['artifacts']) : [],
+    finalMessage: asString(value.finalMessage) ?? undefined,
+    partialSuccess: typeof value.partialSuccess === 'boolean' ? value.partialSuccess : undefined,
+    warning: asString(value.warning) ?? undefined,
+    reviewRequired: typeof value.reviewRequired === 'boolean' ? value.reviewRequired : undefined,
+    logs: Array.isArray(value.logs) ? (value.logs as CodeAgentRunMetadata['logs']) : [],
+    steps: Array.isArray(value.steps) ? (value.steps as CodeAgentRunMetadata['steps']) : [],
+    diagnostics: asString(value.diagnostics) ?? undefined,
+  }
+}
+
+function readCodeAgentRuntime(value: Record<string, unknown> | null | undefined) {
+  const runtime =
+    asString(value?.runtime) ?? asString(value?.runtimeType) ?? asString(value?.codeAgentType)
+  if (
+    runtime === 'codex' ||
+    runtime === 'claude-code' ||
+    runtime === 'opencode' ||
+    runtime === 'gemini'
+  ) {
+    return runtime
+  }
+  return null
+}
+
+function codeAgentStatusFromWorkerRuntimeEvent(
+  event: TimelineEvent,
+  metadata: Record<string, unknown> | null,
+): CodeAgentRunMetadata['status'] | null {
+  const explicit = readCodeAgentStatus(metadata?.status)
+  if (explicit) return explicit
+  const kind = asString(metadata?.kind)
+  if (kind === 'worker-runtime.completed') return 'completed'
+  if (kind === 'worker-runtime.failed') return 'failed'
+  if (kind === 'worker-runtime.cancelled') return 'cancelled'
+  if (
+    kind === 'worker-runtime.started' ||
+    kind === 'worker-runtime.progress' ||
+    kind === 'worker-runtime.message' ||
+    event.type === 'worker.message'
+  ) {
+    return 'running'
+  }
+  return null
+}
+
+function readCodeAgentStatus(value: unknown): CodeAgentRunMetadata['status'] | null {
+  if (
+    value === 'running' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled' ||
+    value === 'timed-out'
+  ) {
+    return value
+  }
+  return null
 }
 
 function senderTypeFromTimeline(event: TimelineEvent): SenderType {
