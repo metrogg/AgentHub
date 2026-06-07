@@ -166,9 +166,9 @@ function NewSessionDialog({
   )
   const groupValidationMessage =
     selectedAgents.length > 1 && selectedOrchestrators.length === 0
-      ? '协作房间需要 1 位 Manager / Orchestrator 负责统筹。'
+      ? '协作房间需要 1 位 Manager 负责统筹。'
       : selectedOrchestrators.length > 1
-        ? '一个协作房间只保留 1 位 Manager / Orchestrator。'
+        ? '一个协作房间只保留 1 位 Manager。'
         : ''
   const groupTitle = defaultConversationTitle(selectedAgents)
   const filteredWorkspaces = useMemo(() => {

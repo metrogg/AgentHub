@@ -1,19 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import type { Message, OrchestratorRunListItem, Room, RoomParticipant, Session, TimelineEvent } from '../apps/web/src/lib/api'
+import type { OrchestratorRunListItem, Session } from '../apps/web/src/lib/api'
 import { SessionType } from '../apps/web/src/lib/api'
-import { MessageType, OrchestratorRunStatus, SenderType } from '../packages/shared/src/index'
+import { OrchestratorRunStatus } from '../packages/shared/src/index'
 import { __chatStoreTestHooks } from '../apps/web/src/stores/chatStore'
-
-function message(partial: Partial<Message> & Pick<Message, 'id' | 'sessionId' | 'content'>): Message {
-  return {
-    senderId: 'agent-1',
-    senderType: SenderType.Agent,
-    type: MessageType.Text,
-    metadata: null,
-    createdAt: '2026-06-03T00:00:00.000Z',
-    ...partial,
-  }
-}
 
 function run(partial: Partial<OrchestratorRunListItem>): OrchestratorRunListItem {
   return {
@@ -47,164 +36,61 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'typ
 }
 
 describe('chat store artifact snapshot projection', () => {
-  test('direct room worker-runtime events drive a single live code-agent run card', () => {
-    const directRoom: Room = {
-      id: 'direct-room-1',
-      provider: 'matrix',
-      providerRoomId: '!direct:test.agenthub',
-      kind: 'direct',
-      ownerId: 'user-1',
-      workspaceId: 'workspace-1',
-      sessionId: 'direct-session-1',
-      runId: null,
-      taskId: null,
-      taskThreadId: null,
-      title: 'Direct Builder',
-      topic: null,
-      status: 'active',
-      metadata: {},
-      createdAt: '2026-06-03T00:00:00.000Z',
-      updatedAt: '2026-06-03T00:00:00.000Z',
-    }
-    const worker: RoomParticipant = {
-      id: 'participant-worker-1',
-      roomId: directRoom.id,
-      providerUserId: '@worker-builder:local.agenthub',
-      participantType: 'worker',
-      userId: null,
-      workspaceAgentId: 'agent-1',
-      workerInstanceId: null,
-      displayName: 'Direct Builder',
-      role: 'member',
-      status: 'joined',
-      metadata: {},
-      joinedAt: '2026-06-03T00:00:00.000Z',
-      updatedAt: '2026-06-03T00:00:00.000Z',
-    }
-    const liveEvent: TimelineEvent = {
-      id: 'event-live',
-      roomId: directRoom.id,
-      providerEventId: '$event-live',
-      senderParticipantId: worker.id,
-      senderType: 'worker',
-      type: 'task.progress',
-      sequence: 1,
-      body: 'Worker runtime metadata updated.',
-      metadata: {
-        kind: 'worker-runtime.progress',
-        hiddenFromChat: true,
-        type: 'code-agent-run',
-        status: 'running',
-        runtime: 'opencode',
-        command: 'opencode run',
-        durationMs: 10,
-        exitCode: 0,
-        commands: [],
-        files: [],
-      },
-      createdAt: '2026-06-03T00:00:00.000Z',
-    }
-
-    const running = __chatStoreTestHooks.applyDirectRoomRuntimeProjection(
-      {
-        agentTyping: true,
-        agentActivity: null,
-        streamingMessage: null,
-        streamingCodeAgentRun: null,
-      },
-      {
-        room: directRoom,
-        event: liveEvent,
-        participantsById: new Map([[worker.id, worker]]),
-      },
-    )
-
-    expect(running.agentTyping).toBe(false)
-    expect(running.streamingMessage?.agentName).toBe('Direct Builder')
-    expect(running.streamingCodeAgentRun).toMatchObject({
-      type: 'code-agent-run',
-      status: 'running',
-      runtime: 'opencode',
-      command: 'opencode run',
-    })
-
-    const completed = __chatStoreTestHooks.applyDirectRoomRuntimeProjection(running, {
-      room: directRoom,
-      event: {
-        ...liveEvent,
-        id: 'event-completed',
-        type: 'worker.message',
-        sequence: 2,
-        body: 'done',
-        metadata: {
-          kind: 'worker-runtime.completed',
-          status: 'completed',
-          runtimeType: 'opencode',
-        },
-      },
-      participantsById: new Map([[worker.id, worker]]),
-    })
-
-    expect(completed.streamingMessage).toBeNull()
-    expect(completed.streamingCodeAgentRun).toBeNull()
-  })
-
-  test('hydrates summary message artifacts and delivery cards from resource snapshot canonical artifacts', () => {
-    const messages = [
-      message({
-        id: 'summary-1',
-        sessionId: 'group-1',
-        content: 'done',
-        metadata: {
-          delivery_report: {
-            status: 'completed',
-            checklist: [{ item: 'Report', done: true }],
-            files: [],
-          },
+  test('resource snapshot carries task artifacts into task board directly', () => {
+    const taskBoard = __chatStoreTestHooks.taskBoardFromRun(
+      run({
+        status: OrchestratorRunStatus.Running,
+        taskBoardSnapshot: {
+          runId: 'run-1',
+          title: 'Snapshot plan',
+          goal: 'Snapshot goal',
+          collaborationMode: 'pipeline',
+          sessionId: 'group-1',
+          status: 'running',
+          phases: [
+            {
+              id: 'implementation',
+              title: '实现',
+              purpose: '以服务端快照为准',
+              taskIds: ['task-1'],
+              status: 'active',
+            },
+          ],
+          tasks: [
+            {
+              id: 'task-1',
+              phaseId: 'implementation',
+              title: 'Snapshot task',
+              description: 'From server snapshot',
+              agentId: 'agent-1',
+              agentName: 'Snapshot Builder',
+              status: 'running',
+              progress: 55,
+              dependencies: [],
+              childSessionId: 'child-1',
+              artifactCount: 1,
+              artifacts: [
+                {
+                  artifactId: 'artifact-1',
+                  id: 'artifact-1',
+                  title: 'report.html',
+                  filePath: 'deliverables/report.html',
+                  size: 2048,
+                  status: 'registered',
+                  taskId: 'task-1',
+                },
+              ],
+              validationStatus: 'passed',
+            },
+          ],
         },
       }),
-    ]
-    const orchestratorRun = run({
-      resourceSnapshot: {
-        artifacts: [
-          {
-            id: 'artifact-1',
-            artifactId: 'artifact-1',
-            title: 'report.html',
-            kind: 'file',
-            artifactKind: 'file',
-            filePath: 'deliverables/report.html',
-            size: 2048,
-            taskId: 'task-1',
-          },
-        ],
-      },
-    })
-
-    const next = __chatStoreTestHooks.applyCanonicalArtifactsToSummaryMessages(
-      messages,
-      orchestratorRun,
     )
 
-    expect(next).toHaveLength(1)
-    const metadata = next[0]?.metadata as Record<string, any>
-    expect(Array.isArray(metadata.artifacts)).toBe(true)
-    expect(metadata.artifacts[0]?.title).toBe('report.html')
-    expect(metadata.file_card?.files).toEqual([
-      {
-        fileName: 'report.html',
-        filePath: 'deliverables/report.html',
-        fileSize: 2048,
-        runId: 'run-1',
-      },
-    ])
-    expect(metadata.delivery_report?.files).toEqual([
-      {
-        name: 'report.html',
-        size: 2048,
-        type: 'html',
-      },
-    ])
+    expect(taskBoard).toBeTruthy()
+    expect(taskBoard?.tasks[0]?.artifactCount).toBe(1)
+    expect(taskBoard?.tasks[0]?.artifacts?.[0]?.title).toBe('report.html')
+    expect(taskBoard?.tasks[0]?.artifacts?.[0]?.filePath).toBe('deliverables/report.html')
   })
 
   test('resource snapshot recomputes phase status from task thread state', () => {

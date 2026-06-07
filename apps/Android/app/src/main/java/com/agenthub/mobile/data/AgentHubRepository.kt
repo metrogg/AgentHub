@@ -633,6 +633,7 @@ class AgentHubRepository(
                 workspaces = sync.workspaces,
                 agents = sync.agents,
                 contacts = sync.contacts,
+                liveContacts = sync.liveContacts,
                 selectedSessionId = selectedSessionId,
                 messages = if (selectedSessionId == null && state.selectedSessionId != null) emptyList() else state.messages,
                 streamingMessage = if (selectedSessionId == null && state.selectedSessionId != null) null else state.streamingMessage,

@@ -435,7 +435,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       const allowedProfileIds = new Set(readMemberProposalProfileIds(metadata.memberProposals))
       const selectedProfileIds = Array.from(new Set(profileIds)).filter((id) => allowedProfileIds.has(id))
       if (!selectedProfileIds.length) {
-        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请选择 Orchestrator 建议中的 Agent')
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请选择 Manager 建议中的 Agent')
       }
 
       const proposals = readMemberProposals(metadata.memberProposals)
@@ -593,7 +593,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const runningMessage = await updateMemberProposalContinueState({
       ref: proposalRef,
       metadata,
-      content: `已加入建议成员。Orchestrator 正在基于新成员重新规划并分发任务。`,
+      content: `已加入建议成员。Manager 正在基于新成员重新规划并分发任务。`,
       status: 'running',
       goal,
     })
@@ -1022,12 +1022,12 @@ async function continueMemberProposalPlanning(params: {
       taskIds: [],
     })
   } catch (err: any) {
-    const error = err?.message || 'Orchestrator 重新规划失败'
+    const error = err?.message || 'Manager 重新规划失败'
     const latestRef = await loadMemberProposalRef(session.id, proposalMessageId)
     await updateMemberProposalContinueState({
       ref: latestRef ?? proposalRef,
       metadata: (latestRef?.metadata ?? metadata) as Record<string, unknown>,
-      content: `已加入建议成员，但 Orchestrator 重新规划失败：${error}`,
+      content: `已加入建议成员，但 Manager 重新规划失败：${error}`,
       status: 'failed',
       goal,
       error,

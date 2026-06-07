@@ -4,6 +4,7 @@ import {
   workspaceAgents,
   workspaceAgentRelations,
   workspaceTasks,
+  workerInstances,
   eq,
   asc,
 } from '@agenthub/db'
@@ -29,7 +30,18 @@ export async function loadWorkspaceFull(id: string, ownerId: string) {
     .from(workspaceAgentRelations)
     .where(eq(workspaceAgentRelations.workspaceId, id))
     .orderBy(asc(workspaceAgentRelations.createdAt))
-  return { workspace: ws, agents: agents.map(normalizeWorkspaceAgentRuntime), tasks, agentRelations }
+  const workers = await db
+    .select()
+    .from(workerInstances)
+    .where(eq(workerInstances.workspaceId, id))
+    .orderBy(asc(workerInstances.createdAt))
+  return {
+    workspace: ws,
+    agents: agents.map(normalizeWorkspaceAgentRuntime),
+    workers,
+    tasks,
+    agentRelations,
+  }
 }
 
 export async function ensureWorkspace(id: string, ownerId: string) {

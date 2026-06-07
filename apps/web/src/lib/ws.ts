@@ -73,6 +73,11 @@ class WSClient {
     this.ws?.send(JSON.stringify({ type: WsEvent.SessionJoin, payload: { sessionId } }))
   }
 
+  send(event: WSEvent) {
+    if (this.ws?.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify(event))
+  }
+
   on(listener: Listener) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

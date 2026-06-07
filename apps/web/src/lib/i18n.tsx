@@ -220,8 +220,8 @@ const zhToEn: Record<string, string> = {
   发起人与决策者: 'Initiator and decision maker',
   '拆解、协调、生成任务卡': 'Break down, coordinate, and create task cards',
   提及方式: 'Mentioning',
-  '输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。':
-    'Type an @Agent name to have that member reply in the group chat. If no member is specified, Orchestrator takes over.',
+  '输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Manager 接管。':
+    'Type an @Agent name to have that member reply in the group chat. If no member is specified, Manager takes over.',
   项目文件夹: 'Project folder',
   '本机 Agent Runtime 工具台': 'Local Agent Runtime Desk',
   '本机运行的 OpenAI 编程代理，用于仓库理解、修改和验证。':
@@ -345,22 +345,22 @@ const zhToEn: Record<string, string> = {
   '未指定 Agent': 'Unassigned Agent',
   '任务说明，可写交付物、约束、依赖': 'Task details, deliverables, constraints, dependencies',
   添加任务: 'Add Task',
-  '还没有任务。这里用于查看 Orchestrator 生成的任务，也可以手动补充备忘。':
-    'No tasks yet. This area shows Orchestrator-generated tasks and can hold manual notes.',
+  '还没有任务。这里用于查看 Manager 生成的任务，也可以手动补充备忘。':
+    'No tasks yet. This area shows Manager-generated tasks and can hold manual notes.',
   群聊状态: 'Group Chat Status',
   待执行: 'Pending',
   推进中: 'In Progress',
   完成: 'Done',
   会话入口: 'Session Entry',
-  'Orchestrator 执行后，这里会出现每个 Agent 的任务会话入口。':
-    'After Orchestrator runs, each agent task session appears here.',
+  'Manager 执行后，这里会出现每个 Agent 的任务会话入口。':
+    'After Manager runs, each agent task session appears here.',
   协作规则: 'Collaboration Rules',
   并行: 'Parallel',
   汇总: 'Synthesis',
   可追踪: 'Traceable',
   '每个任务会创建一个独立聊天会话，方便多个 Agent 同时推进。': 'Each task creates a separate chat session so multiple agents can move in parallel.',
-  '群聊会读取 Orchestrator 任务链路里的 Agent 产出，生成统一行动方案。':
-    'The group chat reads agent outputs from the Orchestrator task flow and produces one unified action plan.',
+  '群聊会读取 Manager 任务链路里的 Agent 产出，生成统一行动方案。':
+    'The group chat reads agent outputs from the Manager task flow and produces one unified action plan.',
   '任务状态、会话入口、Agent 分工都保存在工作区中。': 'Task status, session entries, and agent assignments are saved in the workspace.',
   正在加载协作组: 'Loading collaboration group',
   创建一个协作组后开始多会话并行管理: 'Create a collaboration group to start parallel multi-session management.',
@@ -420,7 +420,7 @@ const zhToEn: Record<string, string> = {
   权限: 'Permissions',
   标签: 'Tags',
   未设置: 'Not set',
-  '允许 Orchestrator 自动调用': 'Allow Orchestrator auto invoke',
+  '允许 Manager 自动调用': 'Allow Manager auto invoke',
   '高风险操作需要确认': 'Require confirmation for high-risk actions',
   当前配置: 'Current Config',
   对话式修改: 'Conversational Edit',

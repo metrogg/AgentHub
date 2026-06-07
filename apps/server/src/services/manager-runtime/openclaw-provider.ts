@@ -311,7 +311,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     const matrixUrl = this.config.matrixUrl || (managerContainersEnabled() ? containerMatrixUrl() : process.env.AGENTHUB_MATRIX_HOMESERVER_URL) || 'http://localhost:6167'
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
-    const managerAgentDir = join(this.managerWorkspace, '.openclaw', 'agents', 'manager', 'agent')
+    const runtimeWorkspace = managerContainersEnabled() ? '/workspace' : this.managerWorkspace
+    const managerAgentDir = join(runtimeWorkspace, '.openclaw', 'agents', 'manager', 'agent')
     const defaultHumanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
     const adminUserId = `@admin:${matrixDomain}`
     const managerAllowFrom = Array.from(new Set([adminUserId, defaultHumanUserId]))
@@ -345,8 +346,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
           groupPolicy: 'allowlist',
           groupAllowFrom: managerAllowFrom,
           groups: matrixGroups,
-          streaming: 'off',
-          blockStreaming: false,
+          streaming: 'partial',
+          blockStreaming: true,
         },
       },
       models: {
@@ -376,7 +377,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
             id: 'manager',
             name: 'AgentHub Manager',
             default: true,
-            workspace: this.managerWorkspace,
+            workspace: runtimeWorkspace,
             agentDir: managerAgentDir,
             identity: {
               name: 'AgentHub Manager',
@@ -414,7 +415,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         resetByType: { dm: { mode: 'daily', atHour: 4 }, group: { mode: 'daily', atHour: 4 } },
       },
       plugins: {
-        load: { paths: [join(this.managerWorkspace, 'skills')] },
+        load: { paths: [join(runtimeWorkspace, 'skills')] },
         entries: {
           matrix: { enabled: true },
         },

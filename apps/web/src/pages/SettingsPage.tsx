@@ -2586,9 +2586,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     : 'Manager 负责理解目标、追问、补员、派活和复盘'
   const containerRunningWorkers = containerRuntime?.workerContainers.filter((item) => item.container.running).length ?? 0
   const containerRuntimeStatus = containerRuntime
-    ? !containerRuntime.enabled
-      ? '未启用容器后端'
-      : !containerRuntime.docker.available
+    ? !containerRuntime.docker.available
         ? 'Docker 不可用'
         : !containerRuntime.imagePresent
           ? 'OpenClaw 镜像未构建'
@@ -2607,7 +2605,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     : 'Manager / Worker 容器、OpenClaw 镜像和容器内 URL 会显示在这里'
   const managerReady = Boolean(managerRuntime?.activeStatus.running && !managerRuntime.activeStatus.error)
   const runtimeInfraReady = Boolean(containerRuntime?.docker.available && containerRuntime.imagePresent)
-  const localRuntimeReady = Boolean(matrixOk && managerReady)
+  const localRuntimeReady = Boolean(matrixOk && runtimeInfraReady && managerReady)
   const localRuntimeSteps = [
     {
       id: 'matrix',
@@ -2629,7 +2627,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     },
     {
       id: 'runtime',
-      label: '容器 / 本机 Runtime',
+      label: '容器 / OpenClaw runtime',
       ok: runtimeInfraReady,
       detail: containerRuntime
         ? containerRuntime.docker.available
@@ -2792,6 +2790,35 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         source: '前端',
         module: 'controller-plane/resident-self-test',
         content: error?.message || 'Resident Worker 自检失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function syncWorkerConfig(worker: ControllerPlaneDiagnostics['workerRuntimes'][number]) {
+    const key = `worker-sync:${worker.workerInstanceId}`
+    setBusy(key)
+    try {
+      const result = await api.syncWorkerConfig(worker.workerInstanceId)
+      appendLog({
+        level: result.synced ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'controller-plane/worker-sync-config',
+        content: result.synced
+          ? `${worker.agentName}: Worker config synced`
+          : `${worker.agentName}: sync failed`,
+      })
+      const controller = await api.getControllerPlaneStatus().catch(() => null)
+      if (controller) setControllerPlane(controller)
+      showNotice(result.synced ? `${worker.agentName} 配置已同步` : `${worker.agentName} 配置同步失败`)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '前端',
+        module: 'controller-plane/worker-sync-config',
+        content: error?.message || 'Worker 配置同步失败',
       })
       showNotice(error?.message || t('操作失败'))
     } finally {
@@ -3152,7 +3179,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               本机 HiClaw-lite 运行向导
             </div>
             <div className="mt-2 max-w-3xl text-sm leading-6" style={{ color: 'var(--settings-muted-text)' }}>
-              AgentHub Server 负责 Controller / UI backend；Tuwunel 提供真实 Matrix Room；OpenClaw Manager 常驻监听群聊。点一次准备，会按顺序应用本地 Matrix 配置、启动 Tuwunel / MinIO、准备 OpenClaw runtime，并尝试启动 Manager。
+              AgentHub Server 负责 Controller / UI backend；Tuwunel 提供真实 Matrix Room；OpenClaw Manager 常驻监听群聊。按顺序先准备 Matrix / Tuwunel，再准备容器运行时，最后启动 Manager。三步全绿后，才能直接创建群聊、@Manager 和 @Worker。
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -3198,8 +3225,8 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}
         >
           {localRuntimeReady
-            ? '当前主路径已可用：新群聊会走真实 Matrix Room，Manager 由 OpenClaw 常驻进程接管。'
-            : '当前还没完全就绪：先点“一键准备本机运行”；如果 Docker 或 OpenClaw 缺失，下面日志会明确显示卡在哪一步。'}
+            ? '当前主路径已可用：新群聊会走真实 Matrix Room，容器运行时已就绪，Manager 由 OpenClaw 常驻进程接管。'
+            : '当前还没完全就绪：先点“一键准备本机运行”；如果 Docker、OpenClaw 镜像或 Manager 失败，下面日志会明确显示卡在哪一步。'}
         </div>
       </div>
 
@@ -3307,6 +3334,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             <div className="text-base font-semibold" style={{ color: 'var(--settings-text)' }}>{t('本机诊断')}</div>
             <div className="mt-1 text-sm" style={{ color: 'var(--settings-muted-text)' }}>
               {t('目录、运行时和执行隔离状态')}
+            </div>
+            <div className="mt-2 text-xs" style={{ color: 'var(--settings-muted-text)' }}>
+              推荐顺序：先看 Matrix / Tuwunel，再看容器 / OpenClaw runtime，最后看 Manager Runtime 和 Controller Plane。
             </div>
           </div>
           <button type="button" disabled={busy === 'refresh'} onClick={() => void refreshDiagnostics()} className="settings-soft-button">
@@ -3639,9 +3669,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               )}
             </div>
 
-            {!containerRuntime.enabled && (
+            {!containerRuntime.docker.available && (
               <div className="mt-3 rounded-xl border px-3 py-2 text-xs leading-5" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
-                当前未启用容器后端。先点“准备本地容器运行时”启动 Tuwunel / MinIO 并构建 OpenClaw 镜像；再复制环境变量写入 `.env`，重启 AgentHub Server 后，Manager / Worker 才会进入 Docker resident runtime 路径。环境变量不会在当前已启动的 server 进程里自动生效。
+                当前 Docker 不可用。先点“准备本地容器运行时”启动 Tuwunel / MinIO 并构建 OpenClaw 镜像；如果你刚切换了容器后端环境变量，重启 AgentHub Server 才会让当前进程读到新配置。
               </div>
             )}
           </div>
@@ -3791,8 +3821,10 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                       worker={worker}
                       busy={busy === `resident-self-test:${worker.workerInstanceId}`}
                       probeBusy={busy === `resident-probe:${worker.workerInstanceId}`}
+                      syncBusy={busy === `worker-sync:${worker.workerInstanceId}`}
                       onSelfTest={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker, { dispatch: false })}
                       onProbe={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker, { dispatch: true })}
+                      onSyncConfig={() => void syncWorkerConfig(worker)}
                     />
                   ))}
                 </div>
@@ -3859,14 +3891,18 @@ function WorkerRuntimeDiagnosticRow({
   worker,
   busy,
   probeBusy,
+  syncBusy,
   onSelfTest,
   onProbe,
+  onSyncConfig,
 }: {
   worker: ControllerPlaneDiagnostics['workerRuntimes'][number]
   busy?: boolean
   probeBusy?: boolean
+  syncBusy?: boolean
   onSelfTest?: () => void
   onProbe?: () => void
+  onSyncConfig?: () => void
 }) {
   const contractMissing = Object.entries(worker.contractFiles)
     .filter(([, ok]) => !ok)
@@ -3973,6 +4009,12 @@ function WorkerRuntimeDiagnosticRow({
               <button type="button" onClick={onProbe} disabled={busy || probeBusy} className="settings-soft-button h-7 px-2 text-xs">
                 {probeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Radio className="h-3.5 w-3.5" />}
                 Matrix Probe
+              </button>
+            )}
+            {onSyncConfig && (
+              <button type="button" onClick={onSyncConfig} disabled={busy || probeBusy || syncBusy} className="settings-soft-button h-7 px-2 text-xs">
+                {syncBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                同步配置
               </button>
             )}
           </div>

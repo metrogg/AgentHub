@@ -31,7 +31,7 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, friendlyErrorMessage, type MobileConnectivityStatus, type Session, type WorkspaceAgent } from '../../lib/api'
+import { api, friendlyErrorMessage, type MobileConnectivityStatus, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -115,6 +115,9 @@ export default function SessionList({
   const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, number>>({})
   const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<
     Record<string, WorkspaceAgent[]>
+  >({})
+  const [groupWorkspaceWorkers, setGroupWorkspaceWorkers] = useState<
+    Record<string, WorkspaceFull['workerInstances']>
   >({})
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
@@ -233,7 +236,11 @@ export default function SessionList({
       .split('|')
       .map((id) => id.trim())
       .filter(
-        (id) => id && groupMemberCounts[id] === undefined && groupWorkspaceAgents[id] === undefined,
+        (id) =>
+          id &&
+          groupMemberCounts[id] === undefined &&
+          groupWorkspaceAgents[id] === undefined &&
+          groupWorkspaceWorkers[id] === undefined,
       )
     if (!workspaceIds.length) return
 
@@ -241,7 +248,7 @@ export default function SessionList({
     void Promise.allSettled(
       workspaceIds.map(async (workspaceId) => {
         const full = await api.getWorkspace(workspaceId)
-        return [workspaceId, full.agents] as const
+        return [workspaceId, full.agents, full.workerInstances] as const
       }),
     ).then((results) => {
       if (cancelled) return
@@ -251,7 +258,10 @@ export default function SessionList({
           const result = results[index]
           const workspaceId = workspaceIds[index]
           if (!workspaceId) continue
-          next[workspaceId] = result?.status === 'fulfilled' ? result.value[1].length + 1 : -1
+          next[workspaceId] =
+            result?.status === 'fulfilled'
+              ? countActiveWorkspaceWorkers(result.value[2]) + 1
+              : -1
         }
         return next
       })
@@ -265,12 +275,22 @@ export default function SessionList({
         }
         return next
       })
+      setGroupWorkspaceWorkers((current) => {
+        const next = { ...current }
+        for (let index = 0; index < results.length; index += 1) {
+          const result = results[index]
+          const workspaceId = workspaceIds[index]
+          if (!workspaceId) continue
+          next[workspaceId] = result?.status === 'fulfilled' ? result.value[2] : []
+        }
+        return next
+      })
     })
 
     return () => {
       cancelled = true
     }
-  }, [groupMemberCounts, groupWorkspaceAgents, groupWorkspaceKey])
+  }, [groupMemberCounts, groupWorkspaceAgents, groupWorkspaceKey, groupWorkspaceWorkers])
 
   useEffect(() => {
     setTabOverride(null)
@@ -1478,7 +1498,7 @@ export default function SessionList({
       {workerPickerOpen && (
         <WorkerPickerDialog
           workspaceName={currentWorkspace?.name ?? ''}
-          agents={currentWorkspaceAgents.filter((agent) => agent.roleType !== 'orchestrator')}
+          agents={(currentWorkspaceAgents ?? []).filter((agent) => agent.roleType !== 'orchestrator')}
           creatingAgentId={workerCreatingAgentId}
           onClose={() => {
             if (workerCreatingAgentId) return
@@ -1857,6 +1877,13 @@ function groupMemberCount(session: Session, childCount: number, loadedCount?: nu
   if (explicitAgentIds.length) return explicitAgentIds.length + 1
   if (loadedCount && loadedCount > 0) return loadedCount
   return Math.max(1, childCount + 1)
+}
+
+function countActiveWorkspaceWorkers(workers: WorkspaceFull['workerInstances']) {
+  if (!Array.isArray(workers)) return 0
+  return workers.filter(
+    (worker) => worker.observedState !== 'stopped' && worker.observedState !== 'failed',
+  ).length
 }
 
 function childTaskStatusText(status?: string) {

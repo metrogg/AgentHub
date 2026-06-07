@@ -902,6 +902,11 @@ export interface ResidentWorkerSelfTestResult {
   message: string
 }
 
+export interface WorkerSyncConfigResult {
+  synced: boolean
+  details?: Record<string, unknown>
+}
+
 export interface ContainerRuntimeDiagnostics {
   provider: 'docker'
   enabled: boolean
@@ -1403,6 +1408,26 @@ export interface WorkspaceTask {
 export interface WorkspaceFull {
   workspace: Workspace
   agents: WorkspaceAgent[]
+  workerInstances: Array<{
+    id: string
+    workspaceId: string
+    workspaceAgentId: string
+    runtimeFamily: 'coordinator' | 'worker'
+    runtimeBase: 'openclaw' | 'qwenpaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
+    modelId: string | null
+    skillIds: string[]
+    mcpServerIds: string[]
+    sandboxPolicy: 'workspace-write' | 'danger-full-access'
+    desiredState: 'running' | 'sleeping' | 'stopped'
+    observedState: 'provisioning' | 'ready' | 'listening' | 'assigned' | 'busy' | 'waiting_for_human' | 'resuming' | 'idle' | 'sleeping' | 'stopped' | 'failed'
+    health: Record<string, unknown>
+    runtimeHome: string | null
+    runtimeConfigPath: string | null
+    lastHeartbeatAt: string | null
+    message: string | null
+    createdAt: string
+    updatedAt: string
+  }>
   tasks: WorkspaceTask[]
   agentRelations?: WorkspaceAgentRelation[]
 }
@@ -2083,6 +2108,14 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(input ?? {}),
         timeout: input?.dispatch ? 70_000 : 20_000,
+      },
+    ),
+  syncWorkerConfig: (workerInstanceId: string) =>
+    request<WorkerSyncConfigResult>(
+      `/settings/controller-plane/workers/${encodeURIComponent(workerInstanceId)}/sync-config`,
+      {
+        method: 'POST',
+        timeout: 60_000,
       },
     ),
   getContainerRuntimeStatus: () => request<ContainerRuntimeDiagnostics>('/settings/container-runtime/status'),

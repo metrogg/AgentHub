@@ -20,6 +20,7 @@ if (!webPort) {
 
 const server = spawnManaged('bun', ['--watch', 'apps/server/src/index.ts'], 'server', {
   AGENTHUB_PORT_FILE: portFile,
+  AGENTHUB_AUTO_START_MANAGER: 'true',
   CORS_ORIGIN: `http://127.0.0.1:${webPort},http://localhost:${webPort}`,
   NODE_NO_WARNINGS: '1',
   PORT: '8000',
