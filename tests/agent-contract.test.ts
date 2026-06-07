@@ -108,7 +108,7 @@ describe('Agent contract generator', () => {
     expect(runtime.runtimeFamily).toBe('manager')
     expect(runtime.runtimeType).toBe('qwenpaw')
     const managerRuntimeContract = runtime.runtimeContract as {
-      profile: { label: string; language: string; architectureMode: string }
+      profile: { label: string; language: string; architectureMode: string; referenceMetrics: string }
       parityCapabilities: string[]
       reconcileContracts: { manager: string[]; member: string[]; worker: string[] }
       controllerSkillSurface: string[]
@@ -116,6 +116,7 @@ describe('Agent contract generator', () => {
     expect(managerRuntimeContract.profile.label).toBe('QwenPaw Manager')
     expect(managerRuntimeContract.profile.language).toContain('Python')
     expect(managerRuntimeContract.profile.architectureMode).toBe('workspace')
+    expect(managerRuntimeContract.profile.referenceMetrics).toContain('80% lower memory')
     expect(managerRuntimeContract.parityCapabilities).toEqual(expect.arrayContaining([
       'SOUL.md',
       'AGENTS.md',
@@ -544,7 +545,7 @@ describe('Agent contract generator', () => {
           baseProfile: {
             label: string
             roleEligibility: { manager: boolean; worker: boolean }
-            implementation: { architectureMode: string }
+            implementation: { architectureMode: string; resourceProfile: string }
             matrixIntegration: { owner: string }
             currentLimits: string[]
           }
@@ -568,6 +569,7 @@ describe('Agent contract generator', () => {
       expect(runtime.adapterContract.baseProfile.roleEligibility.manager).toBe(item.managerEligible)
       expect(runtime.adapterContract.baseProfile.roleEligibility.worker).toBe(true)
       expect(runtime.adapterContract.baseProfile.implementation.architectureMode).toBe(item.architectureMode)
+      expect(runtime.adapterContract.baseProfile.implementation.resourceProfile).toContain(item.mode === 'resident' ? 'HiClaw reference' : 'Bridge mode')
       expect(runtime.adapterContract.baseProfile.matrixIntegration.owner).toBe(item.listenerOwner)
       expect((runtime.adapterContract as any).reconcileContract).toEqual([
         'EnsureIdentityAndWorkspace',

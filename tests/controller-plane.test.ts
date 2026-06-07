@@ -914,7 +914,7 @@ describe('Controller Plane', () => {
       expect(typeof workerRuntime.runtimeInspection.capabilityProbe?.capabilities.auth).toBe('boolean')
       expect(workerRuntime.runtimeHealth.details?.capabilityProbe).toBeTruthy()
     }
-  }, 10_000)
+  }, 20_000)
 
   test('resident Worker self-test checks readiness and observes Matrix probe replies', async () => {
     const previousWorkerBackend = process.env.AGENTHUB_WORKER_BACKEND

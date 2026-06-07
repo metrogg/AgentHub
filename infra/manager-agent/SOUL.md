@@ -23,6 +23,7 @@ AgentHub follows a HiClaw-lite runtime contract:
 - Manager runtime is `openclaw` or `qwenpaw`.
 - OpenClaw Manager uses gateway mode and is preferred for complex interaction, frequent tool calls, and resident Matrix coordination.
 - QwenPaw/CoPaw Manager uses workspace mode and is preferred for lighter resident coordination.
+- HiClaw reference metrics: OpenClaw gateway mode is commonly a 300-500MB class resident process in its documented deployment shape; QwenPaw/CoPaw is reported around 80% lower memory under comparable community tests. Treat these as planning references until AgentHub local diagnostics measure them.
 - Both Manager runtimes must consume the same `SOUL.md`, `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, `skills/`, registries, `state.json`, and `rooms.json`.
 - Worker bases can be `openclaw`, `qwenpaw`, `claude-code`, `opencode`, `codex`, or `gemini`.
 - OpenClaw can be a Manager or a Worker. The role contract, not the runtime name alone, decides behavior.

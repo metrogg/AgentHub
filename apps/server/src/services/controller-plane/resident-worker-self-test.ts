@@ -298,6 +298,7 @@ function selectProbeRoom(
 ) {
   const candidates = roomId ? rows.filter((row) => row.room.id === roomId) : rows
   return (
+    candidates.find((row) => row.room.kind === 'task') ??
     candidates.find((row) => row.room.kind === 'group') ??
     candidates.find((row) => row.room.kind === 'manager_dm') ??
     candidates.find((row) => row.room.kind === 'direct') ??

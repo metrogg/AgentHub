@@ -621,6 +621,7 @@ function runtimeBaseProfile(runtimeBase: string | null) {
           configStrategy: 'openclaw.json plus mirrored SOUL/AGENTS/skills workspace',
           healthSource: 'gateway health, Matrix sync, heartbeat, and Controller runtime state',
           sessionStrategy: 'long-running gateway session',
+          resourceProfile: 'HiClaw reference: gateway mode is richer for complex tool/MCP orchestration, with higher startup latency and commonly 300-500MB class memory use in the documented deployment shape.',
         },
         matrixIntegration: {
           owner: 'runtime-native',
@@ -640,6 +641,7 @@ function runtimeBaseProfile(runtimeBase: string | null) {
           configStrategy: 'workspace files plus mirrored SOUL/AGENTS/skills workspace',
           healthSource: 'workspace loop health, Matrix sync, heartbeat, and Controller runtime state',
           sessionStrategy: 'lightweight resident workspace loop',
+          resourceProfile: 'HiClaw reference: workspace mode is meant to be lighter and faster to start, with community measurements reporting about 80% lower memory than OpenClaw under comparable load.',
         },
         matrixIntegration: {
           owner: 'runtime-native',
@@ -691,6 +693,7 @@ function runtimeBaseProfile(runtimeBase: string | null) {
           configStrategy: 'requires explicit Worker runtime base and compatible model',
           healthSource: 'Controller validation only',
           sessionStrategy: 'blocked until configured',
+          resourceProfile: 'No runtime process exists until the human, Manager proposal, preset, or workspace policy selects an explicit Worker runtime base.',
         },
         matrixIntegration: {
           owner: 'unconfigured',
@@ -719,6 +722,7 @@ function bridgeRuntimeBaseProfile(input: {
       configStrategy: input.configStrategy,
       healthSource: `${input.command} command probe, native version check, model/auth/config, cwd, and WorkerRuntime heartbeat`,
       sessionStrategy: input.sessionStrategy,
+      resourceProfile: 'Bridge mode cost follows the native CLI process plus AgentHub supervision; it must expose the same Room/SOUL/AGENTS/skills/task contract even before it becomes a runtime-native Matrix listener.',
     },
     matrixIntegration: {
       owner: 'agenthub-supervisor',
@@ -798,6 +802,7 @@ function runtimeContextLines(runtimeBase: string | null): string[] {
     `- Base profile: ${profile.label}`,
     `- Architecture mode: ${profile.implementation.architectureMode}`,
     `- Process model: ${profile.implementation.processModel}`,
+    `- Resource profile: ${profile.implementation.resourceProfile}`,
     `- Matrix listener owner: ${profile.matrixIntegration.owner}`,
     `- Matrix pattern: ${profile.matrixIntegration.pattern}`,
     `- Runtime readiness: ${profile.implementation.healthSource}`,

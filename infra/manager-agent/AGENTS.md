@@ -89,8 +89,10 @@ agenthub task create --workspace <workspace-id> --title "..." --assign-to <agent
 ## Runtime Bases
 
 Manager runtime:
-- `openclaw`: gateway mode, richer tool/MCP orchestration, higher startup and memory cost.
-- `qwenpaw`: workspace mode, lighter resident process, same Manager skill contract.
+- `openclaw`: Node.js gateway mode, richer tool/MCP orchestration, higher startup and memory cost. HiClaw reference: roughly 300-500MB class resident memory in the documented deployment shape.
+- `qwenpaw`: Python workspace mode, lighter resident process, same Manager skill contract. HiClaw reference: around 80% lower memory than OpenClaw under comparable community tests.
+
+These metrics are reference guidance, not AgentHub local SLOs. Prefer Controller/runtime diagnostics for the current machine.
 
 Worker runtime bases:
 - `openclaw` / `qwenpaw`: resident Worker direction. They should listen to Matrix rooms themselves when enabled.

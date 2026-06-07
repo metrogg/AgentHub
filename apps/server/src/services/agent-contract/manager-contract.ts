@@ -334,6 +334,7 @@ function managerRuntimeProfile(runtimeType: 'openclaw' | 'qwenpaw') {
       configStrategy: 'qwenpaw workspace files plus shared SOUL/AGENTS/skills contract',
       healthSource: 'workspace loop health, Matrix sync, heartbeat, Controller state mirror',
       resourceProfile: 'lighter memory footprint, faster startup, good for resource constrained coordination',
+      referenceMetrics: 'HiClaw reference: Python 3.11 workspace mode, roughly 80% lower memory than OpenClaw under comparable community tests; AgentHub must measure this locally before treating it as an SLO.',
       roleContract: 'Manager only unless explicitly provisioned as a Worker runtime base',
     }
   }
@@ -347,6 +348,7 @@ function managerRuntimeProfile(runtimeType: 'openclaw' | 'qwenpaw') {
     configStrategy: 'openclaw.json plus shared SOUL/AGENTS/skills contract',
     healthSource: 'gateway health, Matrix sync, heartbeat, Controller state mirror',
     resourceProfile: 'higher startup and memory cost, better for complex interaction and frequent tool calls',
+    referenceMetrics: 'HiClaw reference: Node.js 22 gateway mode, commonly around 300-500MB resident memory in the documented deployment shape; AgentHub treats this as a planning reference, not a measured guarantee.',
     roleContract: 'Manager only unless explicitly provisioned as an OpenClaw Worker with the Worker contract',
   }
 }
@@ -572,6 +574,7 @@ function buildManagerSoul(): string {
     '## Runtime Architecture',
     '- OpenClaw Manager runs in Node.js gateway mode and is preferred for complex interaction, frequent tool calls, and resident Matrix coordination.',
     '- QwenPaw/CoPaw Manager runs in Python workspace mode and is preferred when a lighter resident process is enough.',
+    '- HiClaw reference metrics: OpenClaw gateway mode is commonly a 300-500MB class resident process; QwenPaw/CoPaw is reported around 80% lower memory under comparable community tests. Treat these as planning references until AgentHub diagnostics measure them locally.',
     '- Both Manager runtimes must consume the same SOUL.md, AGENTS.md, TOOLS.md, HEARTBEAT.md, skills/, registries, state.json, and rooms.json contract.',
     '- Worker bases can be OpenClaw, QwenPaw, Claude Code, OpenCode, Codex, or Gemini. Treat them as Agent runtime bases, not as interchangeable model names.',
     '',
@@ -689,6 +692,9 @@ function buildManagerTools(): string {
     '',
     '## Runtime Base Rules',
     '- Manager runtime: openclaw or qwenpaw.',
+    '- OpenClaw Manager uses Node.js gateway mode; HiClaw reference memory is roughly 300-500MB class in the documented deployment shape.',
+    '- QwenPaw/CoPaw Manager uses Python workspace mode; HiClaw reference memory is around 80% lower than OpenClaw under comparable community tests.',
+    '- Treat reference metrics as guidance until Controller/runtime diagnostics measure the current machine.',
     '- Worker runtime base: openclaw, qwenpaw, claude-code, opencode, codex, or gemini.',
     '- OpenClaw can be Manager or Worker, but the role contract decides behavior.',
     '- A missing Worker runtime base or model is a blocker that needs confirmation, not an opportunity to choose a default.',
@@ -777,6 +783,7 @@ function managerRuntimeContextLines(runtimeType?: string | null): string[] {
     `- Config strategy: ${contract.profile.configStrategy}`,
     `- Health source: ${contract.profile.healthSource}`,
     `- Resource profile: ${contract.profile.resourceProfile}`,
+    `- Reference metrics: ${contract.profile.referenceMetrics}`,
     `- Parity capabilities: ${contract.parityCapabilities.join(', ')}`,
     `- Manager reconcile stages: ${contract.reconcileContracts.manager.join(' -> ')}`,
     `- Member reconcile stages: ${contract.reconcileContracts.member.join(' -> ')}`,

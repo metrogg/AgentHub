@@ -22,6 +22,7 @@ import {
   MessageSquare,
   Monitor,
   QrCode,
+  Radio,
   RefreshCw,
   Search,
   Server,
@@ -2724,23 +2725,36 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
-  async function runResidentWorkerSelfTest(worker: ControllerPlaneDiagnostics['workerRuntimes'][number]) {
-    const key = `resident-self-test:${worker.workerInstanceId}`
+  async function runResidentWorkerSelfTest(
+    worker: ControllerPlaneDiagnostics['workerRuntimes'][number],
+    options: { dispatch?: boolean } = {},
+  ) {
+    const dispatch = options.dispatch === true
+    const key = `${dispatch ? 'resident-probe' : 'resident-self-test'}:${worker.workerInstanceId}`
     setBusy(key)
     try {
-      const result = await api.runResidentWorkerSelfTest(worker.workerInstanceId, { dispatch: false })
+      const result = await api.runResidentWorkerSelfTest(worker.workerInstanceId, { dispatch })
       const failed = result.checks.find((item) => !item.ok)
+      const reply = result.observedReply
+        ? ` reply=${result.observedReply.protocol} seq=${result.observedReply.sequence}`
+        : ''
       appendLog({
         level: result.ok ? 'Info' : 'Warn',
         source: '后端',
         module: 'controller-plane/resident-self-test',
         content: result.ok
-          ? `${worker.agentName}: ${result.message}`
+          ? `${worker.agentName}: ${result.message}${reply}`
           : `${worker.agentName}: ${failed?.label ?? 'self-test'} - ${failed?.message ?? result.message}`,
       })
       const controller = await api.getControllerPlaneStatus().catch(() => null)
       if (controller) setControllerPlane(controller)
-      showNotice(result.ok ? `${worker.agentName} resident 自检通过` : `${worker.agentName} 自检未通过：${failed?.message ?? result.message}`)
+      showNotice(
+        result.ok
+          ? dispatch
+            ? `${worker.agentName} Matrix Probe 通过${reply ? `：${result.observedReply?.protocol}` : ''}`
+            : `${worker.agentName} resident 自检通过`
+          : `${worker.agentName} 自检未通过：${failed?.message ?? result.message}`,
+      )
     } catch (error: any) {
       appendLog({
         level: 'Error',
@@ -3720,7 +3734,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                       key={worker.workerInstanceId}
                       worker={worker}
                       busy={busy === `resident-self-test:${worker.workerInstanceId}`}
-                      onSelfTest={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker)}
+                      probeBusy={busy === `resident-probe:${worker.workerInstanceId}`}
+                      onSelfTest={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker, { dispatch: false })}
+                      onProbe={worker.mode === 'bridge' ? undefined : () => void runResidentWorkerSelfTest(worker, { dispatch: true })}
                     />
                   ))}
                 </div>
@@ -3786,11 +3802,15 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
 function WorkerRuntimeDiagnosticRow({
   worker,
   busy,
+  probeBusy,
   onSelfTest,
+  onProbe,
 }: {
   worker: ControllerPlaneDiagnostics['workerRuntimes'][number]
   busy?: boolean
+  probeBusy?: boolean
   onSelfTest?: () => void
+  onProbe?: () => void
 }) {
   const contractMissing = Object.entries(worker.contractFiles)
     .filter(([, ok]) => !ok)
@@ -3888,10 +3908,18 @@ function WorkerRuntimeDiagnosticRow({
           </div>
         )}
         {onSelfTest && (
-          <button type="button" onClick={onSelfTest} disabled={busy} className="settings-soft-button mt-2 h-7 px-2 text-xs">
-            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-            Resident 自检
-          </button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" onClick={onSelfTest} disabled={busy || probeBusy} className="settings-soft-button h-7 px-2 text-xs">
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+              Resident 自检
+            </button>
+            {onProbe && (
+              <button type="button" onClick={onProbe} disabled={busy || probeBusy} className="settings-soft-button h-7 px-2 text-xs">
+                {probeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Radio className="h-3.5 w-3.5" />}
+                Matrix Probe
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

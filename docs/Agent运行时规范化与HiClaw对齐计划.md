@@ -21,13 +21,16 @@ Human / Manager / Worker 都是 Room participant
 
 | 维度 | OpenClaw Manager / Worker | QwenPaw / CoPaw | Claude Code Worker | OpenCode Worker | Codex Worker | Gemini Worker |
 | --- | --- | --- | --- | --- | --- | --- |
-| 基础语言/形态 | Node.js 22 / gateway mode | Python / workspace mode | 本机 CLI / bridge 起步 | 本机 CLI / bridge 起步 | 本机 CLI / bridge 起步 | 本机 CLI / bridge 起步 |
+| 基础语言/形态 | Node.js 22 / gateway mode | Python 3.11 / workspace mode | 本机 CLI / bridge 起步 | 本机 CLI / bridge 起步 | 本机 CLI / bridge 起步 | 本机 CLI / bridge 起步 |
 | 目标运行形态 | resident process / Docker container | resident process / Docker container | long-running bridge 或 session bridge | long-running bridge 或 session bridge | long-running bridge 或 session bridge | long-running bridge 或 session bridge |
 | Matrix 集成 | 原生 `/sync` 或 OpenClaw channel | CoPaw channel | AgentHub listener + bridge，后续可进程化 | AgentHub listener + bridge，后续可进程化 | AgentHub listener + bridge，后续可进程化 | AgentHub listener + bridge，后续可进程化 |
 | Skill 加载 | `skills/*/SKILL.md` | 同一 skill schema | Controller 注入 AGENTS/SKILL context | Controller 注入 AGENTS/SKILL context | Controller 注入 AGENTS/SKILL context | Controller 注入 AGENTS/SKILL context |
 | 工具调用 | OpenClaw tools / MCP / exec | QwenPaw tools / MCP / exec | CLI 原生工具 + MCP 注入 | CLI 原生工具 + MCP 注入 | CLI 原生工具 + MCP 注入 | CLI 原生工具 + MCP 注入 |
+| 资源画像 | HiClaw 参考：复杂交互强，启动较慢，约 300-500MB 级别 | HiClaw 参考：轻量，启动更快，约比 OpenClaw 少 80% 内存 | 跟随本机 CLI；AgentHub 托管 bridge | 跟随本机 CLI；AgentHub 托管 bridge | 跟随本机 CLI；AgentHub 托管 bridge | 跟随本机 CLI；AgentHub 托管 bridge |
 | 共享存储 | filesystem object store / MinIO adapter | 同左 | 同左 | 同左 | 同左 | 同左 |
 | 适用场景 | 复杂交互、Manager、Team Leader、通用 Worker | 轻量常驻、资源受限、确定性任务 | 强代码能力、项目修改 | 强工程执行、本机模型生态 | Codex 生态任务 | Gemini 生态任务 |
+
+注意：表里的 OpenClaw / QwenPaw 内存数字来自 HiClaw 参考资料和社区口径，只能作为 AgentHub 的设计参考；AgentHub 本机/容器实测要在设置页 runtime diagnostics 中单独记录，不能把参考值当成已达成 SLO。
 
 目标不是让每个基座内部完全一样，而是让它们对 AgentHub 暴露同一组能力：
 
@@ -40,6 +43,20 @@ Human / Manager / Worker 都是 Room participant
 - `registry`: Manager 的 `workers-registry.json`；Worker 的 `rooms.json / tasks.json`。
 - `heartbeat`: runtime 心跳和健康状态。
 - `contract`: `shared/tasks/{taskId}/spec.md / plan.md / result.md / artifacts/`。
+
+## 必须吸收的 HiClaw 原生规范
+
+这些不是“好看的 prompt 文案”，而是 AgentHub runtime contract 的组成部分：
+
+- `SOUL.md`：长期人格和边界。Manager / Worker 都要知道自己是谁、负责什么、不负责什么、如何和人类协作、何时请求确认。
+- `AGENTS.md`：当前运行协议。Controller 必须幂等注入 Room、Matrix identity、Controller API、SharedStorage、runtime base、sandbox、task contract、mention/澄清/停止规则。
+- `skills/*/SKILL.md`：Manager 的可执行能力面。自然语言理解之后必须进入 skill，再由 skill 调 Controller API；不能让 Manager 只在聊天里“说自己做了”。
+- `workers-registry.json / teams-registry.json / humans-registry.json`：Manager 的本地世界镜像。它们从 Controller 同步，不替代 Controller，但 Manager 必须读它们来判断成员、能力、健康和限制。
+- `state.json / rooms.json / tasks.json`：runtime 本地状态镜像。它们记录 heartbeat、room binding、active tasks、last error 和 reconcile stage，方便 resident runtime、bridge runtime、设置页和 Manager 用同一套事实沟通。
+- `HEARTBEAT.md`：Patrol 行为规范。长任务不能因为“十几秒没回”就判死，必须看 heartbeat、RuntimeLease、task room 和 shared result。
+- `shared/tasks/{taskId}/spec.md / plan.md / result.md / artifacts/`：任务契约。Worker 的完成必须落到 result/artifact/room result，不能只靠一句聊天文本。
+
+AgentHub 的实现原则是“同 contract，多 adapter”：OpenClaw/QwenPaw 可以 runtime-native 常驻监听 Matrix；Claude Code/OpenCode/Codex/Gemini 当前可以由 AgentHub bridge 托管，但它们也必须读取同一份 SOUL/AGENTS/skills/state/rooms/tasks，并通过 Matrix timeline 输入输出。
 
 落地原则：
 
@@ -390,7 +407,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 进展：OpenClaw Worker config 生成已开始 room-aware。`deployWorkerConfig()` 会接收 Controller 查到的 Worker room bindings，把实际 `providerRoomId` 写入 `channels.matrix.groups`，并把同房间 human / manager Matrix user id 加入 `groupAllowFrom`；本地进程和 Docker resident backend 都走同一份 room binding。Worker contract 也会同步当前 rooms，避免 OpenClaw config 知道房间但 `AGENTS.md / rooms.json` 不知道。
    - 进展：QwenPaw / CoPaw 已被纳入 Worker runtime base 口径：Manager proposal、shared preset type、Controller runtime normalize、WorkerController 校验、前端 Agent 配置和 run snapshot 类型都能识别 `qwenpaw`，并保持 `codeAgentType=null` 的 resident 语义。由于 QwenPaw WorkerBackend 尚未实现，`ControllerApi.createWorker(runtimeBase=qwenpaw)` 会明确失败并提示 backend 未接入，而不是降级成 Codex 或 bridge。
    - 进展：resident Worker 通过 Matrix 发回 HiClaw 风格协议消息时，Controller 已不再只打日志。`TASK_COMPLETED` 会按 `Room -> TaskThread -> Task -> RuntimeLease -> WorkerInstance` 解析上下文，同步 `workspace_tasks=done`、`TaskThread=completed`、释放 `RuntimeLease`，并让 resident Worker 回到 `listening`；`QUESTION` 会创建 `task_clarifications`、写 `approval.requested` timeline event，并同步进入 `waiting_for_human`；`BLOCKED` 会把任务置为 blocked/failed-thread 并释放 lease；`PHASE{N}_DONE` 会进入 RunController 进度事件。协议处理完成后会调用 `ensureWorkerAgentContractFromController()` 刷新 Worker 本地 `tasks.json/state.json`，让 Worker 自己的 workspace 镜像也看到 completed/waiting/released 等最新事实。这个切片让“Worker 在 Room 里说完了/卡住了/要澄清”开始成为真正的资源 reconcile，而不是纯聊天文本。
-   - 进展：resident Worker e2e 现在有可操作验收入口。自动化测试覆盖 dry-run readiness 和 Matrix probe reply：Controller 先写 `worker-runtime.resident-self-test.request` mention event，再观察 Worker reply；这保护了“Room mention -> resident worker 回复 -> Controller 识别协议结果”的最小链路。自检开始前会先调用 `ensureWorkerAgentContractFromController()` 刷新 Worker contract，并兼容只绑定 `workspaceAgentId`、尚未回填 `workerInstanceId` 的旧 room participant，避免现场诊断被旧绑定误伤。现场验证时应先在设置页跑 dry-run，通过后再用显式 probe 或真实群聊 @mention 验证 OpenClaw/QwenPaw 进程自己的 `/sync`。
+   - 进展：resident Worker e2e 现在有可操作验收入口。自动化测试覆盖 dry-run readiness 和 Matrix probe reply：Controller 先写 `worker-runtime.resident-self-test.request` mention event，再观察 Worker reply；这保护了“Room mention -> resident worker 回复 -> Controller 识别协议结果”的最小链路。自检开始前会先调用 `ensureWorkerAgentContractFromController()` 刷新 Worker contract，并兼容只绑定 `workspaceAgentId`、尚未回填 `workerInstanceId` 的旧 room participant，避免现场诊断被旧绑定误伤。设置页 Worker runtime 行已区分 `Resident 自检`（dry-run，不写房间）和 `Matrix Probe`（显式发送 @mention 并等待回复）；Probe 会优先选择 task room，其次 group/manager/direct room，尽量验证真实任务房间里的常驻监听。
    - 剩余：用真实 Tuwunel + 真实 OpenClaw Worker 做现场 e2e，确认 OpenClaw 自己的 `/sync` 能稳定接 @mention、执行、发 `TASK_COMPLETED / QUESTION / BLOCKED`，并由 AgentHub 导入后完成上述资源闭环；随后实现 QwenPaw WorkerBackend，把当前“可识别但阻塞”的 QwenPaw resident Worker 变成可运行 backend。
 6. **Bridge hardening**
    - 状态：第一刀已落地。
