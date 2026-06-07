@@ -294,6 +294,49 @@ start_openclaw() {
   log_ok "$name PID: $pid"
 }
 
+print_process_status() {
+  local name="$1"
+  local pidfile="$2"
+  local logfile="$3"
+  local pid
+
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    log_ok "$name process running (pid=$pid)"
+  else
+    log_error "$name process not running"
+  fi
+  echo "  pid file: $pidfile"
+  echo "  log file: $logfile"
+}
+
+print_http_probe() {
+  local label="$1"
+  local url="$2"
+  local output
+
+  if output="$(curl -fsS --max-time 3 "$url" 2>&1)"; then
+    log_ok "$label probe: $url"
+    printf '  %s\n' "$output" | head -n 4
+  else
+    log_warn "$label probe failed: $url"
+    [ -n "$output" ] && printf '  %s\n' "$output" | head -n 4
+  fi
+}
+
+print_log_preview() {
+  local label="$1"
+  local logfile="$2"
+
+  if [ -f "$logfile" ]; then
+    echo ""
+    log_info "$label log preview: $logfile"
+    tail -n 8 "$logfile" | sed 's/^/  /'
+  else
+    log_warn "$label log not found yet: $logfile"
+  fi
+}
+
 echo "=== AgentHub HiClaw-lite startup ==="
 echo ""
 log_info "[0/6] Checking prerequisites..."
@@ -443,19 +486,48 @@ echo "========================================"
 echo "  AgentHub HiClaw-lite startup complete"
 echo "========================================"
 echo ""
-echo "Tuwunel (Matrix): $TUWUNEL_URL"
-echo "MinIO Console:     http://localhost:9001 (minioadmin/minioadmin)"
-echo "Manager Gateway:   http://localhost:$MANAGER_PORT"
-echo "Worker Gateway:    http://localhost:$WORKER_PORT"
+log_info "Runtime endpoints"
+echo "  Matrix homeserver: $TUWUNEL_URL ($MATRIX_DOMAIN)"
+echo "  MinIO API:         http://localhost:9000"
+echo "  MinIO Console:     http://localhost:9001 (minioadmin/minioadmin)"
+echo "  Manager Gateway:   http://localhost:$MANAGER_PORT"
+echo "  Worker Gateway:    http://localhost:$WORKER_PORT"
+echo "  LLM Gateway:       $LLM_BASE_URL"
+echo "  LLM Model:         $LLM_MODEL"
 echo ""
-echo "Manager log:      $MANAGER_WORKSPACE/openclaw.log"
-echo "Worker log:       $WORKER_WORKSPACE/openclaw.log"
+log_info "Matrix identities"
+echo "  Admin:   @$ADMIN_USER:$MATRIX_DOMAIN"
+echo "  Manager: @$MANAGER_USER:$MATRIX_DOMAIN"
+echo "  Worker:  @$WORKER_USER:$MATRIX_DOMAIN"
+echo "  .env:    $ENV_FILE"
 echo ""
-echo "Next steps:"
+log_info "OpenClaw runtime"
+echo "  Command:        $OPENCLAW_LABEL"
+echo "  Manager config: $MANAGER_CONFIG"
+echo "  Worker config:  $WORKER_CONFIG"
+print_process_status "Manager" "$PID_DIR/openclaw-manager.pid" "$MANAGER_WORKSPACE/openclaw.log"
+print_process_status "Worker" "$PID_DIR/openclaw-worker.pid" "$WORKER_WORKSPACE/openclaw.log"
+echo ""
+log_info "Container status"
+(cd "$SCRIPT_DIR" && $COMPOSE_CMD -f docker-compose.hiclaw-lite.yml ps) || true
+echo ""
+log_info "Health probes"
+print_http_probe "Tuwunel" "$TUWUNEL_URL/_matrix/client/versions"
+print_http_probe "Manager gateway" "http://localhost:$MANAGER_PORT/health"
+print_http_probe "Worker gateway" "http://localhost:$WORKER_PORT/health"
+print_log_preview "Manager" "$MANAGER_WORKSPACE/openclaw.log"
+print_log_preview "Worker" "$WORKER_WORKSPACE/openclaw.log"
+echo ""
+log_info "Useful commands"
+echo "  Start:             bash infra/start-hiclaw-lite.sh"
+echo "  Stop:              bash infra/stop-hiclaw-lite.sh"
+echo "  Matrix logs:       docker logs agenthub-tuwunel"
+echo "  MinIO logs:        docker logs agenthub-minio"
+echo "  Manager log tail:  tail -n 80 \"$MANAGER_WORKSPACE/openclaw.log\""
+echo "  Worker log tail:   tail -n 80 \"$WORKER_WORKSPACE/openclaw.log\""
+echo ""
+log_info "Next steps"
 echo "  1. Start AgentHub Server: bun run dev:server"
 echo "  2. Start AgentHub Web:   bun run dev:web"
 echo "  3. Open the browser and create a group chat, then @manager"
-echo ""
-echo "Stop command:"
-echo "  bash infra/stop-hiclaw-lite.sh"
 echo ""
