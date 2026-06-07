@@ -105,10 +105,11 @@ export class MemberReconciler {
     stages.push({
       name: 'ApplyWorkerInstance',
       ok: true,
-      message: 'WorkerInstance applied and runtime prepared.',
+      message: 'WorkerInstance applied and runtime contract prepared.',
       details: {
         workerInstanceId: worker.workerInstanceId,
-        runtimeState: worker.runtimeState,
+        prepareState: worker.prepareState,
+        prepare: worker.prepare,
       },
     })
 
@@ -133,7 +134,7 @@ export class MemberReconciler {
       agentId: agent.id,
       workerInstanceId: worker.workerInstanceId,
       runtimeBase: spec.runtimeBase,
-      runtimeState: worker.runtimeState,
+      runtimeState: worker.prepareState,
     })
     stages.push({
       name: 'AnnounceAndObserve',
@@ -147,9 +148,23 @@ export class MemberReconciler {
     })
 
     await this.refreshContractAfterRoomJoin(worker.workerInstanceId, agent.id, spec.runtimeBase)
-    await this.workerBackend.syncConfig(worker.workerInstanceId).catch(() => ({
-      synced: false,
-    }))
+    const roomAwarePrepare = await this.workerBackend.prepare({
+      workerInstanceId: worker.workerInstanceId,
+      context: {
+        workspaceId: input.workspaceId,
+        groupSessionId: input.groupSessionId ?? joined.groupRoom?.sessionId ?? null,
+      },
+    })
+    stages[stages.length - 1] = {
+      ...stages[stages.length - 1]!,
+      details: {
+        ...(stages[stages.length - 1]?.details ?? {}),
+        roomAwarePrepare,
+      },
+    }
+    if (!roomAwarePrepare.prepared) {
+      throw new Error(roomAwarePrepare.message ?? `Worker runtime contract prepare failed after room join: ${roomAwarePrepare.state ?? 'unknown'}.`)
+    }
 
     return {
       agentId: agent.id,
@@ -276,18 +291,19 @@ export class MemberReconciler {
     })
     if (!workerInstanceId) throw new Error('WorkerInstance was not created.')
 
-    const runtime = await this.workerBackend.ensureRuntime({
+    const prepared = await this.workerBackend.prepare({
       workerInstanceId,
       context: {
         workspaceId,
       },
     })
-    if (!runtime.ready) {
-      throw new Error(runtime.message ?? `Worker runtime ${runtime.state ?? 'unknown'} is not ready.`)
+    if (!prepared.prepared) {
+      throw new Error(prepared.message ?? `Worker runtime contract prepare failed: ${prepared.state ?? 'unknown'}.`)
     }
     return {
       workerInstanceId,
-      runtimeState: runtime.state ?? null,
+      prepareState: prepared.state ?? null,
+      prepare: prepared,
     }
   }
 

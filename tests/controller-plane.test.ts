@@ -330,7 +330,8 @@ describe('Controller Plane', () => {
     expect(inspected.details?.contractReady).toBe(true)
     expect(Array.isArray(inspected.details?.blockers)).toBe(true)
     expect(inspected.details?.inspection).toBeTruthy()
-    expect(inspected.details?.parityOperations).toEqual(['inspect', 'health', 'syncConfig', 'start', 'stop'])
+    expect(inspected.details?.parityOperations).toEqual(['prepare', 'inspect', 'health', 'syncConfig', 'start', 'stop'])
+    expect(inspected.details?.missingOperations).toEqual([])
 
     const health = await localCliWorkerBackend.health(worker!.id)
     expect(health.workerInstanceId).toBe(worker!.id)
@@ -985,19 +986,23 @@ describe('Controller Plane', () => {
         goal: 'Validate member reconcile stages',
       })
       .returning()
+    const prepareCalls: Array<{ workerInstanceId: string; context?: Record<string, unknown> | null }> = []
     const api = new ControllerApi({
       workerBackend: {
         id: 'test-worker-backend',
         async prepare(input) {
-          return { workerInstanceId: input.workerInstanceId, prepared: true, state: 'prepared' }
-        },
-        async ensureRuntime(input) {
+          prepareCalls.push({
+            workerInstanceId: input.workerInstanceId,
+            context: input.context as Record<string, unknown> | null | undefined,
+          })
           return {
             workerInstanceId: input.workerInstanceId,
-            ready: true,
-            state: 'ready',
-            message: 'test backend ready',
+            prepared: true,
+            state: prepareCalls.length === 1 ? 'prepared' : 'room-aware-prepared',
           }
+        },
+        async ensureRuntime(input) {
+          throw new Error(`ensureRuntime should not be called during Member Reconcile creation for ${input.workerInstanceId}`)
         },
         async start() {
           return { started: true }
@@ -1020,7 +1025,7 @@ describe('Controller Plane', () => {
           }
         },
         async syncConfig(workerInstanceId) {
-          return { synced: true, details: { workerInstanceId } }
+          throw new Error(`syncConfig should not be called directly during Member Reconcile creation for ${workerInstanceId}`)
         },
       },
     })
@@ -1062,6 +1067,16 @@ describe('Controller Plane', () => {
     expect(result.directRoom?.kind).toBe('direct')
     expect(result.participants.length).toBeGreaterThanOrEqual(2)
     expect(result.announcements).toHaveLength(1)
+    expect(prepareCalls).toHaveLength(2)
+    expect(prepareCalls[0]?.workerInstanceId).toBe(result.workerInstanceId)
+    expect(prepareCalls[0]?.context?.workspaceId).toBe(workspace!.id)
+    expect(prepareCalls[1]?.workerInstanceId).toBe(result.workerInstanceId)
+    expect(prepareCalls[1]?.context?.workspaceId).toBe(workspace!.id)
+    expect(result.stages.find((stage) => stage.name === 'ApplyWorkerInstance')?.details?.prepareState).toBe('prepared')
+    expect(result.stages.find((stage) => stage.name === 'AnnounceAndObserve')?.details?.roomAwarePrepare).toMatchObject({
+      prepared: true,
+      state: 'room-aware-prepared',
+    })
 
     const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, result.agentId)).limit(1)
     expect(agent?.codeAgentType).toBe('opencode')

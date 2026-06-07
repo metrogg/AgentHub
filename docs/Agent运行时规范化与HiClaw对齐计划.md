@@ -240,9 +240,11 @@ HiClaw 的 16 项 Manager skill 应作为 AgentHub 的第一批 skill schema 参
    - 创建或更新 `workspace_agents`。
 3. `ApplyWorkerInstance`
    - 创建或更新 `worker_instances`，绑定 runtime base 和 model。
+   - 只调用 `WorkerBackend.prepare()` 准备 `SOUL.md / AGENTS.md / skills / runtime.json / state.json / rooms.json / tasks.json` 和基座配置，不在创建阶段强行启动 resident runtime 或要求 bridge CLI ready。
 4. `JoinRooms`
    - 加入 group room、direct room、必要 task room，确保 Matrix membership。
 5. `AnnounceAndObserve`
+   - 入群后再做一次 room-aware `prepare()`，把最新 Matrix room binding 注入 Worker contract。
    - Manager 在 room 中自然介绍成员已加入，Worker 进入 listening/ready 后可自我介绍。
 
 ### Manager Reconcile 5 阶段
@@ -388,6 +390,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - 进展：`LocalCliWorkerBackend.inspect()` 对 bridge Worker 不再返回 `ready=true/state=unknown`。它现在会读取标准 Worker contract、构建对应的 Code Agent profile，并调用 `inspectCodeAgentRuntime()` 汇总 CLI 安装、native probe、doctor/capability probe、模型绑定、cwd 和 contract readiness；返回 `bridge-ready` 或 `bridge-blocked`。这让 backend seam 自身也具备真实 `inspect` 语义，而不是只在设置页旁路做诊断。
    - 进展：`WorkerBackend` 新增显式 `health(workerInstanceId)`。Local bridge、Local OpenClaw、Docker OpenClaw 和 QwenPaw blocked backend 都会通过同一组 `ready/status/state/message/blockers/lastCheckedAt/details` 返回健康结论；Controller Plane diagnostics 也改为消费 `backend.health()`，再叠加 Matrix identity、contract readiness 和 WorkerInstance failed state。这样 `health` 不再是设置页私有投影，而是 runtime adapter seam 的正式能力。
    - 进展：`WorkerBackend` 新增显式 `prepare({ workerInstanceId, context? })`。Bridge Worker 的 prepare 只刷新标准 `SOUL.md / AGENTS.md / runtime.json / state.json / rooms.json / tasks.json / skills` contract，不要求 CLI 当前可执行；OpenClaw local prepare 会生成本地 OpenClaw worker config；Docker OpenClaw prepare 会生成容器用 `openclaw.json` 并检查 runtime image。QwenPaw/CoPaw 仍按 `resident-backend-not-implemented` fail loudly。职责划分变成：`prepare` 准备配置/contract，`health` 判断 runtime 是否可用，`ensureRuntime` 才负责 resident runtime 启动或确认。
+   - 进展：Member Reconcile 创建链路已切到 `prepare-first`。`ApplyWorkerInstance` 不再直接调用 `ensureRuntime()`，不会因为 bridge CLI 暂不可用或 resident runtime 尚未启动而把“创建员工”误判为失败；`JoinRooms` 后会再次 `prepare()`，确保 Worker 的 `rooms.json / AGENTS.md / runtime.json` 带着最新 group/direct room binding。这样更接近 HiClaw 的 provision 顺序：Controller 先创建身份、配置和 Room 关系，runtime 再以常驻或 bridge 形态监听和工作。
    - 进展：Worker contract 的 `AGENTS.md` 注入块现在会展示 base profile、architecture mode、process model、Matrix pattern、runtime readiness、parity capabilities 和 current limits。这样 Manager、Worker 自己、设置页和后续 runtime adapter 都能读同一份 contract，而不是靠 UI 文案猜“OpenClaw/Claude/OpenCode/Codex/Gemini 到底是什么”。
    - 进展：`WorkerBackend.syncConfig()` 不再只对 OpenClaw 有实际效果。OpenCode / Claude Code / Codex / Gemini bridge Worker 现在会通过 `ensureWorkerAgentContractFromController()` 刷新标准 Worker contract；Docker backend 遇到非 OpenClaw 也委托同一条本机 bridge sync 语义，避免 settings/Controller 看到 `synced=true` 但本地 `SOUL.md / AGENTS.md / state.json / rooms.json / tasks.json` 仍是旧内容。
    - 进展：设置页 resident Worker 行新增 `Resident 自检`。它调用 `POST /api/settings/controller-plane/workers/:workerInstanceId/resident-self-test` 做 dry-run 检查，逐项验证 WorkerInstance、runtime base、WorkspaceAgent、`SOUL.md / AGENTS.md / profile.json / runtime.json / state.json / rooms.json / tasks.json / skills/`、Matrix identity、Room participant 和 resident backend health。接口也支持显式 `dispatch=true`，通过真实 Room @mention 发送 probe，并等待 Worker 在 Matrix timeline 中回复 `TASK_COMPLETED / QUESTION / BLOCKED / PHASE_DONE`；默认 UI 不发 probe，避免污染房间。
@@ -399,6 +402,7 @@ OpenClaw/QwenPaw resident runtime 从 gateway health 和 Matrix sync 得到心�
    - OpenClaw Manager workspace 内的 `agenthub` CLI 已修正：`worker create/apply` 必须显式 `--runtime-base <openclaw|qwenpaw|copaw|opencode|claude-code|codex|gemini>`，不再隐式 `codex`。
    - Manager 补员确认卡已接入同一条 Member Reconcile 路径：确认卡会把 Manager proposal / 专家预设中的 `description`、`systemPrompt`、`roleProfile`、`capabilityTags`、`skillIds`、`toolPermissions`、`sandboxPolicy`、`contextPolicy` 带入 `ControllerApi.createWorker()`，并在卡片 metadata 中记录 `workerInstanceIds`、`runtimeBases` 和各阶段结果。
    - 缺 runtime base 或 model 仍 fail-loudly，不默认 Codex，不创建注定 failed 的 Worker。
+   - 创建阶段现在只要求 runtime contract/config 能被准备好；真实可执行性由 `health()` 和后续 resident self-test / bridge doctor 展示。OpenClaw Worker 如果缺 resident backend 仍会在 `prepare()` 阶段明确失败；OpenCode / Claude Code / Codex / Gemini bridge 即使 CLI 当前 blocked，也会保留完整 SOUL/AGENTS/skills/room/task contract，方便设置页和 Manager 解释 blocker。
 4. **Manager skill migration**
    - 以 HiClaw 16 skill 为模板，改写成 AgentHub Controller API 版本。
    - 进展：`/api/controller/*` 第一版已从内部 service facade 扩展为受 Manager Matrix token 保护的 HTTP Controller 面。当前覆盖 Worker、Run、Task、Room、RuntimeLease reconcile、Artifact、Team、Human、Workspace state、Status、Heartbeat 和通用 `reconcile`；Room 端点支持 create/list/detail/participants/events/append/mention/reconcile。OpenClaw/QwenPaw Manager skill 和 `agenthub` CLI 可以走这条路径改真实资源，不需要直接 import AgentHub service，也不需要绕到产品态 `/api/rooms`。

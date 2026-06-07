@@ -540,7 +540,7 @@ function qwenPawWorkerBackendBlocked(workerInstanceId: string, runtimeBase?: str
     details: {
       runtimeBase: runtimeBase ?? null,
       implemented: false,
-      requiredNextStep: 'Implement QwenPaw/CoPaw workspace-mode WorkerBackend with Matrix channel config, process lifecycle, health, syncConfig, and resident self-test support.',
+      requiredNextStep: 'Implement QwenPaw/CoPaw workspace-mode WorkerBackend with Matrix channel config, prepare/config generation, process lifecycle, health, syncConfig, and resident self-test support.',
       fallback: 'No Codex/OpenCode/Claude/Gemini fallback is allowed for a QwenPaw Worker.',
     },
   }
@@ -609,8 +609,8 @@ async function inspectBridgeWorkerBackend(
       contractFiles,
       inspection,
       blockers,
-      parityOperations: ['inspect', 'health', 'syncConfig', 'start', 'stop'],
-      missingOperations: ['prepare'],
+      parityOperations: ['prepare', 'inspect', 'health', 'syncConfig', 'start', 'stop'],
+      missingOperations: [],
     },
   }
 }
