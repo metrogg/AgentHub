@@ -437,7 +437,7 @@ export const Thread: FC = () => {
           onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
         />
       )}
-      <div className="flex min-h-0 flex-1 pt-14">
+      <div className="relative z-[1] flex min-h-0 flex-1 pt-14">
         <div className="flex min-w-0 flex-1 flex-col">
           {isGroupSession && selectedAgentTab === null && (roomTaskBoard || planningActivity) && (
             <LeaderViewBanner
