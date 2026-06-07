@@ -285,6 +285,54 @@ describe('Controller Plane', () => {
     expect(workerRuntime?.mode).toBe('bridge')
   })
 
+  test('bridge Worker backend inspect reports real CLI readiness instead of unknown ready', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Bridge Inspect Workspace',
+        goal: 'Validate bridge backend inspect',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Bridge Inspect Worker',
+        role: 'Bridge Worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        roleProfile: { workerRuntimeBase: 'opencode' },
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'opencode',
+        modelId: 'test-model',
+        observedState: 'ready',
+        desiredState: 'running',
+      })
+      .returning()
+
+    await localCliWorkerBackend.syncConfig(worker!.id)
+    const inspected = await localCliWorkerBackend.inspect(worker!.id)
+
+    expect(inspected.workerInstanceId).toBe(worker!.id)
+    expect(inspected.state).toMatch(/^bridge-/)
+    expect(inspected.state).not.toBe('unknown')
+    expect(inspected.details?.source).toBe('inspectCodeAgentRuntime')
+    expect(inspected.details?.runtimeBase).toBe('opencode')
+    expect(inspected.details?.contractReady).toBe(true)
+    expect(Array.isArray(inspected.details?.blockers)).toBe(true)
+    expect(inspected.details?.inspection).toBeTruthy()
+    expect(inspected.details?.parityOperations).toEqual(['inspect', 'syncConfig', 'start', 'stop'])
+  })
+
   test('controller apply creates Worker resources from manifest objects', async () => {
     const [workspace] = await db
       .insert(workspaces)

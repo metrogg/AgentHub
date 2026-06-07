@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { workerRuntimeService } from '../worker-runtime'
 import { workerController, type WorkerReconcileContext } from '../orchestrator/worker-controller'
 import { and, db, eq, matrixIdentities, roomParticipants, rooms, workerInstances, workspaceAgents } from '@agenthub/db'
@@ -13,7 +14,9 @@ import {
   type WorkerOpenClawRoomBinding,
 } from '../worker-runtime/worker-openclaw-config'
 import { waitForWorkerReadiness } from '../worker-runtime/worker-readiness-reporter'
-import { ensureWorkerAgentContractFromController } from '../agent-contract'
+import { ensureWorkerAgentContractFromController, resolveWorkerAgentContractWorkspace } from '../agent-contract'
+import { buildAgentProfile } from '../agents/profile-builder'
+import { inspectCodeAgentRuntime } from '../code-agent-adapter'
 
 export interface WorkerBackendInspectResult {
   workerInstanceId: string
@@ -267,6 +270,14 @@ export class LocalCliWorkerBackend implements WorkerBackend {
 
   async inspect(workerInstanceId: string): Promise<WorkerBackendInspectResult> {
     const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+    if (!worker) {
+      return {
+        workerInstanceId,
+        ready: false,
+        state: 'missing',
+        message: 'WorkerInstance not found.',
+      }
+    }
     if (isQwenPawRuntimeBase(worker?.runtimeBase)) {
       return qwenPawWorkerBackendBlocked(workerInstanceId, worker?.runtimeBase)
     }
@@ -282,6 +293,8 @@ export class LocalCliWorkerBackend implements WorkerBackend {
         details: workerStatus as unknown as Record<string, unknown>,
       }
     }
+    const bridgeInspection = await inspectBridgeWorkerBackend(worker)
+    if (bridgeInspection) return bridgeInspection
     return {
       workerInstanceId,
       ready: true,
@@ -407,6 +420,87 @@ function qwenPawWorkerBackendBlocked(workerInstanceId: string, runtimeBase?: str
       fallback: 'No Codex/OpenCode/Claude/Gemini fallback is allowed for a QwenPaw Worker.',
     },
   }
+}
+
+async function inspectBridgeWorkerBackend(
+  worker: typeof workerInstances.$inferSelect,
+): Promise<WorkerBackendInspectResult | null> {
+  const codeAgentType = bridgeCodeAgentType(worker.runtimeBase)
+  if (!codeAgentType) return null
+
+  const [agent] = await db
+    .select()
+    .from(workspaceAgents)
+    .where(eq(workspaceAgents.id, worker.workspaceAgentId))
+    .limit(1)
+  if (!agent) {
+    return {
+      workerInstanceId: worker.id,
+      ready: false,
+      state: 'missing-agent',
+      message: 'Bridge Worker inspect requires a WorkspaceAgent.',
+      details: { runtimeBase: worker.runtimeBase },
+    }
+  }
+
+  const contract = resolveWorkerAgentContractWorkspace(worker.id)
+  const contractFiles = {
+    profile: existsSync(contract.profilePath),
+    runtime: existsSync(contract.runtimePath),
+    soul: existsSync(contract.soulPath),
+    agents: existsSync(contract.agentsPath),
+    state: existsSync(contract.statePath),
+    rooms: existsSync(contract.roomsPath),
+    tasks: existsSync(contract.tasksPath),
+    skillsDir: existsSync(contract.skillsPath),
+  }
+  const contractReady = Object.values(contractFiles).every(Boolean)
+  const profile = buildAgentProfile(
+    {
+      ...agent,
+      codeAgentType: agent.codeAgentType ?? codeAgentType,
+      modelId: worker.modelId ?? agent.modelId,
+    },
+    contractReady ? contract.root : null,
+  )
+  const inspection = await inspectCodeAgentRuntime(profile, contractReady ? contract.root : null)
+  const blockers = [
+    ...(contractReady ? [] : ['Agent contract is incomplete; run syncConfig before starting this Worker.']),
+    ...(inspection?.blockers ?? ['Bridge runtime inspection is unavailable']),
+  ]
+  const ready = Boolean(inspection?.canExecute) && blockers.length === 0
+  return {
+    workerInstanceId: worker.id,
+    ready,
+    state: ready ? 'bridge-ready' : 'bridge-blocked',
+    message: ready
+      ? `${inspection?.adapterName ?? codeAgentType} bridge runtime is ready.`
+      : blockers[0] ?? `${codeAgentType} bridge runtime is blocked.`,
+    details: {
+      source: 'inspectCodeAgentRuntime',
+      runtimeBase: worker.runtimeBase,
+      codeAgentType,
+      contractRoot: contract.root,
+      contractReady,
+      contractFiles,
+      inspection,
+      blockers,
+      parityOperations: ['inspect', 'syncConfig', 'start', 'stop'],
+      missingOperations: ['prepare', 'health'],
+    },
+  }
+}
+
+function bridgeCodeAgentType(runtimeBase?: string | null): 'codex' | 'claude-code' | 'opencode' | 'gemini' | null {
+  if (
+    runtimeBase === 'codex' ||
+    runtimeBase === 'claude-code' ||
+    runtimeBase === 'opencode' ||
+    runtimeBase === 'gemini'
+  ) {
+    return runtimeBase
+  }
+  return null
 }
 
 async function ensureOpenClawWorkerIdentity(workerInstanceId: string, displayName: string) {
