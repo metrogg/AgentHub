@@ -270,6 +270,42 @@ export async function ensureWorkerAgentContractFromController(
   })
 }
 
+export function touchWorkerAgentContractHeartbeat(
+  workerInstanceId: string,
+  heartbeat: {
+    lastHeartbeatAt?: string | null
+    lastMatrixSyncAt?: string | null
+    lastRuntimeReadyAt?: string | null
+    lastTaskStartedAt?: string | null
+    lastTaskCompletedAt?: string | null
+    lastError?: string | null
+    queueDepth?: number | null
+  },
+): boolean {
+  const ws = resolveWorkerAgentContractWorkspace(workerInstanceId)
+  const state = readJsonIfExists(ws.statePath)
+  if (!state) return false
+  const previous = state.heartbeat && typeof state.heartbeat === 'object'
+    ? state.heartbeat as Record<string, unknown>
+    : {}
+  writeJson(ws.statePath, {
+    ...state,
+    generatedAt: new Date().toISOString(),
+    source: 'agenthub-controller-heartbeat',
+    heartbeat: {
+      ...previous,
+      ...(heartbeat.lastHeartbeatAt !== undefined ? { lastHeartbeatAt: heartbeat.lastHeartbeatAt } : {}),
+      ...(heartbeat.lastMatrixSyncAt !== undefined ? { lastMatrixSyncAt: heartbeat.lastMatrixSyncAt } : {}),
+      ...(heartbeat.lastRuntimeReadyAt !== undefined ? { lastRuntimeReadyAt: heartbeat.lastRuntimeReadyAt } : {}),
+      ...(heartbeat.lastTaskStartedAt !== undefined ? { lastTaskStartedAt: heartbeat.lastTaskStartedAt } : {}),
+      ...(heartbeat.lastTaskCompletedAt !== undefined ? { lastTaskCompletedAt: heartbeat.lastTaskCompletedAt } : {}),
+      ...(heartbeat.lastError !== undefined ? { lastError: heartbeat.lastError } : {}),
+      ...(heartbeat.queueDepth !== undefined ? { queueDepth: heartbeat.queueDepth ?? 0 } : {}),
+    },
+  })
+  return true
+}
+
 function buildWorkerState(
   input: EnsureWorkerAgentContractInput,
   runtimeBase: string | null,

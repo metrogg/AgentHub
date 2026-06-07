@@ -22,7 +22,7 @@ import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
-import { ensureWorkerAgentContractFromController } from '../agent-contract'
+import { ensureWorkerAgentContractFromController, touchWorkerAgentContractHeartbeat } from '../agent-contract'
 import { EphemeralCodeAgentWorkerRuntime } from './local-worker-runtime'
 import { ResidentRoomWorkerRuntime } from './resident-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
@@ -689,6 +689,16 @@ export class WorkerRuntimeService {
       runtimeType: runtime.runtimeType,
       startedEventId: startedEvent.id,
     })
+    await refreshWorkerContractMirror({
+      workerInstanceId: thread?.workerInstanceId ?? null,
+      source: input.source ?? 'worker-runtime.start',
+    })
+    if (thread?.workerInstanceId) {
+      touchWorkerAgentContractHeartbeat(thread.workerInstanceId, {
+        lastTaskStartedAt: new Date().toISOString(),
+        queueDepth: 0,
+      })
+    }
 
     const stopHeartbeat = startWorkerRuntimeHeartbeat({
       roomId: room.id,
@@ -835,10 +845,17 @@ export class WorkerRuntimeService {
         result: finalResult,
         source: input.source ?? 'worker-runtime.run',
       })
-      await refreshWorkerContractAfterTaskRoomResult({
+      await refreshWorkerContractMirror({
         workerInstanceId: thread?.workerInstanceId ?? null,
         source: input.source ?? 'worker-runtime.run',
       })
+      if (thread?.workerInstanceId) {
+        touchWorkerAgentContractHeartbeat(thread.workerInstanceId, {
+          ...(finalResult.status === 'completed' ? { lastTaskCompletedAt: new Date().toISOString() } : {}),
+          ...(finalResult.status === 'failed' ? { lastError: finalResult.message ?? 'WorkerRuntime failed.' } : {}),
+          queueDepth: 0,
+        })
+      }
 
       return finalResult
     } finally {
@@ -1361,6 +1378,12 @@ function startWorkerRuntimeHeartbeat(input: {
         heartbeatCount,
       },
     })
+    if (input.workerInstanceId) {
+      touchWorkerAgentContractHeartbeat(input.workerInstanceId, {
+        lastHeartbeatAt: now.toISOString(),
+        queueDepth: 0,
+      })
+    }
     await roomService.appendTimelineEvent({
       roomId: input.roomId,
       senderParticipantId: input.participantId,
@@ -1568,7 +1591,7 @@ async function syncRunControllerAfterTaskRoomResult(input: {
   })
 }
 
-async function refreshWorkerContractAfterTaskRoomResult(input: {
+async function refreshWorkerContractMirror(input: {
   workerInstanceId: string | null
   source: string
 }) {
@@ -1586,7 +1609,7 @@ async function refreshWorkerContractAfterTaskRoomResult(input: {
         workerInstanceId: input.workerInstanceId,
         source: input.source,
       },
-      'Failed to refresh Worker contract after task room result',
+      'Failed to refresh Worker contract mirror',
     )
   }
 }

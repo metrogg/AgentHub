@@ -89,8 +89,11 @@ describe('WorkerRuntime task room integration', () => {
     expect(mirroredTask?.runtimeLeaseId).toBe(leaseRows[0]?.id)
     const contractState = JSON.parse(readFileSync(contract.statePath, 'utf8')) as {
       activeTasks: Array<{ taskId: string; status: string }>
+      heartbeat: { lastTaskStartedAt: string | null; lastTaskCompletedAt: string | null }
     }
     expect(contractState.activeTasks.find((item) => item.taskId === room.taskId)?.status).toBe('completed')
+    expect(contractState.heartbeat.lastTaskStartedAt).toBeTruthy()
+    expect(contractState.heartbeat.lastTaskCompletedAt).toBeTruthy()
   })
 
   test('running task room emits WorkerRuntime heartbeat into room timeline and stops after completion', async () => {
@@ -120,6 +123,11 @@ describe('WorkerRuntime task room integration', () => {
       .where(eq(workerInstances.id, heartbeatEvents[0]!.metadata!.workerInstanceId as string))
     expect(workerRowsDuringRun[0]?.observedState).toBe('busy')
     expect(workerRowsDuringRun[0]?.health?.heartbeatCount).toBeGreaterThanOrEqual(1)
+    const heartbeatContract = resolveWorkerAgentContractWorkspace(heartbeatEvents[0]!.metadata!.workerInstanceId as string)
+    const heartbeatState = JSON.parse(readFileSync(heartbeatContract.statePath, 'utf8')) as {
+      heartbeat: { lastHeartbeatAt: string | null }
+    }
+    expect(heartbeatState.heartbeat.lastHeartbeatAt).toBeTruthy()
 
     runtime.finish()
     await running
