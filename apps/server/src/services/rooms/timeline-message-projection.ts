@@ -29,7 +29,7 @@ const INTERNAL_RUNTIME_CHAT_KINDS = new Set([
   'worker-runtime.group-mention-dispatched',
   'worker-runtime.waiting-for-human',
   'worker-runtime.waiting-on-human-dependency',
-  'worker-runtime.failed',
+  'worker-runtime.skipped-by-dependency',
 ])
 
 export async function listSessionMessagesRoomFirst(input: {
@@ -511,17 +511,20 @@ function visibleBodyForEvent(event: TimelineEventRow) {
   if (typeof metadata.kind === 'string' && metadata.kind.startsWith('manager.status.')) return ''
   if (metadata.kind === 'manager.dispatch.diagnostic') return ''
   if (typeof metadata.kind === 'string' && INTERNAL_RUNTIME_CHAT_KINDS.has(metadata.kind)) return ''
-  if (event.body.trim()) return event.body
   if (event.type === 'approval.requested' && metadata.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
+  }
+  if (event.type === 'approval.requested' && metadata.kind === 'controller.apply.approval.requested') {
+    return '需要确认 Controller 变更。'
   }
   if (event.type === 'artifact.created') {
     const artifact = asRecord(metadata.artifact)
     return asString(artifact.title) ?? asString(metadata.title) ?? '产物已创建'
   }
-  if (event.type === 'task.progress') return asString(metadata.progressStatus) ?? '任务进度更新'
   if (event.type === 'task.assigned') return asString(metadata.taskTitle) ?? '任务已分配'
+  if (event.type === 'task.progress') return ''
   if (event.type === 'approval.requested') return '需要用户确认'
+  if (event.body.trim()) return event.body
   return ''
 }
 

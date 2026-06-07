@@ -41,7 +41,7 @@ const INTERNAL_RUNTIME_CHAT_KINDS = new Set([
   'worker-runtime.group-mention-dispatched',
   'worker-runtime.waiting-for-human',
   'worker-runtime.waiting-on-human-dependency',
-  'worker-runtime.failed',
+  'worker-runtime.skipped-by-dependency',
 ])
 
 export function projectRoomTimeline(input: {
@@ -466,17 +466,6 @@ function isLiveCodeAgentRunMetadataEvent(event: TimelineEvent) {
   )
 }
 
-function isDirectWorkerRuntimeRunningStatusEvent(
-  event: TimelineEvent,
-  room: Room,
-  metadata: Record<string, unknown> | null,
-) {
-  if (room.kind !== 'direct' || event.type !== 'task.progress') return false
-  const kind = asString(metadata?.kind)
-  if (kind !== 'worker-runtime.started' && kind !== 'worker-runtime.progress') return false
-  return codeAgentStatusFromWorkerRuntimeEvent(event, metadata) === 'running'
-}
-
 function shouldAttachCodeAgentRunToMessage(
   event: TimelineEvent,
   run: CodeAgentRunMetadata | null,
@@ -587,8 +576,6 @@ function visibleBodyForEvent(event: TimelineEvent) {
   const metadata = asRecord(event.metadata) ?? {}
   if (metadata.hiddenFromChat === true) return ''
   const kind = asString(metadata.kind)
-  if (kind && INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return ''
-  if (event.body.trim()) return event.body
   if (event.metadata?.kind === 'manager.dispatch.diagnostic') return ''
   if (event.type === 'approval.requested' && event.metadata?.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
@@ -596,13 +583,18 @@ function visibleBodyForEvent(event: TimelineEvent) {
   if (event.type === 'approval.requested' && event.metadata?.kind === 'controller.apply.approval.requested') {
     return '需要确认 Controller 变更。'
   }
+  if (event.type === 'approval.requested' && event.metadata?.kind === 'worker-runtime.clarification-requested') {
+    return event.body.trim() || asString(metadata.question) || '需要用户澄清'
+  }
   if (event.type === 'artifact.created') {
     const artifact = asRecord(event.metadata?.artifact)
     return asString(artifact?.title) ?? asString(event.metadata?.title) ?? '产物已创建'
   }
-  if (event.type === 'task.progress') return asString(event.metadata?.progressStatus) ?? '任务进度更新'
   if (event.type === 'task.assigned') return asString(event.metadata?.taskTitle) ?? '任务已分配'
   if (event.type === 'approval.requested') return '需要用户确认'
+  if (event.type === 'task.progress') return ''
+  if (kind && INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return ''
+  if (event.body.trim()) return event.body
   return ''
 }
 
