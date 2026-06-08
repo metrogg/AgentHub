@@ -20,7 +20,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArtifactPreviewSurface } from '../components/artifacts/ArtifactPreviewSurface'
 import SessionList from '../components/chat/SessionList'
 import {
@@ -86,7 +86,10 @@ const typeFilters: Array<{ value: AssetTypeFilter; label: string }> = [
 
 export default function ArtifactsPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { language } = useI18n()
+  const workspaceIdFilter = searchParams.get('workspaceId')?.trim() || ''
+  const sourceSessionId = searchParams.get('sessionId')?.trim() || ''
   const [runs, setRuns] = useState<OrchestratorRunListItem[]>([])
   const [blackboardByRun, setBlackboardByRun] = useState<Record<string, TypedBlackboardEntry[]>>({})
   const [artifactsByRun, setArtifactsByRun] = useState<Record<string, OrchestratorRunArtifactSnapshot[]>>({})
@@ -103,13 +106,16 @@ export default function ArtifactsPage() {
     setMessage('')
     try {
       const result = await api.listOrchestratorRuns()
-      setRuns(result.items)
-      const firstRunId = result.items[0]?.id
-      if (firstRunId && selectedRunId !== 'all' && !result.items.some((run) => run.id === selectedRunId)) {
+      const scopedRuns = workspaceIdFilter
+        ? result.items.filter((run) => run.workspaceId === workspaceIdFilter)
+        : result.items
+      setRuns(scopedRuns)
+      const firstRunId = scopedRuns[0]?.id
+      if (firstRunId && selectedRunId !== 'all' && !scopedRuns.some((run) => run.id === selectedRunId)) {
         setSelectedRunId(firstRunId)
       }
-      const visibleRunIds = result.items.slice(0, 12).map((run) => run.id)
-      await Promise.all([loadBlackboardForRuns(visibleRunIds), loadArtifactsForRuns(result.items.slice(0, 12))])
+      const visibleRunIds = scopedRuns.slice(0, 12).map((run) => run.id)
+      await Promise.all([loadBlackboardForRuns(visibleRunIds), loadArtifactsForRuns(scopedRuns.slice(0, 12))])
     } catch (error: any) {
       setMessage(error?.message || '读取产物资产库失败')
     } finally {
@@ -160,7 +166,7 @@ export default function ArtifactsPage() {
   useEffect(() => {
     void refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [workspaceIdFilter])
 
   useEffect(() => {
     if (selectedRunId === 'all') return
@@ -240,6 +246,16 @@ export default function ArtifactsPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {sourceSessionId && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/chat/${sourceSessionId}`)}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
+                >
+                  <ChevronRight className="h-4 w-4 rotate-180" />
+                  返回群聊
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => navigate('/orchestrator-runs')}
