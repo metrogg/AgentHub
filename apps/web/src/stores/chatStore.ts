@@ -3627,8 +3627,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             mergeMessages(messages, projectedMessages),
           )
           if (projectedSessionId === sessionId) {
+            // Clear typing indicator when a visible Manager/Worker reply arrives.
+            // These messages were already filtered (hiddenFromChat, manager.status.* removed).
+            const hasVisibleAgentReply = projectedMessages.some((m) => {
+              const rt = asRecord(m.metadata?.roomTimeline) ?? asRecord(m.metadata?.roomTimelineProjection)
+              const eventType = asString(rt?.eventType)
+              return eventType === 'manager.message' || eventType === 'worker.message'
+            })
             set((s) => ({
               messages: mergeMessages(s.messages, projectedMessages),
+              ...(hasVisibleAgentReply && s.agentTyping ? { agentTyping: false, agentActivity: null } : {}),
             }))
           }
         }

@@ -27,6 +27,8 @@ import { emitRunEvent } from '../orchestrator/run-events'
 import { workerRuntimeService } from '../worker-runtime/worker-runtime-service'
 import { blackboard, Blackboard } from '../blackboard'
 import { createMatrixClientFromEnv } from './matrix-client'
+import { WsEvent } from '@agenthub/shared'
+import { broadcastSessionEvent } from '../agent-runner'
 import { roomService } from './room-service'
 
 const MANAGER_SLOW_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_SLOW_STATUS_MS || '60000')
@@ -459,6 +461,12 @@ export class MatrixRoomEventDispatcher {
         (room.kind === 'group' || room.kind === 'manager_dm')
       ) {
         const pendingEventId = await this.appendManagerPendingStatus(room, event, 'matrix-manager-mention')
+        if (room.sessionId) {
+          broadcastSessionEvent(room.sessionId, {
+            type: WsEvent.AgentTyping,
+            payload: { sessionId: room.sessionId, agentName: 'Manager', phase: 'replying' },
+          })
+        }
         const managerResult = await this.handlers.stepManagerRoom({
           roomId: room.id,
           ownerId: room.ownerId,
@@ -490,6 +498,12 @@ export class MatrixRoomEventDispatcher {
         event,
         event.metadata?.kind === 'matrix.sync.imported' ? 'matrix-sync' : 'platform-timeline',
       )
+      if (room.sessionId && event.senderType === 'human') {
+        broadcastSessionEvent(room.sessionId, {
+          type: WsEvent.AgentTyping,
+          payload: { sessionId: room.sessionId, agentName: 'Manager', phase: 'replying' },
+        })
+      }
       const managerResult = await this.handlers.stepManagerRoom({
         roomId: room.id,
         ownerId: room.ownerId,
