@@ -2031,6 +2031,9 @@ function taskArtifactPreviewItem(
   index: number,
 ): ArtifactPreviewItem {
   const title = artifact.title || artifact.filePath || artifact.url || `产物 ${index + 1}`
+  const path = artifact.filePath ?? undefined
+  const mimeType =
+    (artifact as { mimeType?: string | null }).mimeType ?? mimeFromExtension(extensionFromName(path))
   const kind: ArtifactPreviewItem['kind'] =
     artifact.type === 'diff'
       ? 'diff'
@@ -2042,7 +2045,7 @@ function taskArtifactPreviewItem(
             ? 'workflow'
             : artifact.url
               ? 'web'
-              : /\.(png|jpg|jpeg|webp|gif)$/i.test(artifact.filePath ?? '')
+              : mimeType?.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif|svg)$/i.test(path ?? '')
                 ? 'image'
                 : 'file'
   return {
@@ -2054,9 +2057,10 @@ function taskArtifactPreviewItem(
       `${taskId}-${index}`,
     title,
     kind,
+    mimeType: mimeType ?? undefined,
     url: artifact.url ?? undefined,
-    path: artifact.filePath ?? undefined,
-    source: artifact.source ?? undefined,
+    path,
+    source: inlinePreviewSource(artifact.source),
   }
 }
 
@@ -5649,7 +5653,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   const canOpen = Boolean(item.url)
   const previewSourcePath = item.path ?? previewPathFromUrl(item.url) ?? undefined
   const canInspectSource =
-    Boolean(item.source?.trim()) || canFetchWorkspaceTextSource(item, previewSourcePath)
+    hasInlinePreviewSource(item) || canFetchWorkspaceTextSource(item, previewSourcePath)
   const runnablePreview = (item.kind === 'web' || item.kind === 'deploy') && Boolean(item.url)
   const [maximized, setMaximized] = useState(false)
   const [visible, setVisible] = useState(false)
@@ -6188,7 +6192,9 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
               <WordDocumentPreview item={item} />
             ) : isPptxPreviewItem(item) ? (
               <PresentationDocumentPreview item={item} />
-            ) : item.source ? (
+            ) : isPdfPreviewItem(item) ? (
+              <PdfDocumentPreview item={item} />
+            ) : canInspectSource ? (
               <TextFilePreview item={item} />
             ) : (
               <DocumentPreviewPlaceholder item={item} />
@@ -6492,6 +6498,22 @@ const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }
   )
 }
 
+const PdfDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const url = officePreviewUrl(item)
+  if (!url) return <DocumentPreviewPlaceholder item={item} />
+
+  return (
+    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
+      <OfficePreviewHeader item={item} label="PDF" />
+      <iframe
+        title={item.title}
+        src={url}
+        className="min-h-0 flex-1 border-0 bg-white"
+      />
+    </div>
+  )
+}
+
 const OfficePreviewHeader: FC<{ item: ArtifactPreviewItem; label: string }> = ({
   item,
   label,
@@ -6544,7 +6566,7 @@ const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
     'idle',
   )
   const [sourceLoadError, setSourceLoadError] = useState('')
-  const source = loadedSource ?? item.source ?? ''
+  const source = loadedSource ?? inlinePreviewSource(item.source) ?? ''
   const lines = useMemo(() => source.replace(/\n$/, '').split('\n'), [source])
   const highlightedLines = useMemo(
     () => lines.map((line) => highlightCode(line, language)),
@@ -7826,7 +7848,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       id: artifact.id,
       description: artifact.description,
       kind: 'web',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: previewKindName(artifact.previewKind),
       title: artifact.title,
       url: artifact.url,
@@ -7839,7 +7861,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       id: artifact.id,
       description: artifact.description ?? artifact.logs,
       kind: 'deploy',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: `${artifact.provider} · ${deployStatusLabel(artifact.status)}`,
       title: artifact.title,
       url: artifact.url,
@@ -7863,24 +7885,25 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       id: artifact.id,
       description: artifact.description,
       kind: 'workflow',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: `${artifact.nodes.length} 个节点 · ${artifact.edges.length} 条连接`,
       title: artifact.title,
     }
   }
   // HTML 文件生成预览 URL
   const ext = artifact.path.split('.').pop()?.toLowerCase()
+  const mimeType = artifact.mimeType ?? mimeFromExtension(ext)
   const isHtml = ext === 'html' || ext === 'htm'
 
   return {
     id: artifact.id,
     description: artifact.description,
     kind: isHtml ? 'web' : filePreviewKind(artifact),
-    mimeType: artifact.mimeType,
+    mimeType,
     path: artifact.path,
-    source: artifact.source,
+    source: inlinePreviewSource(artifact.source),
     subtitle:
-      [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null]
+      [mimeType, artifact.size ? formatBytes(artifact.size) : null]
         .filter(Boolean)
         .join(' · ') || fileStatusLabel(artifact.status ?? 'created'),
     title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
@@ -7891,7 +7914,9 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
 function filePreviewKind(
   artifact: Extract<AgentArtifact, { type: 'file' }>,
 ): ArtifactPreviewItem['kind'] {
-  if (artifact.mimeType?.startsWith('image/')) return 'image'
+  const extension = extensionFromName(artifact.path)
+  const mimeType = artifact.mimeType ?? mimeFromExtension(extension)
+  if (mimeType?.startsWith('image/')) return 'image'
   return 'file'
 }
 
@@ -8774,6 +8799,27 @@ function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
   return isTextLikeAttachment(mimeType, extension)
 }
 
+const provenanceSourceLabels = new Set([
+  'artifact-store',
+  'blackboard.handoffpath',
+  'code-agent',
+  'file',
+  'git',
+  'matrix-file',
+  'task artifact',
+])
+
+function inlinePreviewSource(value?: string | null) {
+  const trimmed = value?.trim()
+  if (!trimmed) return undefined
+  if (provenanceSourceLabels.has(trimmed.toLowerCase())) return undefined
+  return value ?? undefined
+}
+
+function hasInlinePreviewSource(item: ArtifactPreviewItem) {
+  return Boolean(inlinePreviewSource(item.source)?.trim())
+}
+
 function enrichPreviewItem(item: ArtifactPreviewItem, workspaceId?: string): ArtifactPreviewItem {
   const urlWorkspaceId = workspaceIdFromUrl(item.url)
   const url = normalizePreviewUrl(item.url)
@@ -8837,6 +8883,12 @@ function isPptxPreviewItem(item: ArtifactPreviewItem) {
   const extension = previewFileExtension(item)
   const mimeType = item.mimeType?.toLowerCase() ?? ''
   return extension === 'pptx' || mimeType.includes('presentationml.presentation')
+}
+
+function isPdfPreviewItem(item: ArtifactPreviewItem) {
+  const extension = previewFileExtension(item)
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  return extension === 'pdf' || mimeType === 'application/pdf'
 }
 
 function officePreviewUrl(item: ArtifactPreviewItem) {

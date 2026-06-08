@@ -9,6 +9,7 @@ import { staticPreviewUrl } from '../apps/server/src/services/code-agent-adapter
 import { previewDirectoryUrl } from '../apps/server/src/services/artifact-preview'
 import {
   enrichPreviewItem,
+  isPdfPreviewItem,
   previewItemFromAgentArtifact,
 } from '../apps/web/src/lib/artifactPreview'
 
@@ -75,6 +76,29 @@ describe('artifact static preview', () => {
     expect(enriched.url).toBe(
       `/api/artifacts/preview-file?workspaceId=source-workspace&path=${encodeURIComponent(filePath)}`,
     )
+  })
+
+  test('file artifacts infer document mime type and ignore provenance source labels', () => {
+    const docx = previewItemFromAgentArtifact({
+      id: 'file:report.docx',
+      type: 'file',
+      title: 'report.docx',
+      path: 'reports/report.docx',
+      source: 'code-agent',
+    })
+
+    const pdf = previewItemFromAgentArtifact({
+      id: 'file:brief.pdf',
+      type: 'file',
+      title: 'brief.pdf',
+      path: 'brief.pdf',
+      source: 'artifact-store',
+    })
+
+    expect(docx.mimeType).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    expect(docx.source).toBeUndefined()
+    expect(isPdfPreviewItem(pdf)).toBe(true)
+    expect(pdf.source).toBeUndefined()
   })
 
   test('preview-dir rejects an arbitrary directory not under a managed root or workspace', async () => {

@@ -922,6 +922,10 @@ function normalizeNetworkProfiles(value: any) {
 
 async function getFirewallStatus(port: number) {
   const ruleName = firewallRuleName(port)
+  if (process.platform === 'win32') {
+    const netshStatus = await getFirewallStatusFromNetsh(port, ruleName).catch(() => null)
+    if (netshStatus) return netshStatus
+  }
   if (process.platform !== 'win32') {
     return { ruleName, allowed: true, supported: false, rules: [], message: '当前系统不是 Windows，无需使用 Windows 防火墙修复。' }
   }
@@ -957,17 +961,82 @@ function normalizeFirewallRules(value: any) {
   const items = Array.isArray(value) ? value : value ? [value] : []
   return items.map((item) => ({
     displayName: String(item.DisplayName ?? ''),
-    enabled: String(item.Enabled ?? '').toLowerCase() === 'true',
-    direction: String(item.Direction ?? ''),
-    action: String(item.Action ?? ''),
+    enabled: normalizeFirewallEnabled(item.Enabled),
+    direction: normalizeFirewallDirection(item.Direction),
+    action: normalizeFirewallAction(item.Action),
     profile: String(item.Profile ?? ''),
   }))
+}
+
+async function getFirewallStatusFromNetsh(port: number, ruleName: string) {
+  const { stdout } = await execFileAsync(
+    'netsh.exe',
+    ['advfirewall', 'firewall', 'show', 'rule', `name=${ruleName}`],
+    { timeout: 3000, windowsHide: true },
+  )
+  const text = stdout.replace(/\u0000/g, '')
+  if (!text || /No rules match|没有与指定条件匹配的规则/i.test(text)) return null
+  const enabled = /(?:Enabled|已启用):\s*(?:Yes|是)/i.test(text)
+  const direction = /(?:Direction|方向):\s*(?:In\b|入)/i.test(text)
+    ? 'Inbound'
+    : /(?:Direction|方向):\s*(?:Out\b|出)/i.test(text)
+      ? 'Outbound'
+      : ''
+  const action = /(?:Action|操作):\s*(?:Allow|允许)/i.test(text)
+    ? 'Allow'
+    : /(?:Action|操作):\s*(?:Block|阻止)/i.test(text)
+      ? 'Block'
+      : ''
+  const rules = [{
+    displayName: ruleName,
+    enabled,
+    direction,
+    action,
+    profile: /(?:Profiles|配置文件):\s*([^\r\n]+)/i.exec(text)?.[1]?.trim() ?? '',
+  }]
+  const allowed = rules.some((rule) => rule.enabled && rule.direction === 'Inbound' && rule.action === 'Allow')
+  return {
+    ruleName,
+    allowed,
+    supported: true,
+    rules,
+    message: allowed
+      ? `Windows firewall allows TCP ${port} inbound.`
+      : `Windows firewall rule ${ruleName} was not detected as allowed.`,
+  }
+}
+
+function normalizeFirewallEnabled(value: unknown) {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1
+  const normalized = String(value ?? '').trim().toLowerCase()
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'enabled'
+}
+
+function normalizeFirewallDirection(value: unknown) {
+  if (typeof value === 'number') return value === 1 ? 'Inbound' : value === 2 ? 'Outbound' : String(value)
+  const normalized = String(value ?? '').trim()
+  if (normalized === '1') return 'Inbound'
+  if (normalized === '2') return 'Outbound'
+  return normalized
+}
+
+function normalizeFirewallAction(value: unknown) {
+  if (typeof value === 'number') return value === 2 ? 'Allow' : value === 4 ? 'Block' : String(value)
+  const normalized = String(value ?? '').trim()
+  if (normalized === '2') return 'Allow'
+  if (normalized === '4') return 'Block'
+  return normalized
 }
 
 async function openFirewallPort(port: number) {
   const ruleName = firewallRuleName(port)
   if (process.platform !== 'win32') {
     return { ok: true, message: '当前系统不是 Windows，无需开放 Windows 防火墙端口。' }
+  }
+  const current = await getFirewallStatus(port)
+  if (current.allowed) {
+    return { ok: true, message: `Windows firewall already allows TCP ${port} inbound.` }
   }
   const script = [
     `$name = ${quotePowerShellString(ruleName)};`,

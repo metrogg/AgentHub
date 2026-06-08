@@ -30,11 +30,17 @@ import {
   type OrchestratorRunTaskSnapshot,
   type TypedBlackboardEntry,
 } from '../lib/api'
-import type { ArtifactPreviewItem } from '../lib/artifactPreview'
+import {
+  extensionFromName,
+  inlinePreviewSource,
+  isDocumentLikeAttachment,
+  mimeFromExtension,
+  type ArtifactPreviewItem,
+} from '../lib/artifactPreview'
 import { cn, relativeTime } from '../lib/utils'
 import { useI18n } from '../lib/i18n'
 
-type AssetKind = 'artifact' | 'handoff' | 'blackboard' | 'diff' | 'preview' | 'file' | 'deploy'
+type AssetKind = 'artifact' | 'handoff' | 'blackboard' | 'diff' | 'preview' | 'file' | 'document' | 'deploy'
 type AssetTypeFilter = AssetKind | 'all'
 
 interface AssetItem {
@@ -51,6 +57,7 @@ interface AssetItem {
   agentId?: string | null
   status?: string
   path?: string
+  mimeType?: string
   url?: string
   source?: string
   updatedAt: string
@@ -73,6 +80,7 @@ const typeFilters: Array<{ value: AssetTypeFilter; label: string }> = [
   { value: 'preview', label: '预览' },
   { value: 'diff', label: 'Diff' },
   { value: 'file', label: '文件' },
+  { value: 'document', label: '文档' },
   { value: 'deploy', label: '部署' },
 ]
 
@@ -177,7 +185,7 @@ export default function ArtifactsPage() {
       const matchesType =
         typeFilter === 'all' ||
         asset.kind === typeFilter ||
-        (typeFilter === 'artifact' && ['artifact', 'handoff', 'diff', 'preview', 'file', 'deploy'].includes(asset.kind))
+        (typeFilter === 'artifact' && ['artifact', 'handoff', 'diff', 'preview', 'file', 'document', 'deploy'].includes(asset.kind))
       const matchesQuery =
         !keyword ||
         [
@@ -662,9 +670,9 @@ function normalizeArtifact(
 ): AssetItem | null {
   const record = asRecord(value)
   if (!record) return null
-  const type = text(record.type)
   const path = text(record.path) || text(record.filePath)
   const url = text(record.url)
+  const mimeType = artifactMimeType(record, path || url)
   const title = text(record.title) || path.split(/[\\/]/).pop() || `${task.title} 产物 ${index + 1}`
   const description = text(record.description) || artifactDescription(record)
   const createdAt = text(record.createdAt) || task.completedAt || task.startedAt || run.updatedAt
@@ -683,8 +691,9 @@ function normalizeArtifact(
     agentId: task.agentId,
     status: task.status,
     path,
+    mimeType,
     url,
-    source: text(record.source) || type || 'task artifact',
+    source: inlinePreviewSource(text(record.source)) || undefined,
     updatedAt: createdAt,
     raw: value,
   }
@@ -696,6 +705,7 @@ function normalizeStoredArtifact(
   task?: OrchestratorRunTaskSnapshot,
 ): AssetItem {
   const path = artifact.path || artifact.filePath || artifact.handoffPath || artifact.sourcePath || artifact.objectKey || ''
+  const mimeType = artifact.mimeType || mimeFromExtension(extensionFromName(path))
   return {
     id: `${run.id}:stored-artifact:${artifact.artifactId}`,
     kind: artifactKind(artifact as unknown as Record<string, unknown>),
@@ -710,7 +720,8 @@ function normalizeStoredArtifact(
     agentId: artifact.workspaceAgentId ?? task?.agentId ?? artifact.workerInstanceId ?? null,
     status: artifact.status,
     path,
-    source: artifact.source,
+    mimeType,
+    source: inlinePreviewSource(artifact.source),
     updatedAt: artifact.createdAt || run.updatedAt,
     raw: artifact,
   }
@@ -747,6 +758,7 @@ function normalizeHandoffFromBlackboard(entry: TypedBlackboardEntry, run: Orches
   const value = entry.value ?? {}
   const handoffPath = text(value.handoffPath)
   if (!handoffPath) return null
+  const mimeType = mimeFromExtension(extensionFromName(handoffPath))
   return {
     id: `${run.id}:handoff:${entry.id}`,
     kind: 'handoff',
@@ -760,6 +772,7 @@ function normalizeHandoffFromBlackboard(entry: TypedBlackboardEntry, run: Orches
     taskTitle: text(value.taskTitle),
     agentId: entry.agentId ?? (text(value.sourceAgentId) || null),
     path: handoffPath,
+    mimeType,
     source: 'blackboard.handoffPath',
     updatedAt: entry.createdAt,
     raw: entry,
@@ -772,8 +785,18 @@ function artifactKind(record: Record<string, unknown>): AssetKind {
   if (type === 'diff') return 'diff'
   if (type === 'preview') return 'preview'
   if (type === 'deploy') return 'deploy'
+  if (type === 'report' || isDocumentAsset(record, path)) return 'document'
   if (path.toLowerCase().includes('.agenthub/handoff')) return 'handoff'
   return 'file'
+}
+
+function artifactMimeType(record: Record<string, unknown>, name?: string) {
+  return text(record.mimeType) || mimeFromExtension(extensionFromName(name))
+}
+
+function isDocumentAsset(record: Record<string, unknown>, name?: string) {
+  const mimeType = artifactMimeType(record, name)
+  return Boolean(mimeType && isDocumentLikeAttachment(mimeType, extensionFromName(name)))
 }
 
 function artifactDescription(record: Record<string, unknown>) {
@@ -781,6 +804,7 @@ function artifactDescription(record: Record<string, unknown>) {
   if (type === 'diff') return '代码变更 Diff，可用于审阅或应用。'
   if (type === 'preview') return '可打开的网页或静态站点预览。'
   if (type === 'deploy') return '部署或发布预览结果。'
+  if (type === 'report' || isDocumentAsset(record, text(record.path) || text(record.filePath))) return '任务执行生成的文档、报告或可阅读材料。'
   return text(record.mimeType) || text(record.status) || '任务执行生成的文件产物。'
 }
 
@@ -791,7 +815,7 @@ function assetOpenUrl(asset: AssetItem) {
   if (lower.endsWith('.html') || lower.endsWith('.htm')) {
     return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(asset.workspaceId)}&path=${encodeURIComponent(asset.path)}`
   }
-  if (/\.(png|jpe?g|webp|gif|svg|pdf|txt|md|json|csv)$/i.test(asset.path)) {
+  if (/\.(png|jpe?g|webp|gif|svg|pdf|docx?|pptx?|xlsx?|txt|md|markdown|json|csv)$/i.test(asset.path)) {
     return `/api/artifacts/file?workspaceId=${encodeURIComponent(asset.workspaceId)}&path=${encodeURIComponent(asset.path)}`
   }
   return ''
@@ -814,14 +838,16 @@ function assetToPreviewItem(asset: AssetItem): ArtifactPreviewItem {
             : inferPreviewKindFromAsset(asset),
     url: openUrl || asset.url || undefined,
     path: asset.path,
-    source: asset.kind === 'diff' ? text(asRecord(asset.raw)?.diff) || asset.source : asset.source,
+    mimeType: asset.mimeType,
+    source: asset.kind === 'diff' ? text(asRecord(asset.raw)?.diff) || inlinePreviewSource(asset.source) : inlinePreviewSource(asset.source),
     workspaceId: asset.workspaceId,
   }
 }
 
 function inferPreviewKindFromAsset(asset: AssetItem): ArtifactPreviewItem['kind'] {
   const lower = `${asset.path ?? asset.url ?? asset.title}`.toLowerCase()
-  if (/\.(png|jpe?g|webp|gif|svg)$/i.test(lower)) return 'image'
+  const mimeType = asset.mimeType ?? mimeFromExtension(extensionFromName(lower))
+  if (mimeType?.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(lower)) return 'image'
   if (/\.html?$/i.test(lower)) return 'web'
   return 'file'
 }
@@ -886,6 +912,7 @@ function assetIcon(kind: AssetKind) {
     diff: FileDiff,
     preview: Monitor,
     file: FileText,
+    document: FileText,
     deploy: Monitor,
   } satisfies Record<AssetKind, typeof Boxes>
   return map[kind]
@@ -899,6 +926,7 @@ function assetTone(kind: AssetKind) {
     diff: 'bg-indigo-50 text-indigo-700',
     preview: 'bg-blue-50 text-blue-700',
     file: 'bg-amber-50 text-amber-700',
+    document: 'bg-sky-50 text-sky-700',
     deploy: 'bg-violet-50 text-violet-700',
   }
   return map[kind]
@@ -912,6 +940,7 @@ function assetKindLabel(kind: AssetKind) {
     diff: 'Diff',
     preview: '预览',
     file: '文件',
+    document: '文档',
     deploy: '部署',
   }
   return map[kind]

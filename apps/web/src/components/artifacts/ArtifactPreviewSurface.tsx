@@ -37,10 +37,14 @@ import {
   enrichPreviewItem,
   extractPreviewErrorMessage,
   formatPreviewError,
+  hasInlinePreviewSource,
+  inlinePreviewSource,
   isDocxPreviewItem,
+  isPdfPreviewItem,
   isPptxPreviewItem,
   loadPreviewArrayBuffer,
   normalizePreviewUrl,
+  officePreviewUrl,
   previewFileName,
   previewPathFromUrl,
   type ArtifactPreviewItem,
@@ -101,7 +105,7 @@ export function canInspectArtifactPreviewSource(
 ) {
   const enriched = enrichPreviewItem(item, workspaceId)
   const sourcePath = enriched.path ?? previewPathFromUrl(enriched.url) ?? undefined
-  return Boolean(enriched.source?.trim()) || canFetchWorkspaceTextSource(enriched, sourcePath)
+  return hasInlinePreviewSource(enriched) || canFetchWorkspaceTextSource(enriched, sourcePath)
 }
 
 export const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
@@ -211,7 +215,9 @@ export const ArtifactPreviewSurface: FC<ArtifactPreviewSurfaceProps> = ({
         <WordDocumentPreview item={enrichedItem} />
       ) : isPptxPreviewItem(enrichedItem) ? (
         <PresentationDocumentPreview item={enrichedItem} />
-      ) : enrichedItem.source || canInspectArtifactPreviewSource(enrichedItem, workspaceId) ? (
+      ) : isPdfPreviewItem(enrichedItem) ? (
+        <PdfDocumentPreview item={enrichedItem} />
+      ) : hasInlinePreviewSource(enrichedItem) || canInspectArtifactPreviewSource(enrichedItem, workspaceId) ? (
         <TextFilePreview item={enrichedItem} />
       ) : (
         <DocumentPreviewPlaceholder item={enrichedItem} />
@@ -428,6 +434,22 @@ const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }
   )
 }
 
+const PdfDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const url = officePreviewUrl(item)
+  if (!url) return <DocumentPreviewPlaceholder item={item} />
+
+  return (
+    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
+      <OfficePreviewHeader item={item} label="PDF" />
+      <iframe
+        title={item.title}
+        src={url}
+        className="min-h-0 flex-1 border-0 bg-white"
+      />
+    </div>
+  )
+}
+
 const OfficePreviewHeader: FC<{ item: ArtifactPreviewItem; label: string }> = ({
   item,
   label,
@@ -494,7 +516,7 @@ const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
     'idle',
   )
   const [sourceLoadError, setSourceLoadError] = useState('')
-  const source = loadedSource ?? item.source ?? ''
+  const source = loadedSource ?? inlinePreviewSource(item.source) ?? ''
   const lines = useMemo(() => source.replace(/\n$/, '').split('\n'), [source])
   const highlightedLines = useMemo(
     () => lines.map((line) => highlightCode(line, language)),
@@ -1112,10 +1134,12 @@ function previewKindLabel(item: ArtifactPreviewItem) {
   if (item.kind === 'diff') return 'Diff'
   if (item.kind === 'image') return 'Image'
   if (item.kind === 'workflow') return 'Workflow'
+  if (isPdfPreviewItem(item) || isDocxPreviewItem(item) || isPptxPreviewItem(item)) return 'Document'
   return 'File'
 }
 
 function previewFileHint(item: ArtifactPreviewItem) {
+  if (isPdfPreviewItem(item)) return 'PDF preview is available when the file can be read.'
   if (isDocxPreviewItem(item)) return 'Word document preview is available when the file can be read.'
   if (isPptxPreviewItem(item)) return 'PowerPoint preview is available when the file can be read.'
   if (item.mimeType) return item.mimeType
