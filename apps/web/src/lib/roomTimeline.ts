@@ -395,8 +395,12 @@ function roomTimelineStreamKey(message: Message) {
     asString(metadata.senderWorkerInstanceId) ??
     asString(metadata.senderWorkspaceAgentId) ??
     message.senderId
-  if (!traceId || !senderParticipantId) return null
-  return `${traceId}:${senderParticipantId}`
+  if (!senderParticipantId) return null
+  // Manager messages from Matrix sync (OpenClaw) lack traceId — use a synthetic
+  // fallback so consecutive Manager messages still collapse into one bubble.
+  const effectiveTraceId = traceId ?? (eventType === 'manager.message' ? `manager-sender:${senderParticipantId}` : null)
+  if (!effectiveTraceId) return null
+  return `${effectiveTraceId}:${senderParticipantId}`
 }
 
 function mergeTimelineStreamMessage(base: Message, next: Message): Message {
