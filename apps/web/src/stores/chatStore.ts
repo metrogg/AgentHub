@@ -35,6 +35,7 @@ let pendingStream: {
   agentName?: string
 } | null = null
 let pendingStreamTimer: number | null = null
+let managerTypingTimer: number | null = null
 let pendingSessionRefreshTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const messageCache = new Map<string, Message[]>()
@@ -114,6 +115,12 @@ function messageTime(message: Message): number {
   return Number.isFinite(time) ? time : 0
 }
 
+function messageTimelineSequence(message: Message): number | undefined {
+  const metadata = message.metadata ?? {}
+  const roomTimeline = asRecord(metadata.roomTimeline) ?? asRecord(metadata.roomTimelineProjection)
+  return asNumber(roomTimeline?.sequence)
+}
+
 function messageSortPriority(message: Message): number {
   if (message.senderType === SenderType.User) return 0
   if (message.senderType === SenderType.System) return 1
@@ -122,6 +129,12 @@ function messageSortPriority(message: Message): number {
 
 function sortMessages(messages: Message[]): Message[] {
   return [...messages].sort((a, b) => {
+    const aSequence = messageTimelineSequence(a)
+    const bSequence = messageTimelineSequence(b)
+    if (aSequence !== undefined && bSequence !== undefined) {
+      const bySequence = aSequence - bSequence
+      if (bySequence !== 0) return bySequence
+    }
     const byTime = messageTime(a) - messageTime(b)
     if (byTime !== 0) return byTime
     const byPriority = messageSortPriority(a) - messageSortPriority(b)
@@ -2898,6 +2911,10 @@ function clearPendingStream() {
     window.clearTimeout(pendingStreamTimer)
     pendingStreamTimer = null
   }
+  if (managerTypingTimer !== null) {
+    window.clearTimeout(managerTypingTimer)
+    managerTypingTimer = null
+  }
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -3627,17 +3644,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
             mergeMessages(messages, projectedMessages),
           )
           if (projectedSessionId === sessionId) {
-            // Clear typing indicator when a visible Manager/Worker reply arrives.
-            // These messages were already filtered (hiddenFromChat, manager.status.* removed).
+            set((s) => ({
+              messages: mergeMessages(s.messages, projectedMessages),
+            }))
+            // Debounce clearing agentTyping: when Manager/Worker replies arrive,
+            // reset the timer. Clear only after the agent stops sending (1.5s pause).
             const hasVisibleAgentReply = projectedMessages.some((m) => {
               const rt = asRecord(m.metadata?.roomTimeline) ?? asRecord(m.metadata?.roomTimelineProjection)
               const eventType = asString(rt?.eventType)
               return eventType === 'manager.message' || eventType === 'worker.message'
             })
-            set((s) => ({
-              messages: mergeMessages(s.messages, projectedMessages),
-              ...(hasVisibleAgentReply && s.agentTyping ? { agentTyping: false, agentActivity: null } : {}),
-            }))
+            if (hasVisibleAgentReply) {
+              if (managerTypingTimer !== null) window.clearTimeout(managerTypingTimer)
+              managerTypingTimer = window.setTimeout(() => {
+                managerTypingTimer = null
+                set((s) => {
+                  if (!s.agentTyping) return {}
+                  return { agentTyping: false, agentActivity: null }
+                })
+              }, 1500)
+            }
           }
         }
         if (projectedSessionId === sessionId) {

@@ -197,6 +197,15 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   ) {
     return null
   }
+  const streamMetadata = await matrixMessageStreamMetadata({
+    roomId,
+    providerEventId: event.event_id,
+    eventType,
+    senderParticipantId: senderParticipant?.id ?? null,
+    sender,
+    body,
+    originServerTs: event.origin_server_ts ?? null,
+  })
   return roomService.importTimelineEvent({
     roomId,
     providerEventId: event.event_id,
@@ -206,6 +215,7 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
     body,
     metadata: {
       kind: 'matrix.sync.imported',
+      ...streamMetadata,
       matrix: {
         eventId: event.event_id,
         senderUserId: sender,
@@ -217,6 +227,114 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
       },
     },
   })
+}
+
+async function matrixMessageStreamMetadata(input: {
+  roomId: string
+  providerEventId: string
+  eventType: TimelineEventType
+  senderParticipantId: string | null
+  sender: string | null
+  body: string
+  originServerTs: number | null
+}) {
+  if (input.eventType !== 'manager.message' && input.eventType !== 'worker.message') return {}
+  const [room] = await db
+    .select({ providerRoomId: rooms.providerRoomId })
+    .from(rooms)
+    .where(eq(rooms.id, input.roomId))
+    .limit(1)
+  const sessionKey = matrixMessageSessionKey({
+    providerRoomId: room?.providerRoomId ?? null,
+    eventType: input.eventType,
+    sender: input.sender,
+  })
+  const traceId =
+    (await findRecentMatrixStreamTraceId({
+      roomId: input.roomId,
+      senderParticipantId: input.senderParticipantId,
+      senderType: input.eventType === 'manager.message' ? 'manager' : 'worker',
+      body: input.body,
+      originServerTs: input.originServerTs,
+    })) ??
+    [
+      'matrix',
+      input.eventType,
+      room?.providerRoomId ?? input.roomId,
+      input.senderParticipantId ?? input.sender ?? 'unknown-sender',
+      input.providerEventId,
+    ]
+      .map((part) => encodeURIComponent(part))
+      .join(':')
+
+  return {
+    ...(sessionKey ? { sessionKey } : {}),
+    traceId,
+  }
+}
+
+function matrixMessageSessionKey(input: {
+  providerRoomId: string | null
+  eventType: TimelineEventType
+  sender: string | null
+}) {
+  if (!input.providerRoomId) return null
+  if (input.eventType === 'manager.message') {
+    return `agent:manager:matrix:channel:${input.providerRoomId}`
+  }
+  if (input.eventType === 'worker.message') {
+    return `agent:worker:matrix:channel:${input.providerRoomId}:${input.sender ?? 'unknown-worker'}`
+  }
+  return null
+}
+
+async function findRecentMatrixStreamTraceId(input: {
+  roomId: string
+  senderParticipantId: string | null
+  senderType: 'manager' | 'worker'
+  body: string
+  originServerTs: number | null
+}) {
+  const normalizedIncoming = normalizeStreamBody(input.body)
+  if (!normalizedIncoming || !input.senderParticipantId) return null
+  const recent = await db
+    .select({
+      body: timelineEvents.body,
+      createdAt: timelineEvents.createdAt,
+      metadata: timelineEvents.metadata,
+    })
+    .from(timelineEvents)
+    .where(
+      and(
+        eq(timelineEvents.roomId, input.roomId),
+        eq(timelineEvents.senderParticipantId, input.senderParticipantId),
+        eq(timelineEvents.senderType, input.senderType),
+      ),
+    )
+    .orderBy(desc(timelineEvents.sequence))
+    .limit(12)
+
+  const incomingAt = input.originServerTs ? input.originServerTs : Date.now()
+  for (const event of recent) {
+    if (Math.abs(incomingAt - matrixEventTime(event.metadata, event.createdAt)) > 15_000) continue
+    const normalizedExisting = normalizeStreamBody(event.body)
+    if (!normalizedExisting) continue
+    if (!normalizedIncoming.startsWith(normalizedExisting) && !normalizedExisting.startsWith(normalizedIncoming)) {
+      continue
+    }
+    const metadata = asRecord(event.metadata)
+    const traceId = asString(metadata.traceId)
+    if (traceId) return traceId
+  }
+  return null
+}
+
+function matrixEventTime(metadata: Record<string, unknown> | null | undefined, createdAt: Date) {
+  const matrix = asRecord(metadata?.matrix)
+  const originServerTs = asNumber(matrix.originServerTs)
+  if (typeof originServerTs === 'number') return originServerTs
+  const created = createdAt.getTime()
+  return Number.isFinite(created) ? created : Date.now()
 }
 
 async function isDuplicateRecentMessage(input: {
@@ -260,6 +378,10 @@ async function isDuplicateRecentMessage(input: {
 
 function normalizeDedupeBody(body: string) {
   return body.replace(/\s+/g, ' ').trim()
+}
+
+function normalizeStreamBody(body: string) {
+  return normalizeDedupeBody(body).replace(/^[*-]\s+/, '')
 }
 
 async function dispatchImportedEvents(eventIds: string[]) {
@@ -382,6 +504,18 @@ function fileRefFromContent(content: Record<string, unknown>) {
     url: typeof content.url === 'string' ? content.url : null,
     info: content.info && typeof content.info === 'object' ? content.info : null,
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function asString(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+}
+
+function asNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function asStringArray(value: unknown) {

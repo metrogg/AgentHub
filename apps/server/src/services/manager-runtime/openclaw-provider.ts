@@ -394,8 +394,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
           groupPolicy: 'allowlist',
           groupAllowFrom: managerAllowFrom,
           groups: matrixGroups,
-          streaming: 'partial',
-          blockStreaming: true,
+          streaming: 'off',
+          blockStreaming: false,
         },
       },
       models: {
