@@ -285,6 +285,9 @@ function sourceLabel(rootPath: string) {
   const projectClaudeSkills = resolve(projectRoot, '.claude', 'skills').replace(/\\/g, '/').toLowerCase()
   const projectSkills = resolve(projectRoot, 'skills').replace(/\\/g, '/').toLowerCase()
   const storageSkills = resolve(projectRoot, 'storage', 'skills').replace(/\\/g, '/').toLowerCase()
+  const appDataSkills = env.AGENTHUB_APP_DATA_DIR
+    ? resolve(env.AGENTHUB_APP_DATA_DIR, 'skills').replace(/\\/g, '/').toLowerCase()
+    : ''
   const home = homedir()
   const homeCodexSkills = home ? resolve(home, '.codex', 'skills').replace(/\\/g, '/').toLowerCase() : ''
   const homeAgentsSkills = home ? resolve(home, '.agents', 'skills').replace(/\\/g, '/').toLowerCase() : ''
@@ -294,6 +297,7 @@ function sourceLabel(rootPath: string) {
   if (normalized === projectClaudeSkills) return 'Claude 项目'
   if (normalized === projectSkills) return '项目内置'
   if (normalized === storageSkills) return '本机安装'
+  if (appDataSkills && normalized === appDataSkills) return '本机安装'
   if (normalized === homeCodexSkills) return 'Codex 本机'
   if (normalized === homeAgentsSkills) return 'Agents 本机'
   if (normalized === homeClaudeSkills) return 'Claude 本机'

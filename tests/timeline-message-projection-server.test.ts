@@ -172,4 +172,107 @@ describe('server room timeline message projection', () => {
       runtime: 'claude-code',
     })
   })
+
+  test('projects manager runtime errors as visible manager messages', () => {
+    const messages = projectTimelineMessages({
+      room: directRoom as any,
+      participants: [manager as any],
+      sessionId: 'direct-session-1',
+      timeline: [
+        event({
+          id: 'manager-error',
+          providerEventId: '$manager-error',
+          type: 'manager.message',
+          sequence: 1,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'Manager Runtime failed: provider rejected the request schema',
+          metadata: {
+            kind: 'manager-runtime.error',
+            status: 'failed',
+            runtimeType: 'openclaw',
+            hiddenFromChat: false,
+            skipAutoDispatch: true,
+            uiPresentation: 'message',
+            messageType: 'text',
+          },
+        }),
+      ],
+    })
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.id).toBe('room:manager-error')
+    expect(messages[0]?.senderType).toBe('agent')
+    expect(messages[0]?.content).toContain('provider rejected the request schema')
+    expect(messages[0]?.metadata).toMatchObject({
+      kind: 'manager-runtime.error',
+      status: 'failed',
+      senderName: 'Manager',
+    })
+  })
+
+  test('keeps manager startup diagnostics out of the main chat projection', () => {
+    const messages = projectTimelineMessages({
+      room: directRoom as any,
+      participants: [],
+      sessionId: 'direct-session-1',
+      timeline: [
+        event({
+          id: 'manager-diagnostic',
+          providerEventId: '$manager-diagnostic',
+          type: 'system',
+          sequence: 1,
+          senderParticipantId: null,
+          senderType: 'system',
+          body: 'Manager is starting and will reply after joining this room.',
+          metadata: {
+            kind: 'manager.dispatch.diagnostic',
+            reason: 'resident-manager-started',
+            hiddenFromChat: false,
+            skipAutoDispatch: true,
+            uiPresentation: 'message',
+            messageType: 'text',
+          },
+        }),
+      ],
+    })
+
+    expect(messages).toHaveLength(0)
+  })
+
+  test('projects manager failure diagnostics as visible system messages', () => {
+    const messages = projectTimelineMessages({
+      room: directRoom as any,
+      participants: [],
+      sessionId: 'direct-session-1',
+      timeline: [
+        event({
+          id: 'manager-diagnostic',
+          providerEventId: '$manager-diagnostic',
+          type: 'system',
+          sequence: 1,
+          senderParticipantId: null,
+          senderType: 'system',
+          body: 'Manager failed to start.',
+          metadata: {
+            kind: 'manager.dispatch.diagnostic',
+            reason: 'resident-manager-start-failed',
+            hiddenFromChat: false,
+            skipAutoDispatch: true,
+            uiPresentation: 'message',
+            messageType: 'text',
+          },
+        }),
+      ],
+    })
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.id).toBe('room:manager-diagnostic')
+    expect(messages[0]?.senderType).toBe('system')
+    expect(messages[0]?.content).toContain('Manager failed')
+    expect(messages[0]?.metadata).toMatchObject({
+      kind: 'manager.dispatch.diagnostic',
+      reason: 'resident-manager-start-failed',
+    })
+  })
 })

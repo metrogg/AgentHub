@@ -1,5 +1,5 @@
 import QRCode from 'qrcode'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -62,6 +62,7 @@ import {
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
 type SidebarTab = 'messages' | 'agents' | 'artifacts' | 'abilities' | 'me'
+const messagesDockDoubleClickMs = 320
 
 function activeTabFromPath(pathname: string): SidebarTab {
   if (pathname === '/agent-config') return 'agents'
@@ -95,6 +96,7 @@ export default function SessionList({
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const selectSession = useChatStore((state) => state.selectSession)
   const deleteSession = useChatStore((state) => state.deleteSession)
+  const resetActiveSession = useChatStore((state) => state.resetActiveSession)
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
@@ -119,6 +121,7 @@ export default function SessionList({
   const [groupWorkspaceWorkers, setGroupWorkspaceWorkers] = useState<
     Record<string, WorkspaceFull['workerInstances']>
   >({})
+  const messageDockLastClickRef = useRef<{ at: number; collapsed: boolean } | null>(null)
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
   const groupWorkspaceIds = useMemo(
@@ -515,6 +518,41 @@ export default function SessionList({
       })
   }
 
+  function runMessagesDockSingleClick() {
+    if (collapsed) {
+      setTabOverride('messages')
+      navigate(sessionId ? `/chat/${sessionId}` : '/')
+      onCollapse?.()
+      return
+    }
+    if (activeTab === 'messages' && onCollapse) {
+      onCollapse()
+      return
+    }
+    setTabOverride('messages')
+    navigate(sessionId ? `/chat/${sessionId}` : '/')
+  }
+
+  function returnToStatelessHome() {
+    resetActiveSession()
+    setTabOverride('messages')
+    navigate('/', { replace: false })
+  }
+
+  function handleMessagesDockClick() {
+    const now = window.performance.now()
+    const previous = messageDockLastClickRef.current
+    if (previous && now - previous.at <= messagesDockDoubleClickMs) {
+      messageDockLastClickRef.current = null
+      if (collapsed !== previous.collapsed) onCollapse?.()
+      returnToStatelessHome()
+      return
+    }
+
+    messageDockLastClickRef.current = { at: now, collapsed }
+    runMessagesDockSingleClick()
+  }
+
   async function openAgentSession(agent: SavedAgentConfig) {
     if (openingAgentId) return
     setOpeningAgentId(agent.id)
@@ -548,20 +586,8 @@ export default function SessionList({
             active={activeTab === 'messages'}
             icon={MessageCircle}
             label="Messages"
-            onClick={() => {
-              if (collapsed) {
-                setTabOverride('messages')
-                navigate(sessionId ? `/chat/${sessionId}` : '/')
-                onCollapse?.()
-                return
-              }
-              if (activeTab === 'messages' && onCollapse) {
-                onCollapse()
-                return
-              }
-              setTabOverride('messages')
-              navigate(sessionId ? `/chat/${sessionId}` : '/')
-            }}
+            onClick={handleMessagesDockClick}
+            onDoubleClick={returnToStatelessHome}
           />
           <DockButton
             active={activeTab === 'agents'}
@@ -1629,16 +1655,19 @@ function DockButton({
   label,
   active = false,
   onClick,
+  onDoubleClick,
 }: {
   icon: typeof Folder
   label: string
   active?: boolean
   onClick?: () => void
+  onDoubleClick?: () => void
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       className={cn(
         'relative grid h-10 w-10 place-items-center rounded-xl transition',
         active

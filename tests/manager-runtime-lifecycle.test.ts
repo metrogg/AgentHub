@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { db, eq, settings } from '../packages/db/src/index'
 
 const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-mrlifecycle-'))
 process.env.AGENTHUB_APP_DATA_DIR = tempDir
@@ -13,6 +14,8 @@ import {
   listManagerProviders,
   getConfiguredRuntimeType,
 } from '../apps/server/src/services/manager-runtime'
+import { setRuntimeServerPort } from '../apps/server/src/lib/runtime-server'
+import { resolveManagerAgentContractWorkspace } from '../apps/server/src/services/agent-contract'
 
 describe('Manager Runtime Lifecycle', () => {
   describe('OpenClawManagerRuntimeProvider', () => {
@@ -124,6 +127,106 @@ describe('Manager Runtime Lifecycle', () => {
       const provider = new OpenClawManagerRuntimeProvider()
       const st = await provider.stop()
       expect(st.running).toBe(false)
+    })
+
+    test('status reports a running resident Manager as stale when controllerUrl changed', async () => {
+      const fakeBinary = join(tempDir, process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw')
+      writeFileSync(fakeBinary, '', 'utf8')
+      process.env.AGENTHUB_OPENCLAW_PATH = fakeBinary
+      process.env.PORT = '8000'
+      setRuntimeServerPort(8002)
+
+      const contract = resolveManagerAgentContractWorkspace('global')
+      mkdirSync(contract.root, { recursive: true })
+      writeFileSync(
+        contract.runtimePath,
+        JSON.stringify({ controllerUrl: 'http://localhost:8000' }, null, 2),
+        'utf8',
+      )
+
+      const provider = new OpenClawManagerRuntimeProvider()
+      ;(provider as any).process = { killed: false, pid: 4242 }
+      ;(provider as any).startedAt = new Date().toISOString()
+
+      try {
+        const st = await provider.status()
+        expect(st.running).toBe(true)
+        expect(st.error).toContain('http://localhost:8000')
+        expect(st.error).toContain('http://localhost:8002')
+        expect((st.diagnostics as any).runtimeContractInspection).toMatchObject({
+          controllerUrl: 'http://localhost:8000',
+          expectedControllerUrl: 'http://localhost:8002',
+        })
+      } finally {
+        delete process.env.AGENTHUB_OPENCLAW_PATH
+        delete process.env.PORT
+      }
+    })
+
+    test('status reports missing Matrix plugin when Matrix config is enabled', async () => {
+      const fakeBinary = join(tempDir, process.platform === 'win32' ? 'openclaw.cmd' : 'openclaw')
+      writeFileSync(fakeBinary, '', 'utf8')
+      process.env.AGENTHUB_OPENCLAW_PATH = fakeBinary
+
+      const contract = resolveManagerAgentContractWorkspace('global')
+      mkdirSync(contract.root, { recursive: true })
+      writeFileSync(
+        join(contract.root, 'openclaw.json'),
+        JSON.stringify({
+          channels: {
+            matrix: {
+              enabled: true,
+              dm: { allowFrom: ['@human-default-user:agenthub.local'] },
+              groups: { '*': { enabled: true, skills: ['agenthub-controller'] } },
+            },
+          },
+          plugins: { entries: { matrix: { enabled: true } } },
+        }, null, 2),
+        'utf8',
+      )
+
+      try {
+        const provider = new OpenClawManagerRuntimeProvider()
+        const st = await provider.status()
+        expect(st.error).toContain('OpenClaw Matrix plugin is not installed')
+        expect((st.diagnostics as any).matrixPluginInspection).toMatchObject({
+          installed: false,
+          installCommand: 'openclaw plugins install @openclaw/matrix',
+        })
+      } finally {
+        delete process.env.AGENTHUB_OPENCLAW_PATH
+      }
+    })
+
+    test('generateConfig resolves catalog ids before writing OpenClaw model config', async () => {
+      for (const key of ['MODEL_CATALOG', 'ACTIVE_MODEL_ID', 'INTERNAL_LLM_DEFAULT_MODEL_ID']) {
+        await db.delete(settings).where(eq(settings.key, key))
+      }
+      await db.insert(settings).values({
+        key: 'MODEL_CATALOG',
+        value: JSON.stringify([
+          {
+            id: 'ccswitch-Xiaomi MiMo',
+            enabled: true,
+            name: 'Xiaomi MiMo',
+            provider: 'anthropic',
+            modelId: 'mimo-v2.5-pro',
+            apiEndpoint: 'https://token-plan-cn.xiaomimimo.com/v1',
+            anthropicEndpoint: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+            apiKey: 'test-key',
+          },
+        ]),
+      })
+
+      const provider = new OpenClawManagerRuntimeProvider({
+        llmModel: 'ccswitch-Xiaomi MiMo',
+      })
+      const configPath = await (provider as any).generateConfig()
+
+      const config = JSON.parse(readFileSync(configPath, 'utf8'))
+      expect(config.models.providers['agenthub-llm'].models[0].id).toBe('mimo-v2.5-pro')
+      expect(config.agents.defaults.model.primary).toBe('agenthub-llm/mimo-v2.5-pro')
+      expect(config.agents.list[0].model.primary).toBe('agenthub-llm/mimo-v2.5-pro')
     })
   })
 

@@ -1,12 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createServer } from 'node:net'
-import { and, desc, db, eq, matrixIdentities, roomParticipants, rooms, timelineEvents } from '@agenthub/db'
+import { and, desc, db, eq, matrixIdentities, roomParticipants, rooms, timelineEvents, workspaceAgents } from '@agenthub/db'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
 import { getRuntimeServerPort } from '../../lib/runtime-server'
-import { resolveLlmRuntimeConfig } from '../llm-client'
+import { resolveLlmRuntimeConfig, resolveModelConfig } from '../llm-client'
 import { createMatrixClientFromEnv, matrixLocalpart } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import { resolveManagerAgentContractWorkspace } from '../agent-contract'
@@ -97,14 +96,24 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         : binaryPath
           ? 'managed-process'
           : 'unavailable'
+    const localManagedProcessRunning = this.process !== null && !this.process.killed
+    const localGatewayProbe =
+      !endpoint && !containerMode && !localManagedProcessRunning
+        ? await probeGatewayHealth(this.managerGatewayPort, 500)
+        : null
     const running = endpoint
       ? true
       : containerMode
         ? Boolean(container?.running)
-        : this.process !== null && !this.process.killed
+        : localManagedProcessRunning || Boolean(localGatewayProbe?.ok)
     const residentSyncReady = endpoint ? true : running
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const configInspection = inspectOpenClawManagerConfig(this.getConfigPath(), matrixDomain)
+    const runtimeContractInspection = inspectManagerRuntimeContract(
+      resolveManagerAgentContractWorkspace('global').runtimePath,
+    )
+    const matrixPluginInspection = inspectOpenClawMatrixPlugin(this.managerWorkspace)
+    const desiredControllerUrl = this.desiredControllerUrl()
     const managerDiagnostics = await describeOpenClawManagerDiagnostics({
       workspace: this.managerWorkspace,
       configPath: this.getConfigPath(),
@@ -112,14 +121,20 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       endpoint,
       gatewayPort: this.managerGatewayPort,
     })
-    const configError =
-      !endpoint && configInspection.exists && !configInspection.matrixPluginEnabled
-        ? 'OpenClaw Manager config has channels.matrix enabled but plugins.entries.matrix is not enabled; restart/regenerate Manager runtime config.'
-        : !endpoint && configInspection.exists && !configInspection.humanAllowed
-          ? `OpenClaw Manager config does not allow the AgentHub human Matrix user (${configInspection.expectedHumanUserId}); restart/regenerate Manager runtime config.`
-          : !endpoint && configInspection.exists && !configInspection.wildcardGroupEnabled
-            ? 'OpenClaw Manager config does not include channels.matrix.groups["*"]; restart/regenerate Manager runtime config so newly created rooms are observed.'
-            : null
+    let configError: string | null = null
+    if (!endpoint && running && !runtimeContractInspection.exists) {
+      configError = 'OpenClaw Manager runtime contract is missing; restart/regenerate Manager runtime config.'
+    } else if (!endpoint && running && runtimeContractInspection.controllerUrl !== desiredControllerUrl) {
+      configError = `OpenClaw Manager runtime contract points to ${runtimeContractInspection.controllerUrl || 'no Controller API'}, expected ${desiredControllerUrl}; restart/regenerate Manager runtime config.`
+    } else if (!endpoint && configInspection.matrixPluginEnabled && !matrixPluginInspection.installed) {
+      configError = 'OpenClaw Matrix plugin is not installed; run `openclaw plugins install @openclaw/matrix` in the Manager workspace and restart Manager.'
+    } else if (!endpoint && configInspection.exists && !configInspection.matrixPluginEnabled) {
+      configError = 'OpenClaw Manager config has channels.matrix enabled but plugins.entries.matrix is not enabled; restart/regenerate Manager runtime config.'
+    } else if (!endpoint && configInspection.exists && !configInspection.humanAllowed) {
+      configError = `OpenClaw Manager config does not allow the AgentHub human Matrix user (${configInspection.expectedHumanUserId}); restart/regenerate Manager runtime config.`
+    } else if (!endpoint && configInspection.exists && !configInspection.wildcardGroupEnabled) {
+      configError = 'OpenClaw Manager config does not include channels.matrix.groups["*"]; restart/regenerate Manager runtime config so newly created rooms are observed.'
+    }
 
     return {
       runtimeType: this.runtimeType,
@@ -127,7 +142,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       connectionMode,
       syncReady: residentSyncReady,
       running,
-      pid: endpoint || containerMode ? null : running ? this.process!.pid ?? null : null,
+      pid: endpoint || containerMode ? null : localManagedProcessRunning ? this.process!.pid ?? null : null,
       workspace: this.managerWorkspace,
       configPath: this.getConfigPath(),
       binaryPath: containerMode ? null : binaryPath,
@@ -144,6 +159,12 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         endpointConfigured: endpoint !== null,
         synchronousStepReady: residentSyncReady,
         configInspection,
+        runtimeContractInspection: {
+          ...runtimeContractInspection,
+          expectedControllerUrl: desiredControllerUrl,
+        },
+        matrixPluginInspection,
+        localGatewayProbe,
         ...managerDiagnostics,
         note: endpoint
           ? 'OpenClaw Manager endpoint is configured; AgentHub can call POST /step.'
@@ -170,7 +191,10 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       return { ...st, error: 'OpenClaw binary not found. Run: bash infra/setup-openclaw.sh' }
     }
 
-    this.managerGatewayPort = await findAvailablePort(preferredManagerGatewayPort(), 40)
+    this.managerGatewayPort = preferredManagerGatewayPort()
+    if (!managerContainersEnabled()) {
+      await this.stopLastManagedProcess()
+    }
 
     // Ensure Manager Matrix identity exists
     try {
@@ -192,6 +216,19 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       return { ...st, error: `Matrix identity failed: ${err}` }
     }
 
+    // If an orchestrator agent has a modelId bound, use it as the Manager LLM model.
+    if (!this.config.llmModel && !process.env.AGENTHUB_MANAGER_LLM_MODEL) {
+      const [orchestratorAgent] = await db
+        .select({ modelId: workspaceAgents.modelId })
+        .from(workspaceAgents)
+        .where(eq(workspaceAgents.roleType, 'orchestrator'))
+        .limit(1)
+      if (orchestratorAgent?.modelId) {
+        this.config.llmModel = orchestratorAgent.modelId
+        logger.info({ modelId: orchestratorAgent.modelId }, 'Using orchestrator agent modelId for Manager LLM')
+      }
+    }
+
     // Generate config with Matrix credentials and a real model catalog target.
     await this.generateConfig()
 
@@ -210,10 +247,11 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   async stop(): Promise<ManagerRuntimeStatus> {
     if (this.process) {
       logger.info('Stopping OpenClaw Manager...')
-      this.process.kill('SIGTERM')
+      await killChildProcessTree(this.process)
       this.process = null
       this.startedAt = null
     }
+    await this.stopLastManagedProcess()
     if (managerContainersEnabled()) {
       await dockerRuntime.stop(managerContainerName(this.runtimeType))
       this.containerStartedAt = null
@@ -307,6 +345,14 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return join(this.managerWorkspace, 'openclaw.json')
   }
 
+  private getPidPath(): string {
+    return join(this.managerWorkspace, 'openclaw-manager.pid')
+  }
+
+  private desiredControllerUrl(): string {
+    return managerContainersEnabled() ? containerControllerUrl() : localControllerUrl()
+  }
+
   private async generateConfig(): Promise<string> {
     const matrixUrl = this.config.matrixUrl || (managerContainersEnabled() ? containerMatrixUrl() : process.env.AGENTHUB_MATRIX_HOMESERVER_URL) || 'http://localhost:6167'
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
@@ -316,10 +362,12 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     const defaultHumanUserId = `@human-${matrixLocalpart('default-user')}:${matrixDomain}`
     const adminUserId = `@admin:${matrixDomain}`
     const managerAllowFrom = Array.from(new Set([adminUserId, defaultHumanUserId]))
-    const resolvedLlm = await resolveLlmRuntimeConfig(this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL || undefined)
+    const requestedLlmModel = this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL || undefined
+    const resolvedLlm = await resolveLlmRuntimeConfig(requestedLlmModel)
+    const resolvedCatalogModel = requestedLlmModel ? await resolveModelConfig(requestedLlmModel) : null
     const llmBaseUrl = this.config.llmBaseUrl || process.env.AGENTHUB_MANAGER_LLM_BASE_URL || (managerContainersEnabled() ? containerLlmBaseUrl() : resolvedLlm.baseUrl)
     const llmApiKey = this.config.llmApiKey || process.env.AGENTHUB_MANAGER_LLM_API_KEY || resolvedLlm.apiKey || process.env.LLM_API_KEY || 'agenthub-internal'
-    const llmModel = this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || resolvedLlm.model
+    const llmModel = resolvedCatalogModel?.modelId || this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || resolvedLlm.model
     const llmContextWindow = Number(process.env.AGENTHUB_MANAGER_LLM_CONTEXT_WINDOW || '128000')
     const llmMaxTokens = Number(process.env.AGENTHUB_MANAGER_LLM_MAX_TOKENS || '8192')
     const matrixGroups = await loadOpenClawMatrixGroups()
@@ -425,18 +473,26 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
 
     mkdirSync(this.managerWorkspace, { recursive: true })
     const configPath = this.getConfigPath()
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
+    const configJson = JSON.stringify(config, null, 2)
+    // Only write if content actually changed — avoids triggering OpenClaw's config watcher SIGUSR1 restart loop
+    try {
+      const existing = readFileSync(configPath, 'utf8')
+      if (existing === configJson) {
+        logger.info({ configPath, gatewayPort: this.managerGatewayPort }, 'OpenClaw Manager config unchanged, skipped write')
+        return configPath
+      }
+    } catch { /* file doesn't exist yet */ }
+    writeFileSync(configPath, configJson, 'utf8')
     logger.info({ configPath, gatewayPort: this.managerGatewayPort }, 'Generated OpenClaw Manager config')
     return configPath
   }
 
   private async copyAgentFiles(): Promise<void> {
-    const serverPort = getRuntimeServerPort() ?? Number(process.env.PORT || 3000)
     await ensureManagerAgentContractFromController({
       managerId: 'global',
       runtimeType: this.runtimeType,
       matrixUserId: this.config.matrixUserId ?? null,
-      controllerUrl: `http://localhost:${serverPort}`,
+      controllerUrl: this.desiredControllerUrl(),
       sharedStorageRoot: process.env.AGENTHUB_SHARED_STORAGE_ROOT || null,
       matrixHomeserverUrl: this.config.matrixUrl ?? null,
       matrixServerName: this.config.matrixDomain ?? null,
@@ -445,15 +501,15 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 
   private launch(binaryPath: string): void {
-    const serverPort = getRuntimeServerPort() ?? Number(process.env.PORT || 3000)
     const pathSeparator = process.platform === 'win32' ? ';' : ':'
     const env = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: this.getConfigPath(),
       OPENCLAW_NO_RESPAWN: '1',
+      OPENCLAW_WATCH_CONFIG: '0',
       HOME: this.managerWorkspace,
       PATH: `${this.managerWorkspace}${pathSeparator}${process.env.PATH || ''}`,
-      AGENTHUB_CONTROLLER_URL: `http://localhost:${serverPort}`,
+      AGENTHUB_CONTROLLER_URL: this.desiredControllerUrl(),
       AGENTHUB_MANAGER_TOKEN: this.managerAccessToken ?? '',
     }
 
@@ -483,14 +539,29 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       logger.info({ code, signal }, 'OpenClaw Manager exited')
       this.process = null
       this.startedAt = null
+      rmPidFile(this.getPidPath())
     })
     this.process.on('error', (err) => {
       logger.error({ err }, 'OpenClaw Manager process error')
       this.process = null
       this.startedAt = null
+      rmPidFile(this.getPidPath())
     })
 
     this.startedAt = new Date().toISOString()
+    if (this.process.pid) {
+      writeFileSync(this.getPidPath(), String(this.process.pid), 'utf8')
+    }
+  }
+
+  private async stopLastManagedProcess(): Promise<void> {
+    const pidPath = this.getPidPath()
+    if (!existsSync(pidPath)) return
+    const pid = Number(readFileSync(pidPath, 'utf8').trim())
+    if (Number.isFinite(pid) && pid > 0) {
+      await killPidTree(Math.trunc(pid))
+    }
+    rmPidFile(pidPath)
   }
 
   private async launchContainer(): Promise<void> {
@@ -566,6 +637,126 @@ export class QwenPawManagerRuntimeProvider implements ManagerRuntimeProvider {
 function preferredManagerGatewayPort() {
   const raw = Number(process.env.AGENTHUB_OPENCLAW_MANAGER_PORT || '18799')
   return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 18799
+}
+
+function localControllerUrl() {
+  return `http://localhost:${getRuntimeServerPort() ?? Number(process.env.PORT || 3000)}`
+}
+
+function inspectManagerRuntimeContract(runtimePath: string) {
+  if (!existsSync(runtimePath)) {
+    return {
+      exists: false,
+      controllerUrl: null,
+      error: null,
+    }
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(runtimePath, 'utf8')) as Record<string, unknown>
+    return {
+      exists: true,
+      controllerUrl: typeof parsed.controllerUrl === 'string' ? parsed.controllerUrl : null,
+      error: null,
+    }
+  } catch (error) {
+    return {
+      exists: true,
+      controllerUrl: null,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function inspectOpenClawMatrixPlugin(managerWorkspace: string) {
+  const projectsRoot = join(managerWorkspace, 'npm', 'projects')
+  const candidates: string[] = []
+  if (existsSync(projectsRoot)) {
+    try {
+      for (const entry of readdirSync(projectsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        candidates.push(join(projectsRoot, entry.name, 'node_modules', '@openclaw', 'matrix'))
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const installedPath = candidates.find((candidate) => existsSync(join(candidate, 'openclaw.plugin.json'))) ?? null
+  return {
+    installed: installedPath !== null,
+    installPath: installedPath,
+    checkedPaths: candidates,
+    installCommand: 'openclaw plugins install @openclaw/matrix',
+  }
+}
+
+async function killChildProcessTree(proc: ChildProcess, timeoutMs = 5000) {
+  if (!proc.pid) return
+  await killPidTree(proc.pid, timeoutMs)
+}
+
+async function killPidTree(pid: number, timeoutMs = 5000) {
+  if (!isPidRunning(pid)) return
+
+  try {
+    if (process.platform === 'win32') {
+      await waitForProcess(spawn('taskkill', ['/pid', String(pid), '/t'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      }))
+    } else {
+      process.kill(pid, 'SIGTERM')
+    }
+  } catch {
+    // best effort; force kill below if needed
+  }
+
+  const started = Date.now()
+  while (isPidRunning(pid) && Date.now() - started < timeoutMs) {
+    await sleep(100)
+  }
+
+  if (!isPidRunning(pid)) return
+
+  try {
+    if (process.platform === 'win32') {
+      await waitForProcess(spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      }))
+    } else {
+      process.kill(pid, 'SIGKILL')
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function isPidRunning(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function waitForProcess(proc: ChildProcess) {
+  return new Promise<void>((resolve) => {
+    proc.once('exit', () => resolve())
+    proc.once('error', () => resolve())
+  })
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function rmPidFile(pidPath: string) {
+  try {
+    rmSync(pidPath, { force: true })
+  } catch {
+    // ignore
+  }
 }
 
 async function loadOpenClawMatrixGroups() {
@@ -746,23 +937,17 @@ async function probeControllerHealth(controllerUrl: string) {
   }
 }
 
-async function findAvailablePort(start: number, attempts: number) {
-  for (let offset = 0; offset < attempts; offset += 1) {
-    const port = start + offset
-    if (await isPortAvailable(port)) return port
+async function probeGatewayHealth(port: number, timeoutMs = 1000) {
+  if (process.env.NODE_ENV === 'test') {
+    return { ok: false, url: `http://127.0.0.1:${port}`, status: null }
   }
-  return start
-}
-
-function isPortAvailable(port: number) {
-  return new Promise<boolean>((resolve) => {
-    const server = createServer()
-    server.unref()
-    server.once('error', () => resolve(false))
-    server.listen({ host: '0.0.0.0', port }, () => {
-      server.close(() => resolve(true))
-    })
-  })
+  try {
+    const url = `http://127.0.0.1:${port}`
+    const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    return { ok: response.ok, url, status: response.status }
+  } catch (error) {
+    return { ok: false, url: `http://127.0.0.1:${port}`, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 function inspectOpenClawManagerConfig(configPath: string, matrixDomain: string) {

@@ -14,7 +14,7 @@ const room: Room = {
   runId: 'run-1',
   taskId: 'task-1',
   taskThreadId: 'thread-1',
-  title: '任务：生成报告',
+  title: 'Task: Generate report',
   topic: null,
   status: 'active',
   metadata: {},
@@ -276,13 +276,13 @@ describe('room timeline projection', () => {
           {
             id: 'preview:index.html',
             type: 'preview',
-            title: '预览: index.html',
+            title: 'Preview: index.html',
             url: 'file:///F:/demo/index.html',
             previewKind: 'static-html',
           },
         ],
-        logs: [{ id: 'log-1', stream: 'stdout', text: '静态发布: index.html' }],
-        steps: [{ id: 'step-1', kind: 'file', status: 'completed', title: 'index.html 修改' }],
+        logs: [{ id: 'log-1', stream: 'stdout', text: 'Published index.html' }],
+        steps: [{ id: 'step-1', kind: 'file', status: 'completed', title: 'Updated index.html' }],
       },
     })
     const liveRun = codeAgentRunFromWorkerRuntimeEvent(liveMetadataEvent)
@@ -305,7 +305,7 @@ describe('room timeline projection', () => {
           id: 'task-completed',
           type: 'worker.message',
           sequence: 2,
-          body: '页面已完成。',
+          body: 'Page completed.',
           metadata: {
             kind: 'worker-runtime.completed',
             status: 'completed',
@@ -314,7 +314,7 @@ describe('room timeline projection', () => {
             codeAgentRun: {
               ...liveRun,
               status: 'completed',
-              finalMessage: '页面已完成。',
+              finalMessage: 'Page completed.',
             },
           },
         }),
@@ -342,7 +342,7 @@ describe('room timeline projection', () => {
           id: 'worker-output',
           type: 'worker.message',
           sequence: 1,
-          body: '页面已增强，包含数字滚动和深浅色切换。',
+          body: 'Page enhanced with animated numbers and theme switching.',
           metadata: {
             kind: 'worker-runtime.message',
             traceId: 'runtime-started-1',
@@ -375,7 +375,7 @@ describe('room timeline projection', () => {
               files: [{ path: 'index.html', status: 'modified' }],
               toolCalls: [],
               artifacts: [],
-              steps: [{ id: 'step-1', kind: 'file', status: 'completed', title: '修改 index.html' }],
+              steps: [{ id: 'step-1', kind: 'file', status: 'completed', title: 'Updated index.html' }],
             },
           },
         }),
@@ -384,7 +384,7 @@ describe('room timeline projection', () => {
 
     expect(projection.messages).toHaveLength(1)
     expect(projection.messages[0]?.id).toBe('room:worker-output')
-    expect(projection.messages[0]?.content).toBe('页面已增强，包含数字滚动和深浅色切换。')
+    expect(projection.messages[0]?.content).toBe('Page enhanced with animated numbers and theme switching.')
     expect(projection.messages[0]?.metadata?.codeAgentRun).toMatchObject({
       type: 'code-agent-run',
       status: 'completed',
@@ -407,7 +407,7 @@ describe('room timeline projection', () => {
           id: 'event-1',
           type: 'task.progress',
           sequence: 1,
-          body: 'Builder 已接单。',
+          body: 'Builder accepted the task.',
           metadata: {
             workspaceAgentId: 'agent-1',
             workerInstanceId: 'worker-instance-1',
@@ -486,7 +486,7 @@ describe('room timeline projection', () => {
           id: 'event-started',
           type: 'task.progress',
           sequence: 1,
-          body: 'Builder 已接单。',
+          body: 'Builder accepted the task.',
           metadata: {
             kind: 'worker-runtime.started',
             status: 'running',
@@ -535,27 +535,27 @@ describe('room timeline projection', () => {
           id: 'event-clarify',
           type: 'approval.requested',
           sequence: 3,
-          body: '需要确认报告口径吗？',
+          body: 'Please confirm the report path.',
           metadata: {
             kind: 'worker-runtime.clarification-requested',
             clarificationId: 'clarification-1',
             workspaceAgentId: 'agent-1',
             workerInstanceId: 'worker-instance-1',
             runtimeType: 'opencode',
-            question: '需要确认报告口径吗？',
+            question: 'Please confirm the report path.',
           },
         }),
         event({
           id: 'event-waiting',
           type: 'task.progress',
           sequence: 4,
-          body: '等待用户澄清后继续。',
+          body: 'Waiting for human clarification before continuing.',
           metadata: {
             kind: 'worker-runtime.waiting-for-human',
             status: 'waiting_for_human',
             waitingForHuman: true,
             clarificationId: 'clarification-1',
-            clarificationQuestion: '需要确认报告口径吗？',
+            clarificationQuestion: 'Please confirm the report path.',
             workspaceAgentId: 'agent-1',
             workerInstanceId: 'worker-instance-1',
             runtimeType: 'opencode',
@@ -565,7 +565,7 @@ describe('room timeline projection', () => {
     })
 
     expect(projection.messages).toHaveLength(1)
-    expect(projection.messages[0]?.content).toBe('需要确认报告口径吗？')
+    expect(projection.messages[0]?.content).toBe('Please confirm the report path.')
     expect(projection.events).toHaveLength(2)
     expect(projection.events[0]).toMatchObject({
       name: 'agenthub.task.status',
@@ -577,7 +577,7 @@ describe('room timeline projection', () => {
         taskThreadStatus: 'waiting_for_human',
         waitingForHuman: true,
         clarificationId: 'clarification-1',
-        clarificationQuestion: '需要确认报告口径吗？',
+        clarificationQuestion: 'Please confirm the report path.',
       },
     })
     expect(projection.events[1]).toMatchObject({
@@ -608,7 +608,7 @@ describe('room timeline projection', () => {
           type: 'approval.requested',
           sequence: 1,
           senderType: 'manager',
-          body: '我建议补充一些更合适的成员，请确认。',
+          body: 'I suggest adding more suitable members. Please confirm.',
           metadata: {
             kind: 'coordinator.action',
             actionType: 'propose_members',
@@ -617,7 +617,7 @@ describe('room timeline projection', () => {
               {
                 profileId: 'frontend-engineer',
                 name: 'Frontend Engineer',
-                reason: '需要前端实现能力',
+                reason: 'Frontend implementation capacity is needed.',
               },
             ],
           },
@@ -627,11 +627,11 @@ describe('room timeline projection', () => {
           type: 'system',
           sequence: 2,
           senderType: 'manager',
-          body: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+          body: 'Added: Frontend Engineer. Manager can now re-plan and assign tasks.',
           metadata: {
             kind: 'member-proposal.update',
             targetEventId: 'event-proposal',
-            content: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+            content: 'Added: Frontend Engineer. Manager can now re-plan and assign tasks.',
             patch: {
               memberProposalStatus: 'confirmed',
               confirmedProfileIds: ['frontend-engineer'],
@@ -644,7 +644,7 @@ describe('room timeline projection', () => {
 
     expect(projection.messages).toHaveLength(1)
     expect(projection.messages[0]?.id).toBe('room:event-proposal')
-    expect(projection.messages[0]?.content).toBe('已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。')
+    expect(projection.messages[0]?.content).toBe('Added: Frontend Engineer. Manager can now re-plan and assign tasks.')
     expect(projection.messages[0]?.metadata).toMatchObject({
       actionType: 'propose_members',
       memberProposalStatus: 'confirmed',
@@ -717,7 +717,7 @@ describe('room timeline projection', () => {
           id: 'event-waiting-dependency',
           type: 'task.progress',
           sequence: 5,
-          body: '依赖任务正在等待用户澄清，当前任务暂停分发：upstream-task',
+          body: 'Dependency task is waiting for human clarification; dispatch paused: upstream-task',
           metadata: {
             kind: 'worker-runtime.waiting-on-human-dependency',
             taskId: 'task-2',
@@ -731,7 +731,7 @@ describe('room timeline projection', () => {
           id: 'event-skipped-dependency',
           type: 'task.progress',
           sequence: 6,
-          body: '依赖任务未成功完成，跳过执行：upstream-task',
+          body: 'Dependency task did not complete successfully; skipped execution: upstream-task',
           metadata: {
             kind: 'worker-runtime.skipped-by-dependency',
             taskId: 'task-3',
@@ -797,7 +797,7 @@ describe('room timeline projection', () => {
           type: 'manager.message',
           sequence: 8,
           senderType: 'manager',
-          body: 'Manager 最终复盘：全部完成。',
+          body: 'Manager final review: all tasks completed.',
           metadata: {
             kind: 'manager-final-review',
             runId: 'run-1',
@@ -854,7 +854,7 @@ describe('room timeline projection', () => {
           type: 'manager.message',
           sequence: 1,
           senderType: 'manager',
-          body: 'Manager 已收到，正在处理...',
+          body: 'Manager received the message and is processing...',
           metadata: {
             kind: 'manager.status.pending',
             sourceEventId: 'source-1',
@@ -865,7 +865,7 @@ describe('room timeline projection', () => {
           type: 'manager.message',
           sequence: 2,
           senderType: 'manager',
-          body: 'Manager 仍在处理，OpenClaw 队列或模型响应较慢。',
+          body: 'Manager is still processing; OpenClaw queue or model response may be slow.',
           metadata: {
             kind: 'manager.status.slow',
             sourceEventId: 'source-1',
@@ -876,7 +876,7 @@ describe('room timeline projection', () => {
           type: 'manager.message',
           sequence: 3,
           senderType: 'manager',
-          body: 'Manager 处理超时。请检查设置页的 OpenClaw Manager / Matrix / 模型状态。',
+          body: 'Manager timed out. Check OpenClaw Manager, Matrix, and model status in Settings.',
           metadata: {
             kind: 'manager.status.timeout',
             sourceEventId: 'source-1',
@@ -887,5 +887,123 @@ describe('room timeline projection', () => {
 
     expect(projection.messages).toHaveLength(0)
     expect(projection.events).toHaveLength(3)
+  })
+
+  test('projects manager runtime errors as visible manager messages', () => {
+    const projection = projectRoomTimeline({
+      room: {
+        ...room,
+        kind: 'group',
+        sessionId: 'group-session-1',
+        taskId: null,
+        taskThreadId: null,
+      },
+      participants: [manager],
+      sessionId: 'group-session-1',
+      timeline: [
+        event({
+          id: 'manager-error',
+          type: 'manager.message',
+          sequence: 1,
+          senderParticipantId: 'participant-manager-1',
+          senderType: 'manager',
+          body: 'Manager Runtime failed: provider rejected the request schema',
+          metadata: {
+            kind: 'manager-runtime.error',
+            status: 'failed',
+            runtimeType: 'openclaw',
+            hiddenFromChat: false,
+            skipAutoDispatch: true,
+            uiPresentation: 'message',
+            messageType: 'text',
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(1)
+    expect(projection.messages[0]?.id).toBe('room:manager-error')
+    expect(projection.messages[0]?.senderType).toBe(SenderType.Agent)
+    expect(projection.messages[0]?.content).toContain('provider rejected the request schema')
+    expect(projection.messages[0]?.metadata).toMatchObject({
+      kind: 'manager-runtime.error',
+      status: 'failed',
+      senderName: 'Manager',
+    })
+  })
+
+  test('keeps manager startup diagnostics out of the main chat projection', () => {
+    const projection = projectRoomTimeline({
+      room: {
+        ...room,
+        kind: 'group',
+        sessionId: 'group-session-1',
+        taskId: null,
+        taskThreadId: null,
+      },
+      participants: [],
+      sessionId: 'group-session-1',
+      timeline: [
+        event({
+          id: 'manager-diagnostic',
+          type: 'system',
+          sequence: 1,
+          senderParticipantId: null,
+          senderType: 'system',
+          body: 'Manager is starting and will reply after joining this room.',
+          metadata: {
+            kind: 'manager.dispatch.diagnostic',
+            reason: 'resident-manager-started',
+            hiddenFromChat: false,
+            skipAutoDispatch: true,
+            uiPresentation: 'message',
+            messageType: 'text',
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(0)
+  })
+
+  test('projects manager failure diagnostics as visible system messages', () => {
+    const projection = projectRoomTimeline({
+      room: {
+        ...room,
+        kind: 'group',
+        sessionId: 'group-session-1',
+        taskId: null,
+        taskThreadId: null,
+      },
+      participants: [],
+      sessionId: 'group-session-1',
+      timeline: [
+        event({
+          id: 'manager-diagnostic',
+          type: 'system',
+          sequence: 1,
+          senderParticipantId: null,
+          senderType: 'system',
+          body: 'Manager failed to start.',
+          metadata: {
+            kind: 'manager.dispatch.diagnostic',
+            reason: 'resident-manager-start-failed',
+            hiddenFromChat: false,
+            skipAutoDispatch: true,
+            uiPresentation: 'message',
+            messageType: 'text',
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(1)
+    expect(projection.messages[0]?.id).toBe('room:manager-diagnostic')
+    expect(projection.messages[0]?.senderType).toBe(SenderType.System)
+    expect(projection.messages[0]?.content).toContain('Manager failed')
+    expect(projection.messages[0]?.metadata).toMatchObject({
+      kind: 'manager.dispatch.diagnostic',
+      reason: 'resident-manager-start-failed',
+    })
   })
 })

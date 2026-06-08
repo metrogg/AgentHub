@@ -366,7 +366,7 @@ function timelineEventToMessage(input: {
   if (isLiveCodeAgentRunMetadataEvent(event)) return null
   const kind = asString(metadata.kind)
   if (kind?.startsWith('manager.status.')) return null
-  if (kind === 'manager.dispatch.diagnostic') return null
+  if (kind === 'manager.dispatch.diagnostic' && asString(metadata.reason) === 'resident-manager-started') return null
   if (shouldHideRuntimeStatusMessage(event, room, metadata)) return null
 
   const senderType = senderTypeFromTimeline(event)
@@ -612,7 +612,6 @@ function visibleBodyForEvent(event: TimelineEventRow) {
   const metadata = asRecord(event.metadata)
   if (metadata.hiddenFromChat === true) return ''
   if (typeof metadata.kind === 'string' && metadata.kind.startsWith('manager.status.')) return ''
-  if (metadata.kind === 'manager.dispatch.diagnostic') return ''
   if (typeof metadata.kind === 'string' && INTERNAL_RUNTIME_CHAT_KINDS.has(metadata.kind)) return ''
   if (event.type === 'approval.requested' && metadata.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
