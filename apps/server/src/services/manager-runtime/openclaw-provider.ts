@@ -396,6 +396,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
           groups: matrixGroups,
           streaming: 'partial',
           blockStreaming: true,
+          filterThinking: true,
+          filterToolMessages: true,
         },
       },
       models: {

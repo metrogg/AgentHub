@@ -185,12 +185,11 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   const mentionedParticipantIds = await findMentionedParticipantIds(roomId, mentions)
   const eventType = timelineEventTypeFor(msgtype, senderParticipant?.participantType)
   if (
-    (eventType === 'manager.message' || eventType === 'human.message') &&
+    eventType === 'manager.message' &&
     senderParticipant &&
-    (await isDuplicateRecentMessage({
+    (await isDuplicateManagerReply({
       roomId,
       senderParticipantId: senderParticipant.id,
-      senderType: eventType === 'manager.message' ? 'manager' : 'human',
       body,
       originServerTs: event.origin_server_ts ?? null,
     }))
@@ -219,10 +218,9 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   })
 }
 
-async function isDuplicateRecentMessage(input: {
+async function isDuplicateManagerReply(input: {
   roomId: string
   senderParticipantId: string
-  senderType: 'manager' | 'human'
   body: string
   originServerTs: number | null
 }) {
@@ -240,7 +238,8 @@ async function isDuplicateRecentMessage(input: {
       and(
         eq(timelineEvents.roomId, input.roomId),
         eq(timelineEvents.senderParticipantId, input.senderParticipantId),
-        eq(timelineEvents.senderType, input.senderType),
+        eq(timelineEvents.senderType, 'manager'),
+        eq(timelineEvents.type, 'manager.message'),
       ),
     )
     .orderBy(desc(timelineEvents.sequence))
