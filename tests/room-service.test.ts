@@ -242,6 +242,43 @@ describe('RoomService Matrix room adapter contract', () => {
     expect(events.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
   })
 
+  test('treats replayed Matrix timeline events as idempotent imports', async () => {
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!idempotent-room:test.agenthub',
+        kind: 'group',
+        ownerId: 'default-user',
+        title: 'Idempotent Matrix Room',
+      })
+      .returning()
+    expect(room).toBeDefined()
+
+    const first = await roomService.importTimelineEvent({
+      roomId: room!.id,
+      providerEventId: '$replayed-matrix-event',
+      senderType: 'human',
+      type: 'human.message',
+      body: 'hello once',
+      metadata: { matrix: { eventId: '$replayed-matrix-event' } },
+    })
+    const replayed = await roomService.importTimelineEvent({
+      roomId: room!.id,
+      providerEventId: '$replayed-matrix-event',
+      senderType: 'human',
+      type: 'human.message',
+      body: 'hello again',
+      metadata: { matrix: { eventId: '$replayed-matrix-event' } },
+    })
+
+    expect(replayed.id).toBe(first.id)
+    expect(replayed.body).toBe('hello once')
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room!.id))
+    expect(events).toHaveLength(1)
+    expect(events[0]!.providerEventId).toBe('$replayed-matrix-event')
+  })
+
   test('routes direct room human messages to Worker runtime using the session agent over stale room metadata', async () => {
     const [oldWorkspace] = await db
       .insert(workspaces)
@@ -1231,6 +1268,139 @@ describe('RoomService Matrix room adapter contract', () => {
       skipAutoDispatch: true,
     })
     expect(events.some((event) => event.metadata?.kind === 'manager.dispatch.diagnostic')).toBe(false)
+  })
+
+  test('Manager recovery scan replays recent unhandled group human messages', async () => {
+    const dispatcher = new MatrixRoomEventDispatcher({})
+    const groupRoom = await roomService.createRoom({
+      kind: 'group',
+      ownerId: 'default-user',
+      title: 'Manager Recovery Replay',
+    })
+    const human = await roomService.addParticipant({
+      roomId: groupRoom.id,
+      participantType: 'human',
+      displayName: 'You',
+      role: 'owner',
+    })
+    const [groupEvent] = await db
+      .insert(timelineEvents)
+      .values({
+        roomId: groupRoom.id,
+        providerEventId: '$manager-recovery-replay',
+        senderParticipantId: human.id,
+        senderType: 'human',
+        type: 'human.message',
+        body: 'Handle this after Manager restart',
+        metadata: { kind: 'chat.message' },
+        sequence: 1,
+      })
+      .returning()
+
+    const recovered = await dispatcher.recoverRecentUnhandledManagerMessages({
+      roomId: groupRoom.id,
+      reason: 'test-manager-recovery',
+      lookbackMs: 60_000,
+      timeoutMs: 60_000,
+      replayThrottleMs: 60_000,
+    })
+
+    expect(recovered.replayed).toBe(1)
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, groupRoom.id))
+    const replay = events.find((event) => event.metadata?.kind === 'manager.dispatch.startup-replay')
+    expect(replay).toMatchObject({
+      senderParticipantId: human.id,
+      senderType: 'human',
+      type: 'human.message',
+      body: 'Handle this after Manager restart',
+    })
+    expect(replay?.metadata).toMatchObject({
+      sourceEventId: groupEvent!.id,
+      recoveryReason: 'test-manager-recovery',
+      hiddenFromChat: true,
+      skipAutoDispatch: true,
+    })
+  })
+
+  test('Manager recovery scan turns stale pending messages into visible retryable timeout failures', async () => {
+    const dispatcher = new MatrixRoomEventDispatcher({})
+    const groupRoom = await roomService.createRoom({
+      kind: 'group',
+      ownerId: 'default-user',
+      title: 'Manager Recovery Timeout',
+    })
+    const human = await roomService.addParticipant({
+      roomId: groupRoom.id,
+      participantType: 'human',
+      displayName: 'You',
+      role: 'owner',
+    })
+    const staleCreatedAt = new Date(Date.now() - 10_000)
+    const [groupEvent] = await db
+      .insert(timelineEvents)
+      .values({
+        roomId: groupRoom.id,
+        providerEventId: '$manager-recovery-timeout',
+        senderParticipantId: human.id,
+        senderType: 'human',
+        type: 'human.message',
+        body: 'This pending message should become failed',
+        metadata: { kind: 'chat.message' },
+        sequence: 1,
+        createdAt: staleCreatedAt,
+      })
+      .returning()
+    await roomService.appendTimelineEvent({
+      roomId: groupRoom.id,
+      senderType: 'manager',
+      type: 'manager.message',
+      body: 'Manager pending',
+      metadata: {
+        kind: 'manager.status.pending',
+        sourceEventId: groupEvent!.id,
+        hiddenFromChat: true,
+        skipAutoDispatch: true,
+      },
+    })
+    await roomService.appendTimelineEvent({
+      roomId: groupRoom.id,
+      senderParticipantId: human.id,
+      senderType: 'human',
+      type: 'human.message',
+      body: 'A later unrelated user message',
+      metadata: { kind: 'chat.message', skipAutoDispatch: true },
+    })
+    await roomService.appendTimelineEvent({
+      roomId: groupRoom.id,
+      senderType: 'manager',
+      type: 'manager.message',
+      body: 'Reply to the later unrelated user message',
+      metadata: { kind: 'matrix.sync.imported', skipAutoDispatch: true },
+    })
+
+    const recovered = await dispatcher.recoverRecentUnhandledManagerMessages({
+      roomId: groupRoom.id,
+      reason: 'test-manager-timeout',
+      lookbackMs: 60_000,
+      timeoutMs: 1,
+      replayThrottleMs: 60_000,
+    })
+
+    expect(recovered.failed).toBe(1)
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, groupRoom.id))
+    const failure = events.find((event) => event.metadata?.kind === 'manager.dispatch.timeout')
+    expect(failure).toMatchObject({
+      senderType: 'system',
+      type: 'system',
+    })
+    expect(failure?.metadata).toMatchObject({
+      sourceEventId: groupEvent!.id,
+      targetMessageId: `room:${groupEvent!.id}`,
+      retryable: true,
+      retryAction: 'resend-message',
+      hiddenFromChat: false,
+    })
+    expect(events.some((event) => event.metadata?.kind === 'manager.dispatch.startup-replay')).toBe(false)
   })
 
   test('Matrix runtime listener can run as a stoppable polling loop', async () => {

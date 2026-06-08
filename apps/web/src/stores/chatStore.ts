@@ -105,7 +105,8 @@ function roomTimelineShouldRefreshResources(
       kind === 'manager.status.pending' ||
       kind === 'manager.status.slow' ||
       kind === 'manager.status.timeout' ||
-      kind === 'manager.dispatch.diagnostic'
+      kind === 'manager.dispatch.diagnostic' ||
+      kind === 'manager.dispatch.timeout'
     )
   })
 }

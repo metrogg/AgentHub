@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, orchestratorRuns, eq, and, desc, asc } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
+import { questionMarkMojibakeField } from '../lib/text-encoding-guard'
 
 import {
   cleanProjectPath,
@@ -577,6 +578,12 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
     const input = normalizeAgentCreateDefaults(c.req.valid('json'))
+    rejectMojibakeInput({
+      name: input.name,
+      role: input.role,
+      description: input.description,
+      systemPrompt: input.systemPrompt,
+    })
     const existing = await db.select({ id: workspaceAgents.id }).from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
     const [agent] = await db
       .insert(workspaceAgents)
@@ -629,6 +636,12 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     await ensureWorkspace(workspaceId, user.sub)
     const body = c.req.valid('json') as z.infer<typeof createWorkspaceWorkerSchema>
     const input = normalizeAgentCreateDefaults(body as z.infer<typeof createAgentSchema>)
+    rejectMojibakeInput({
+      name: input.name,
+      role: input.role,
+      description: input.description,
+      systemPrompt: input.systemPrompt,
+    })
 
     const workerRuntimeBase = readWorkerRuntimeBase(input)
     if (!input.modelId?.trim()) {
@@ -795,6 +808,15 @@ function readWorkerRuntimeBase(
     return value
   }
   return input.codeAgentType ?? undefined
+}
+
+function rejectMojibakeInput(values: Record<string, unknown>) {
+  const field = questionMarkMojibakeField(values)
+  if (!field) return
+  throw AppError.fromCode(
+    AppErrorCodes.VALIDATION_FAILED,
+    `请求文本疑似已被编码破坏为问号，请按 UTF-8 JSON bytes 发送（Content-Type: application/json; charset=utf-8）。异常字段：${field}`,
+  )
 }
 
 async function findDirectWorkerSession(workspaceId: string, workspaceAgentId: string) {

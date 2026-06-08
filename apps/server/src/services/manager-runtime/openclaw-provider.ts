@@ -181,7 +181,12 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
 
   async ensureStarted(): Promise<ManagerRuntimeStatus> {
     const st = await this.status()
-    if (st.running && !st.error) return st
+    if (st.running && !st.error) {
+      if (!st.endpoint) {
+        this.scheduleUnhandledMessageRecovery('manager-ensure-started-already-running')
+      }
+      return st
+    }
     if (st.running && st.error) {
       await this.stop?.()
     }
@@ -241,7 +246,11 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     } else {
       this.launch(st.binaryPath!)
     }
-    return this.status()
+    const next = await this.status()
+    if (next.running && !next.error && !next.endpoint) {
+      this.scheduleUnhandledMessageRecovery('manager-ensure-started')
+    }
+    return next
   }
 
   async stop(): Promise<ManagerRuntimeStatus> {
@@ -308,6 +317,22 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     }
     // OpenClaw without an HTTP endpoint is a resident process; AgentHub does not invoke its step directly.
     return new ResidentManagerRuntime('openclaw')
+  }
+
+  private scheduleUnhandledMessageRecovery(reason: string) {
+    const timer = setTimeout(() => {
+      void import('../rooms/matrix-event-dispatcher')
+        .then(({ matrixRoomEventDispatcher }) =>
+          matrixRoomEventDispatcher.recoverRecentUnhandledManagerMessages({ reason }),
+        )
+        .catch((error) => {
+          logger.warn(
+            { err: error instanceof Error ? error.message : String(error), reason },
+            'Failed to recover recent Manager room messages after runtime start',
+          )
+        })
+    }, 3000)
+    ;(timer as any).unref?.()
   }
 
   // ─── Internal ────────────────────────────────────────────────────

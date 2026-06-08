@@ -1067,6 +1067,34 @@ describe('AgentHub smoke tests', () => {
     ])
   })
 
+  test('workspace agent creation rejects question-mark mojibake fields', async () => {
+    const full = await json<{
+      workspace: { id: string }
+      agents: Array<{ id: string; name: string; roleType: string }>
+    }>(
+      await postJson('/api/workspaces', {
+        name: 'Encoding guard workspace',
+        goal: 'Reject corrupted agent text',
+      }),
+    )
+
+    const response = await postJson(`/api/workspaces/${full.workspace.id}/agents`, {
+      name: '????',
+      role: '?????',
+      roleType: 'custom',
+      description: '????????',
+      systemPrompt: '????????',
+      runtimeType: 'code-agent',
+      codeAgentType: 'opencode',
+    })
+
+    expect(response.status).toBe(400)
+    const after = await json<{ agents: Array<{ id: string; name: string }> }>(
+      await app.request(`/api/workspaces/${full.workspace.id}`),
+    )
+    expect(after.agents).toEqual([])
+  })
+
   test('group session sync keeps unselected workspace agents and dedupes members', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {

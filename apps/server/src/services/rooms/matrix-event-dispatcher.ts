@@ -33,6 +33,11 @@ import { roomService } from './room-service'
 
 const MANAGER_SLOW_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_SLOW_STATUS_MS || '60000')
 const MANAGER_TIMEOUT_STATUS_MS = Number(process.env.AGENTHUB_MANAGER_TIMEOUT_STATUS_MS || '300000')
+const MANAGER_RECOVERY_LOOKBACK_MS = Number(process.env.AGENTHUB_MANAGER_RECOVERY_LOOKBACK_MS || '1800000')
+const MANAGER_RECOVERY_LIMIT = Number(process.env.AGENTHUB_MANAGER_RECOVERY_LIMIT || '80')
+const MANAGER_RECOVERY_REPLAY_THROTTLE_MS = Number(
+  process.env.AGENTHUB_MANAGER_RECOVERY_REPLAY_THROTTLE_MS || '90000',
+)
 
 export interface MatrixRoomEventDispatcherInput {
   eventIds: string[]
@@ -204,6 +209,81 @@ export class MatrixRoomEventDispatcher {
    */
   async dispatchTimelineEvent(eventId: string): Promise<boolean> {
     return this.dispatchAnyEvent(eventId)
+  }
+
+  async recoverRecentUnhandledManagerMessages(input: {
+    roomId?: string | null
+    reason?: string
+    limit?: number
+    lookbackMs?: number
+    timeoutMs?: number
+    replayThrottleMs?: number
+  } = {}): Promise<{ scanned: number; replayed: number; failed: number; skipped: number }> {
+    const limit = Math.max(1, Math.min(Math.trunc(input.limit ?? MANAGER_RECOVERY_LIMIT), 200))
+    const lookbackMs = Math.max(0, input.lookbackMs ?? MANAGER_RECOVERY_LOOKBACK_MS)
+    const timeoutMs = Math.max(0, input.timeoutMs ?? MANAGER_TIMEOUT_STATUS_MS)
+    const replayThrottleMs = Math.max(0, input.replayThrottleMs ?? MANAGER_RECOVERY_REPLAY_THROTTLE_MS)
+    const cutoff = lookbackMs > 0 ? Date.now() - lookbackMs : 0
+    const candidates = await db
+      .select()
+      .from(timelineEvents)
+      .where(and(eq(timelineEvents.senderType, 'human'), eq(timelineEvents.type, 'human.message')))
+      .orderBy(desc(timelineEvents.createdAt))
+      .limit(limit)
+
+    const result = { scanned: 0, replayed: 0, failed: 0, skipped: 0 }
+    for (const sourceEvent of candidates.reverse()) {
+      if (input.roomId && sourceEvent.roomId !== input.roomId) {
+        result.skipped += 1
+        continue
+      }
+      const ageMs = Date.now() - new Date(sourceEvent.createdAt).getTime()
+      if (cutoff > 0 && new Date(sourceEvent.createdAt).getTime() < cutoff) {
+        result.skipped += 1
+        continue
+      }
+      if (sourceEvent.metadata?.kind === 'manager.dispatch.startup-replay') {
+        result.skipped += 1
+        continue
+      }
+      if (!sourceEvent.body?.trim()) {
+        result.skipped += 1
+        continue
+      }
+      const [room] = await db.select().from(rooms).where(eq(rooms.id, sourceEvent.roomId)).limit(1)
+      if (!room || (room.kind !== 'group' && room.kind !== 'manager_dm')) {
+        result.skipped += 1
+        continue
+      }
+      result.scanned += 1
+      if (await hasManagerReplyAfterSourceEvent(room.id, sourceEvent)) {
+        result.skipped += 1
+        continue
+      }
+      const pending = await findManagerStatusEvent(room.id, sourceEvent.id, 'manager.status.pending')
+      if (pending && timeoutMs > 0 && ageMs >= timeoutMs) {
+        const failed = await appendManagerDispatchTimeoutFailure({
+          room,
+          sourceEvent,
+          reason: input.reason ?? 'manager-recovery-timeout',
+        })
+        if (failed) result.failed += 1
+        else result.skipped += 1
+        continue
+      }
+      const replay = await this.appendManagerStartupReplayIfNeeded(
+        room,
+        sourceEvent,
+        { reason: 'resident-manager-started', recoveryReason: input.reason ?? 'manager-recovery-scan' },
+        { replayThrottleMs },
+      )
+      if (replay) result.replayed += 1
+      else result.skipped += 1
+    }
+    if (result.replayed > 0 || result.failed > 0) {
+      logger.info({ ...result, reason: input.reason }, 'Recovered recent unhandled Manager room messages')
+    }
+    return result
   }
 
   private async dispatchImportedEvent(eventId: string) {
@@ -532,6 +612,12 @@ export class MatrixRoomEventDispatcher {
       if (agent?.roleType === 'orchestrator') {
         logger.info({ roomId: room.id, eventId: event.id, workspaceAgentId }, 'Direct room Orchestrator message routed to Manager runtime')
         const pendingEventId = await this.appendManagerPendingStatus(room, event, 'direct-orchestrator-message')
+        if (room.sessionId) {
+          broadcastSessionEvent(room.sessionId, {
+            type: WsEvent.AgentTyping,
+            payload: { sessionId: room.sessionId, agentName: 'Manager', phase: 'replying' },
+          })
+        }
         const managerResult = await this.handlers.stepManagerRoom({
           roomId: room.id,
           ownerId: room.ownerId,
@@ -596,10 +682,11 @@ export class MatrixRoomEventDispatcher {
     pendingEventId: string | null,
     managerResult: unknown,
   ) {
-    if (!pendingEventId || MANAGER_SLOW_STATUS_MS <= 0) return
+    if (!pendingEventId) return
     const consumed = Boolean(managerResult && typeof managerResult === 'object' && (managerResult as any).consumed === true)
     const reason = managerResult && typeof managerResult === 'object' ? String((managerResult as any).reason ?? '') : ''
-    if (!consumed || reason !== 'resident-manager-active') return
+    if (reason !== 'resident-manager-active' && reason !== 'resident-manager-started') return
+    if (!consumed && reason !== 'resident-manager-started') return
     const slowTimer = setTimeout(() => {
       void appendManagerSlowOrTimeoutStatus({
         roomId,
@@ -609,7 +696,7 @@ export class MatrixRoomEventDispatcher {
       })
     }, MANAGER_SLOW_STATUS_MS)
     ;(slowTimer as any).unref?.()
-    if (MANAGER_TIMEOUT_STATUS_MS > MANAGER_SLOW_STATUS_MS) {
+    if (MANAGER_TIMEOUT_STATUS_MS > 0 && MANAGER_TIMEOUT_STATUS_MS > Math.max(0, MANAGER_SLOW_STATUS_MS)) {
       const timeoutTimer = setTimeout(() => {
         void appendManagerSlowOrTimeoutStatus({
           roomId,
@@ -662,6 +749,7 @@ export class MatrixRoomEventDispatcher {
     room: typeof rooms.$inferSelect,
     sourceEvent: typeof timelineEvents.$inferSelect,
     result: unknown,
+    options: { replayThrottleMs?: number } = {},
   ) {
     if (!result || typeof result !== 'object') return null
     const reason = typeof (result as Record<string, unknown>).reason === 'string'
@@ -675,7 +763,16 @@ export class MatrixRoomEventDispatcher {
       sourceEvent.id,
       'manager.dispatch.startup-replay',
     )
-    if (existing) return existing
+    if (existing) {
+      const replayThrottleMs = options.replayThrottleMs ?? MANAGER_RECOVERY_REPLAY_THROTTLE_MS
+      const lastReplayAt = new Date(existing.createdAt).getTime()
+      if (replayThrottleMs > 0 && Number.isFinite(lastReplayAt) && Date.now() - lastReplayAt < replayThrottleMs) {
+        return null
+      }
+    }
+    const recoveryReason = typeof (result as Record<string, unknown>).recoveryReason === 'string'
+      ? (result as Record<string, unknown>).recoveryReason
+      : null
 
     return roomService.appendTimelineEvent({
       roomId: room.id,
@@ -689,6 +786,7 @@ export class MatrixRoomEventDispatcher {
         sourceEventId: sourceEvent.id,
         sourceEventSequence: sourceEvent.sequence,
         originalProviderEventId: sourceEvent.providerEventId ?? null,
+        recoveryReason,
         hiddenFromChat: true,
         skipAutoDispatch: true,
         uiPresentation: 'none',
@@ -927,12 +1025,12 @@ async function appendManagerSlowOrTimeoutStatus(input: {
   if (!room) return null
   const sourceEvent = await findTimelineEvent(input.sourceEventId)
   if (!sourceEvent || sourceEvent.roomId !== input.roomId) return null
-  if (await hasManagerReplyAfterSource(input.roomId, sourceEvent.sequence)) return null
+  if (await hasManagerReplyAfterSourceEvent(input.roomId, sourceEvent)) return null
   const existing = await findManagerStatusEvent(input.roomId, input.sourceEventId, input.statusKind)
   if (existing) return existing
   const managerParticipant = await findRoomManagerParticipant(input.roomId)
   const diagnostics = input.includeDiagnostics ? await managerStatusDiagnostics(input.roomId) : null
-  return roomService.appendTimelineEvent({
+  const statusEvent = await roomService.appendTimelineEvent({
     roomId: input.roomId,
     senderParticipantId: managerParticipant?.id ?? null,
     senderType: 'manager',
@@ -947,6 +1045,56 @@ async function appendManagerSlowOrTimeoutStatus(input: {
       hiddenFromChat: true,
       diagnostics,
       skipAutoDispatch: true,
+    },
+  })
+  if (input.statusKind === 'manager.status.timeout') {
+    await appendManagerDispatchTimeoutFailure({
+      room,
+      sourceEvent,
+      reason: 'manager-timeout',
+      diagnostics,
+    })
+  }
+  return statusEvent
+}
+
+async function appendManagerDispatchTimeoutFailure(input: {
+  room: typeof rooms.$inferSelect
+  sourceEvent: typeof timelineEvents.$inferSelect
+  reason: string
+  diagnostics?: Record<string, unknown> | null
+}) {
+  if (await hasManagerReplyAfterSourceEvent(input.room.id, input.sourceEvent)) return null
+  const existing = await findTimelineEventByKindAndSource(
+    input.room.id,
+    input.sourceEvent.id,
+    'manager.dispatch.timeout',
+  )
+  if (existing) return existing
+  const diagnostics = input.diagnostics ?? await managerStatusDiagnostics(input.room.id)
+  return roomService.appendTimelineEvent({
+    roomId: input.room.id,
+    senderParticipantId: null,
+    senderType: 'system',
+    type: 'system',
+    body: 'Manager 处理超时：这条消息没有被 OpenClaw Manager 完成处理。你可以重试这条消息，或先检查设置页里的 Manager / Matrix / 模型状态。',
+    metadata: {
+      kind: 'manager.dispatch.timeout',
+      reason: input.reason,
+      severity: 'error',
+      retryable: true,
+      retryAction: 'resend-message',
+      targetMessageId: `room:${input.sourceEvent.id}`,
+      targetEventId: input.sourceEvent.id,
+      traceId: input.sourceEvent.id,
+      sourceEventId: input.sourceEvent.id,
+      sourceEventSequence: input.sourceEvent.sequence,
+      sourceEventCreatedAt: input.sourceEvent.createdAt,
+      diagnostics,
+      hiddenFromChat: false,
+      skipAutoDispatch: true,
+      uiPresentation: 'message',
+      messageType: 'text',
     },
   })
 }
@@ -985,20 +1133,49 @@ async function findRoomManagerParticipant(roomId: string) {
   return participant ?? null
 }
 
-async function hasManagerReplyAfterSource(roomId: string, sourceSequence: number) {
+async function hasManagerReplyAfterSourceEvent(
+  roomId: string,
+  sourceEvent: typeof timelineEvents.$inferSelect,
+) {
   const recent = await db
     .select()
     .from(timelineEvents)
-    .where(and(eq(timelineEvents.roomId, roomId), eq(timelineEvents.senderType, 'manager'), eq(timelineEvents.type, 'manager.message')))
+    .where(eq(timelineEvents.roomId, roomId))
     .orderBy(desc(timelineEvents.sequence))
-    .limit(30)
-  return recent.some((event) => {
-    if (event.sequence <= sourceSequence) return false
+    .limit(120)
+  const afterSource = recent
+    .filter((event) => event.sequence > sourceEvent.sequence)
+    .sort((a, b) => a.sequence - b.sequence)
+  for (const event of afterSource) {
+    if (event.senderType === 'human' && event.type === 'human.message') {
+      if (isReplayOrRetryOfSource(event, sourceEvent)) continue
+      return false
+    }
+    if (event.senderType !== 'manager' || event.type !== 'manager.message') continue
     const kind = typeof event.metadata?.kind === 'string' ? event.metadata.kind : ''
-    if (kind.startsWith('manager.status.')) return false
-    if (kind === 'manager.dispatch.diagnostic') return false
-    return Boolean(event.body?.trim())
-  })
+    if (kind.startsWith('manager.status.')) continue
+    if (kind === 'manager.dispatch.diagnostic' || kind === 'manager.dispatch.timeout') continue
+    if (event.body?.trim()) return true
+  }
+  return false
+}
+
+function isReplayOrRetryOfSource(
+  event: typeof timelineEvents.$inferSelect,
+  sourceEvent: typeof timelineEvents.$inferSelect,
+) {
+  const metadata = event.metadata ?? {}
+  if (metadata.kind === 'manager.dispatch.startup-replay' && metadata.sourceEventId === sourceEvent.id) return true
+  if (metadata.resentFromEventId === sourceEvent.id) return true
+  if (metadata.resentFromMessageId === `room:${sourceEvent.id}`) return true
+  if (
+    event.senderParticipantId === sourceEvent.senderParticipantId &&
+    event.body.trim() &&
+    event.body.trim() === sourceEvent.body.trim()
+  ) {
+    return true
+  }
+  return false
 }
 
 async function managerStatusDiagnostics(roomId: string) {

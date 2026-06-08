@@ -6,6 +6,7 @@ import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
 import { roomService } from '../rooms/room-service'
 import { ensureGroupSession } from '../workspace/session-manager'
 import { ensureWorkerAgentContractFromController } from '../agent-contract'
+import { syncWorkspaceAgentToAgentLibrary, type SavedAgentConfig } from '../agent-library'
 import type { WorkerBackend } from './worker-backend'
 import {
   codeAgentTypeForRuntime,
@@ -22,6 +23,7 @@ export type MemberReconcileStageName =
   | 'ApplyWorkerInstance'
   | 'JoinRooms'
   | 'AnnounceAndObserve'
+  | 'SyncAgentLibrary'
 
 export interface MemberReconcileStage {
   name: MemberReconcileStageName
@@ -69,6 +71,7 @@ export interface MemberReconcileResult {
   directRoom: typeof rooms.$inferSelect | null
   participants: Array<typeof roomParticipants.$inferSelect>
   announcements: Array<{ roomId: string; eventId: string }>
+  savedAgentConfig: SavedAgentConfig | null
 }
 
 export class MemberReconciler {
@@ -166,6 +169,20 @@ export class MemberReconciler {
       throw new Error(roomAwarePrepare.message ?? `Worker runtime contract prepare failed after room join: ${roomAwarePrepare.state ?? 'unknown'}.`)
     }
 
+    const savedAgentConfig = await syncWorkspaceAgentToAgentLibrary(agent)
+    const directSession = joined.directSession
+      ? await this.attachSavedAgentToDirectSession(joined.directSession, savedAgentConfig.id)
+      : null
+    stages.push({
+      name: 'SyncAgentLibrary',
+      ok: true,
+      message: 'SavedAgentConfig synced to Agent Library.',
+      details: {
+        savedAgentId: savedAgentConfig.id,
+        workspaceAgentId: agent.id,
+      },
+    })
+
     return {
       agentId: agent.id,
       worker: await this.getWorkerResource(worker.workerInstanceId),
@@ -173,10 +190,11 @@ export class MemberReconciler {
       runtimeBase: spec.runtimeBase,
       stages,
       groupRoom: joined.groupRoom,
-      directSession: joined.directSession,
+      directSession,
       directRoom: joined.directRoom,
       participants: joined.participants,
       announcements,
+      savedAgentConfig,
     }
   }
 
@@ -438,6 +456,23 @@ export class MemberReconciler {
       .returning()
     if (!created) throw new Error('Failed to create Worker direct session.')
     return created
+  }
+
+  private async attachSavedAgentToDirectSession(session: typeof sessions.$inferSelect, savedAgentId: string) {
+    const metadata = {
+      ...(session.metadata ?? {}),
+      kind: 'agent-direct',
+      savedAgentId,
+    }
+    const [updated] = await db
+      .update(sessions)
+      .set({
+        metadata,
+        updatedAt: new Date(),
+      })
+      .where(eq(sessions.id, session.id))
+      .returning()
+    return updated ?? session
   }
 
   private async resolveRuntimeBase(

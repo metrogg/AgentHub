@@ -11,6 +11,7 @@ const {
   roomParticipants,
   rooms,
   sessions,
+  settings,
   timelineEvents,
   workerInstances,
   workspaceAgents,
@@ -1078,6 +1079,7 @@ describe('Controller Plane', () => {
       'ApplyWorkerInstance',
       'JoinRooms',
       'AnnounceAndObserve',
+      'SyncAgentLibrary',
     ])
     expect(result.worker?.kind).toBe('Worker')
     expect(result.runtimeBase).toBe('opencode')
@@ -1086,6 +1088,8 @@ describe('Controller Plane', () => {
     expect(result.directRoom?.kind).toBe('direct')
     expect(result.participants.length).toBeGreaterThanOrEqual(2)
     expect(result.announcements).toHaveLength(1)
+    expect(result.savedAgentConfig?.name).toBe('Room Joined Worker')
+    expect(result.savedAgentConfig?.id).toBe(result.agentId)
     expect(prepareCalls).toHaveLength(2)
     expect(prepareCalls[0]?.workerInstanceId).toBe(result.workerInstanceId)
     expect(prepareCalls[0]?.context?.workspaceId).toBe(workspace!.id)
@@ -1135,6 +1139,17 @@ describe('Controller Plane', () => {
       .from(sessions)
       .where(eq(sessions.workspaceAgentId, result.agentId))
     expect(directSessions.some((session) => session.metadata?.createdFrom === 'member-reconcile')).toBe(true)
+    expect(directSessions.some((session) => session.metadata?.savedAgentId === result.savedAgentConfig?.id)).toBe(true)
+
+    const [librarySetting] = await db.select().from(settings).where(eq(settings.key, 'AGENT_LIBRARY')).limit(1)
+    const library = JSON.parse(librarySetting!.value) as { agents: Array<{ id: string; name: string; role: string; codeAgentType?: string | null }> }
+    const savedAgent = library.agents.find((item) => item.id === result.savedAgentConfig?.id)
+    expect(savedAgent).toMatchObject({
+      id: result.agentId,
+      name: 'Room Joined Worker',
+      role: 'Engineer',
+      codeAgentType: 'opencode',
+    })
 
     const roomRows = await db.select().from(rooms).where(eq(rooms.workspaceId, workspace!.id))
     expect(roomRows.some((room) => room.kind === 'group')).toBe(true)
