@@ -64,21 +64,23 @@ export function projectTimelineMessages(input: {
 }): MessageRow[] {
   const participantsById = new Map(input.participants.map((participant) => [participant.id, participant]))
   const controls = timelineProjectionControls(input.timeline)
-  const projectedMessages = collapseTimelineStreamMessages(
-    input.timeline
-      .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
-      .filter((event) => !isMessageControlEvent(event))
-      .filter((event) => !timelineEventIsRedacted(event, controls))
-      .map((event) =>
-        timelineEventToMessage({
-          event,
-          room: input.room,
-          participant: event.senderParticipantId ? participantsById.get(event.senderParticipantId) : undefined,
-          sessionId: input.sessionId,
-        }),
-      )
-      .filter((message): message is MessageRow => Boolean(message))
-      .map((message) => applyTimelineEdit(message, controls)),
+  const projectedMessages = mergeConsecutiveAgentMessages(
+    collapseTimelineStreamMessages(
+      input.timeline
+        .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
+        .filter((event) => !isMessageControlEvent(event))
+        .filter((event) => !timelineEventIsRedacted(event, controls))
+        .map((event) =>
+          timelineEventToMessage({
+            event,
+            room: input.room,
+            participant: event.senderParticipantId ? participantsById.get(event.senderParticipantId) : undefined,
+            sessionId: input.sessionId,
+          }),
+        )
+        .filter((message): message is MessageRow => Boolean(message))
+        .map((message) => applyTimelineEdit(message, controls)),
+    ),
   )
 
   return projectedMessages.sort((a, b) => {
@@ -350,6 +352,111 @@ function mergeTimelineStreamContent(base: string, next: string) {
   if (next.startsWith(base)) return next
   if (base.startsWith(next)) return base
   return `${base}${next}`
+}
+
+/**
+ * Merge consecutive agent messages from the same sender within a time window.
+ * This handles Matrix /sync imported messages that don't have a traceId
+ * (unlike bridge Worker streaming messages which use collapseTimelineStreamMessages).
+ */
+const CONSECUTIVE_MERGE_WINDOW_MS = 30_000
+
+function mergeConsecutiveAgentMessages(messages: MessageRow[]): MessageRow[] {
+  const output: MessageRow[] = []
+  for (const message of messages) {
+    const previous = output.at(-1)
+    if (
+      previous &&
+      canMergeConsecutiveMessages(previous, message)
+    ) {
+      output[output.length - 1] = mergeConsecutiveMessagePair(previous, message)
+      continue
+    }
+    output.push(message)
+  }
+  return output
+}
+
+function canMergeConsecutiveMessages(a: MessageRow, b: MessageRow): boolean {
+  // Only merge agent messages (manager/worker both map to 'agent' in MessageRow)
+  if (a.senderType !== 'agent') return false
+  if (a.senderType !== b.senderType) return false
+  if (a.senderId !== b.senderId) return false
+
+  // Time window check
+  const timeDiff = b.createdAt.getTime() - a.createdAt.getTime()
+  if (!Number.isFinite(timeDiff) || timeDiff < 0 || timeDiff > CONSECUTIVE_MERGE_WINDOW_MS) return false
+
+  // Don't merge if either has a traceId (those are handled by collapseTimelineStreamMessages)
+  const aMetadata = asRecord(a.metadata)
+  const bMetadata = asRecord(b.metadata)
+  if (asString(aMetadata.traceId) || asString(bMetadata.traceId)) return false
+
+  // Don't merge messages with explicit action types
+  if (asString(aMetadata.actionType) || asString(bMetadata.actionType)) return false
+
+  // Don't merge if the message has special UI presentation
+  const aRoomTimeline = asRecord(aMetadata.roomTimeline)
+  const bRoomTimeline = asRecord(bMetadata.roomTimeline)
+  if (asString(aRoomTimeline.eventType) !== asString(bRoomTimeline.eventType)) return false
+
+  return true
+}
+
+function mergeConsecutiveMessagePair(base: MessageRow, next: MessageRow): MessageRow {
+  const baseMetadata = asRecord(base.metadata)
+  const nextMetadata = asRecord(next.metadata)
+  const baseRoomTimeline = asRecord(baseMetadata.roomTimeline)
+  const nextRoomTimeline = asRecord(nextMetadata.roomTimeline)
+
+  // Streaming accumulation: if next contains base as prefix (or vice versa),
+  // keep the longer one — this is OpenClaw's partial streaming pattern.
+  // e.g. "今天" → "今天天气" → "今天天气真好"
+  const mergedContent = mergeStreamingContent(base.content, next.content)
+
+  // Collect all event IDs
+  const eventIds = uniqueStrings([
+    asString(baseRoomTimeline.eventId),
+    asString(nextRoomTimeline.eventId),
+  ])
+
+  return {
+    ...base,
+    content: mergedContent,
+    metadata: {
+      ...baseMetadata,
+      ...nextMetadata,
+      displayContent: mergedContent,
+      roomTimeline: nextMetadata.roomTimeline ?? baseMetadata.roomTimeline,
+      roomTimelineStream: {
+        ...(baseMetadata.roomTimelineStream as Record<string, unknown> ?? {}),
+        eventIds,
+        latestEventId: asString(nextRoomTimeline.eventId) ?? eventIds.at(-1) ?? null,
+        mergedCount: ((baseMetadata.roomTimelineStream as Record<string, unknown>)?.mergedCount as number ?? 1) + 1,
+      },
+    },
+  }
+}
+
+/**
+ * Merge streaming content: if one is a prefix of the other, keep the longer one.
+ * This handles OpenClaw's partial streaming where each message is the cumulative output.
+ * Falls back to paragraph-separated concatenation for genuinely separate thoughts.
+ */
+function mergeStreamingContent(base: string, next: string): string {
+  if (!base) return next
+  if (!next) return base
+
+  const baseTrim = base.trim()
+  const nextTrim = next.trim()
+
+  // Streaming accumulation: next contains base as prefix
+  if (nextTrim.startsWith(baseTrim)) return next
+  // Reverse: base contains next as prefix (shouldn't happen in normal streaming)
+  if (baseTrim.startsWith(nextTrim)) return base
+
+  // Distinct messages: concatenate with paragraph break
+  return `${base}\n\n${next}`
 }
 
 function timelineEventToMessage(input: {

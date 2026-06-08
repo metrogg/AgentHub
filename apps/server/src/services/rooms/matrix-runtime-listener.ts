@@ -179,6 +179,35 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   const content = event.content ?? {}
   const body = typeof content.body === 'string' ? content.body : ''
   const msgtype = typeof content.msgtype === 'string' ? content.msgtype : 'm.text'
+
+  // Handle Matrix edit events (m.replace) — OpenClaw uses these for streaming updates.
+  // Instead of importing as a new message, update the original timeline event's body.
+  const relatesTo = content['m.relates_to']
+  if (
+    relatesTo &&
+    typeof relatesTo === 'object' &&
+    !Array.isArray(relatesTo)
+  ) {
+    const rel = relatesTo as Record<string, unknown>
+    if (rel.rel_type === 'm.replace' && typeof rel.event_id === 'string') {
+      const replacedEventId = rel.event_id
+      const [replacedEvent] = await db
+        .select({ id: timelineEvents.id, body: timelineEvents.body })
+        .from(timelineEvents)
+        .where(and(eq(timelineEvents.roomId, roomId), eq(timelineEvents.providerEventId, replacedEventId)))
+        .limit(1)
+      if (replacedEvent) {
+        // Update the original event's body with the new content (streaming accumulation)
+        const newBody = body || replacedEvent.body
+        await db
+          .update(timelineEvents)
+          .set({ body: newBody })
+          .where(eq(timelineEvents.id, replacedEvent.id))
+        return replacedEvent
+      }
+    }
+  }
+
   const sender = event.sender ?? null
   const senderParticipant = sender ? await ensureParticipantForMatrixSender(roomId, sender) : null
   const mentions = parseMatrixMentions(content, body)
@@ -194,6 +223,9 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
       originServerTs: event.origin_server_ts ?? null,
     }))
   ) {
+    return null
+  }
+  if (eventType === 'manager.message' && isManagerSkillIntermediateOutput(body)) {
     return null
   }
   return roomService.importTimelineEvent({
@@ -259,6 +291,32 @@ async function isDuplicateManagerReply(input: {
 
 function normalizeDedupeBody(body: string) {
   return body.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Filter out Manager skill intermediate outputs that are not meaningful user-facing messages.
+ * These are typically tool call names, memory search indicators, or internal state dumps
+ * that OpenClaw sends to the Matrix room during skill execution.
+ */
+function isManagerSkillIntermediateOutput(body: string): boolean {
+  const trimmed = body.trim()
+  if (!trimmed) return true
+
+  // Single word tool call names (e.g. "Barnacing", "Searching", "Thinking")
+  if (/^[A-Z][a-zA-Z]{2,20}$/.test(trimmed)) return true
+
+  // Memory search / file read indicators
+  if (/^Memory Search:/i.test(trimmed)) return true
+  if (/^Read: from .+/i.test(trimmed)) return true
+  if (/^→ Read .+/i.test(trimmed)) return true
+
+  // Skill execution markers
+  if (/^\[?[A-Z][a-z]+:\s*.+\]?$/.test(trimmed)) return true
+
+  // Very short placeholder messages (single emoji + short text)
+  if (/^[\p{Emoji}\s]{0,5}\s*\.{0,3}$/u.test(trimmed)) return true
+
+  return false
 }
 
 async function dispatchImportedEvents(eventIds: string[]) {
