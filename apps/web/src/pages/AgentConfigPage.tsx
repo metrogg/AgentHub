@@ -756,6 +756,10 @@ export default function AgentConfigPage() {
                                   <option value="">未绑定模型，运行前需补齐</option>
                                   {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                                 </SelectField>}
+                                {managerAgent && <SelectField label="Manager 模型" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                                  <option value="">跟随设置页 Manager Runtime 模型</option>
+                                  {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
+                                </SelectField>}
                                 {!managerAgent && <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
                                   <option value="workspace-write">{t('工作区写入')}</option>
                                   <option value="danger-full-access">{t('完全访问')}</option>
@@ -1057,7 +1061,7 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     systemPrompt: draft.systemPrompt?.trim() ?? '',
     skillIds: draft.skillIds ?? [],
     color: draft.color || '#111827',
-    modelId: managerAgent ? null : (draft.modelId ?? null),
+    modelId: draft.modelId ?? null,
     runtimeType: 'code-agent' as const,
     codeAgentType: managerAgent ? null : (cliWorkerBaseFromRuntimeBase(workerRuntimeBase) ?? draft.codeAgentType ?? null),
     capabilityTags,

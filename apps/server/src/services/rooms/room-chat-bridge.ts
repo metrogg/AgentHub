@@ -206,7 +206,13 @@ async function ensureSessionRoomParticipants(input: {
         .where(eq(workspaceAgents.id, input.session.workspaceAgentId))
         .limit(1)
       if (agent) {
-        await ensureWorkerParticipantForAgent(input.roomId, input.session.workspaceId, agent)
+        if (agent.roleType === 'orchestrator') {
+          // Orchestrator direct rooms go through the Manager runtime path;
+          // they need a manager participant so OpenClaw can bind the room.
+          await ensureManagerParticipantForRoom(input.roomId)
+        } else {
+          await ensureWorkerParticipantForAgent(input.roomId, input.session.workspaceId, agent)
+        }
       } else {
         await roomService.addWorkerParticipant(input.roomId, input.session.workspaceAgentId)
       }

@@ -1172,6 +1172,67 @@ describe('RoomService Matrix room adapter contract', () => {
     expect(workerCalls).toEqual([])
   })
 
+  test('Matrix dispatcher replays the triggering human message after resident Manager cold start', async () => {
+    const dispatcher = new MatrixRoomEventDispatcher({
+      stepManagerRoom: async () => ({
+        consumed: false,
+        skipped: true,
+        reason: 'resident-manager-started',
+      }),
+    })
+
+    const groupRoom = await roomService.createRoom({
+      kind: 'group',
+      ownerId: 'default-user',
+      title: 'Manager Cold Start Replay',
+    })
+    const human = await roomService.addParticipant({
+      roomId: groupRoom.id,
+      participantType: 'human',
+      displayName: 'You',
+      role: 'owner',
+    })
+    const [groupEvent] = await db
+      .insert(timelineEvents)
+      .values({
+        roomId: groupRoom.id,
+        providerEventId: '$dispatcher-manager-cold-start',
+        senderParticipantId: human.id,
+        senderType: 'human',
+        type: 'human.message',
+        body: 'Manager, please handle this after startup',
+        metadata: {
+          kind: 'matrix.sync.imported',
+          matrix: {
+            eventId: '$dispatcher-manager-cold-start',
+          },
+        },
+        sequence: 1,
+      })
+      .returning()
+
+    const result = await dispatcher.dispatchImportedEvents({
+      eventIds: [groupEvent!.id],
+    })
+
+    expect(result.dispatchedEventIds).toEqual([groupEvent!.id])
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, groupRoom.id))
+    const replay = events.find((event) => event.metadata?.kind === 'manager.dispatch.startup-replay')
+    expect(replay).toMatchObject({
+      senderParticipantId: human.id,
+      senderType: 'human',
+      type: 'human.message',
+      body: 'Manager, please handle this after startup',
+    })
+    expect(replay?.metadata).toMatchObject({
+      sourceEventId: groupEvent!.id,
+      sourceEventSequence: 1,
+      hiddenFromChat: true,
+      skipAutoDispatch: true,
+    })
+    expect(events.some((event) => event.metadata?.kind === 'manager.dispatch.diagnostic')).toBe(false)
+  })
+
   test('Matrix runtime listener can run as a stoppable polling loop', async () => {
     let syncCount = 0
     const originalFetch = globalThis.fetch

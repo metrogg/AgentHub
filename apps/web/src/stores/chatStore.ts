@@ -2831,6 +2831,7 @@ interface ChatState {
   agentTabs: AgentTab[]
 
   fetchSessions: () => Promise<void>
+  resetActiveSession: () => void
   createSession: (
     title?: string,
     options?: {
@@ -2941,6 +2942,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch {
       set({ loadingSessions: false })
     }
+  },
+
+  resetActiveSession() {
+    clearPendingStream()
+    set({
+      currentSessionId: null,
+      currentSession: null,
+      currentWorkspace: null,
+      currentWorkspaceAgents: [],
+      currentWorkspaceWorkers: [],
+      loadingMessages: false,
+      messages: [],
+      streamingMessage: null,
+      streamingCodeAgentRun: null,
+      pendingAttachments: [],
+      agentTyping: false,
+      agentActivity: null,
+      replyingToMessageId: null,
+      replyingToMessage: null,
+      replyingToKind: 'reply',
+      taskBoard: null,
+      previewUrl: null,
+      previewFileName: null,
+      selectedAgentTab: null,
+      agentTabs: [],
+    })
   },
 
   async createSession(title = '新会话', options = {}) {
@@ -3135,7 +3162,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         } else if (!workspaceAgentId && full.agents.length === 1) {
           workspaceAgentId = full.agents[0]!.id
         }
-      } else if (full.agents.length === 1) {
+      } else if (currentSession?.type !== SessionType.Group && full.agents.length === 1) {
         workspaceAgentId = full.agents[0]!.id
       }
     }
@@ -3204,8 +3231,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       get().currentSession?.id === sessionId
         ? get().currentSession
         : (get().sessions.find((item) => item.id === sessionId) ?? null)
-    const isGroupSession =
-      targetSession?.type === SessionType.Group && Boolean(targetSession.workspaceId)
+    const isGroupSession = targetSession?.type === SessionType.Group
     set({
       agentTyping: !isGroupSession,
       selectedAgentTab: isGroupSession ? null : get().selectedAgentTab,

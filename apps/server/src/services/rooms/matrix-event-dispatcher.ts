@@ -468,6 +468,7 @@ export class MatrixRoomEventDispatcher {
         })
         this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
         await this.appendManagerDispatchDiagnostic(room, event, managerResult)
+        await this.appendManagerStartupReplayIfNeeded(room, event, managerResult)
         return true
       }
     }
@@ -498,6 +499,7 @@ export class MatrixRoomEventDispatcher {
       })
       this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
       await this.appendManagerDispatchDiagnostic(room, event, managerResult)
+      await this.appendManagerStartupReplayIfNeeded(room, event, managerResult)
       return true
     }
 
@@ -525,6 +527,7 @@ export class MatrixRoomEventDispatcher {
         })
         this.scheduleManagerSlowStatus(room.id, event.id, pendingEventId, managerResult)
         await this.appendManagerDispatchDiagnostic(room, event, managerResult)
+        await this.appendManagerStartupReplayIfNeeded(room, event, managerResult)
         return true
       }
 
@@ -617,6 +620,7 @@ export class MatrixRoomEventDispatcher {
     const error = typeof payload.error === 'string' ? payload.error : ''
     if (consumed && !error) return
     const reason = typeof payload.reason === 'string' ? payload.reason : 'manager-dispatch-not-consumed'
+    if (reason === 'resident-manager-started' && !error) return
     const body = managerDispatchDiagnosticBody(reason, error)
     await roomService.appendTimelineEvent({
       roomId: room.id,
@@ -634,7 +638,46 @@ export class MatrixRoomEventDispatcher {
         // visible to the user — they need to know why Manager didn't respond
         hiddenFromChat: false,
         skipAutoDispatch: true,
-        uiPresentation: 'room-status',
+        uiPresentation: 'message',
+        messageType: 'text',
+      },
+    })
+  }
+
+  private async appendManagerStartupReplayIfNeeded(
+    room: typeof rooms.$inferSelect,
+    sourceEvent: typeof timelineEvents.$inferSelect,
+    result: unknown,
+  ) {
+    if (!result || typeof result !== 'object') return null
+    const reason = typeof (result as Record<string, unknown>).reason === 'string'
+      ? (result as Record<string, unknown>).reason
+      : ''
+    if (reason !== 'resident-manager-started') return null
+    if (sourceEvent.senderType !== 'human' || sourceEvent.type !== 'human.message') return null
+    if (sourceEvent.metadata?.kind === 'manager.dispatch.startup-replay') return null
+    const existing = await findTimelineEventByKindAndSource(
+      room.id,
+      sourceEvent.id,
+      'manager.dispatch.startup-replay',
+    )
+    if (existing) return existing
+
+    return roomService.appendTimelineEvent({
+      roomId: room.id,
+      senderParticipantId: sourceEvent.senderParticipantId ?? null,
+      senderType: 'human',
+      type: 'human.message',
+      body: sourceEvent.body ?? '',
+      metadata: {
+        kind: 'manager.dispatch.startup-replay',
+        traceId: sourceEvent.id,
+        sourceEventId: sourceEvent.id,
+        sourceEventSequence: sourceEvent.sequence,
+        originalProviderEventId: sourceEvent.providerEventId ?? null,
+        hiddenFromChat: true,
+        skipAutoDispatch: true,
+        uiPresentation: 'none',
       },
     })
   }
@@ -901,6 +944,16 @@ async function findManagerStatusEvent(roomId: string, sourceEventId: string, kin
     .where(and(eq(timelineEvents.roomId, roomId), eq(timelineEvents.senderType, 'manager'), eq(timelineEvents.type, 'manager.message')))
     .orderBy(desc(timelineEvents.sequence))
     .limit(30)
+  return recent.find((event) => event.metadata?.kind === kind && event.metadata?.sourceEventId === sourceEventId) ?? null
+}
+
+async function findTimelineEventByKindAndSource(roomId: string, sourceEventId: string, kind: string) {
+  const recent = await db
+    .select()
+    .from(timelineEvents)
+    .where(eq(timelineEvents.roomId, roomId))
+    .orderBy(desc(timelineEvents.sequence))
+    .limit(50)
   return recent.find((event) => event.metadata?.kind === kind && event.metadata?.sourceEventId === sourceEventId) ?? null
 }
 

@@ -458,7 +458,7 @@ async function installSkillFromUrl(sourceUrl: string, requestedId?: string) {
       description: frontmatter.description || '',
       rootPath: installedSkillsRoot,
       skillPath: skillDir,
-      source: 'skills',
+      source: 'storage',
     },
     message: `已安装 skill:${skillId}`,
   }

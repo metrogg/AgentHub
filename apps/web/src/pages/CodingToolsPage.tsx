@@ -914,6 +914,8 @@ export default function CodingToolsPage() {
               )}
             </aside>
           </section>
+
+          <ManagerRuntimePanel />
         </div>
       </main>
 
@@ -1555,5 +1557,123 @@ function CodeBlock({ value }: { value: string }) {
     <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-neutral-950 p-3 font-mono text-xs leading-5 text-neutral-50">
       <code>{value}</code>
     </pre>
+  )
+}
+
+function ManagerRuntimePanel() {
+  const { t } = useI18n()
+  const [status, setStatus] = useState<import('../lib/api').ManagerRuntimeStatusResponse | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  async function load() {
+    try {
+      setStatus(await api.getManagerRuntimeStatus())
+    } catch (e: any) {
+      setMessage(e?.message || '获取状态失败')
+    }
+  }
+
+  useEffect(() => { void load() }, [])
+
+  const active = status?.activeStatus
+  const running = active?.running ?? false
+
+  async function toggle() {
+    if (!status) return
+    setBusy(true)
+    setMessage('')
+    try {
+      if (running) {
+        await api.stopManagerRuntime(status.activeRuntimeType)
+        setMessage('Manager Runtime 已停止')
+      } else {
+        await api.startManagerRuntime(status.activeRuntimeType)
+        setMessage('Manager Runtime 启动中，连上 Matrix 后开始接单')
+      }
+      await load()
+    } catch (e: any) {
+      setMessage(e?.message || '操作失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="mt-5">
+      <div className="rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Manager Runtime</h2>
+            <p className="mt-1 text-sm text-neutral-500">
+              OpenClaw / QwenPaw — 群聊总指挥，通过 Matrix /sync 协调 Worker 执行任务。
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={busy}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 px-3 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
+              {t('刷新')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void toggle()}
+              disabled={busy || !status}
+              className={cn(
+                'inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition disabled:opacity-50',
+                running
+                  ? 'border border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50'
+                  : 'bg-neutral-950 text-white hover:bg-neutral-800',
+              )}
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {running ? '停止' : '启动'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2 text-xs">
+          <span className={cn(
+            'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1',
+            running ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500',
+          )}>
+            {running
+              ? <CheckCircle2 className="h-3.5 w-3.5" />
+              : <XCircle className="h-3.5 w-3.5" />}
+            {running ? '运行中' : '未运行'}
+          </span>
+          {active && (
+            <span className="inline-flex items-center rounded-md bg-neutral-100 px-2.5 py-1 text-neutral-600">
+              {status?.activeRuntimeType ?? 'openclaw'}
+            </span>
+          )}
+          {active?.pid && (
+            <span className="inline-flex items-center rounded-md bg-neutral-100 px-2.5 py-1 font-mono text-neutral-500">
+              PID {active.pid}
+            </span>
+          )}
+          {active?.error && (
+            <span className="inline-flex items-center rounded-md bg-red-50 px-2.5 py-1 text-red-700">
+              {active.error}
+            </span>
+          )}
+        </div>
+
+        {message && (
+          <p className="mt-3 text-xs text-neutral-500">{message}</p>
+        )}
+
+        {active && (
+          <div className="mt-4 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2.5 text-xs text-neutral-500">
+            <div>{active.workspace}</div>
+            {active.configPath && <div className="mt-1 font-mono opacity-70">{active.configPath}</div>}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }

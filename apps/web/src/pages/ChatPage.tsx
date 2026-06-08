@@ -55,6 +55,15 @@ type WelcomeStarterAction = {
   iconClassName: string
 }
 
+type MultiAgentMode = {
+  id: string
+  label: string
+  desc: string
+  prompt: string
+  icon: LucideIcon
+  iconClassName: string
+}
+
 const welcomeStarterActions: WelcomeStarterAction[] = [
   {
     label: '创建 Team',
@@ -85,6 +94,45 @@ const welcomeStarterActions: WelcomeStarterAction[] = [
     prompt: '请帮我整理一张表格，先确认字段、数据来源和最终输出格式。',
     icon: Table2,
     iconClassName: 'bg-[#ECE8FF] text-[#5B49B6]',
+  },
+]
+
+const multiAgentModes: MultiAgentMode[] = [
+  {
+    id: 'manager',
+    label: '智能编排',
+    desc: 'Manager 判断目标复杂度，必要时提出补员和分工。',
+    prompt:
+      '请以多 Agent Manager 方式处理这个目标：先判断是否需要补员或分工，必要时提出成员建议并等待我确认。',
+    icon: Sparkles,
+    iconClassName: 'bg-neutral-950 text-white',
+  },
+  {
+    id: 'team',
+    label: '先组队',
+    desc: '先给出成员、职责和任务边界，确认后再执行。',
+    prompt:
+      '请先创建协作 Team 方案：列出建议 Agent、职责、任务边界和需要我确认的问题，暂不开始执行。',
+    icon: UsersRound,
+    iconClassName: 'bg-[#EAF4EF] text-[#237A57]',
+  },
+  {
+    id: 'dispatch',
+    label: '直接派活',
+    desc: '拆成并行任务，分配给合适 Agent，并持续同步进度。',
+    prompt:
+      '请把目标拆成并行任务，分配给合适 Agent，在主群聊同步计划、进度、产物和最终汇总。',
+    icon: FolderPlus,
+    iconClassName: 'bg-[#EAF0FF] text-[#3159B7]',
+  },
+  {
+    id: 'review',
+    label: '复盘检查',
+    desc: '让成员做交叉检查，输出风险、证据和最终结论。',
+    prompt:
+      '请组织成员做交叉检查：实现者说明产物，另一个 Agent 做风险复盘，最后给出可执行结论。',
+    icon: Check,
+    iconClassName: 'bg-[#FFF1D8] text-[#9A5D00]',
   },
 ]
 
@@ -195,6 +243,7 @@ function Welcome() {
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
+  const [multiAgentPanelOpen, setMultiAgentPanelOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null)
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
@@ -303,6 +352,7 @@ function Welcome() {
     setMessage(nextMessage)
     if (command) {
       setProjectMenuOpen(false)
+      setMultiAgentPanelOpen(false)
       closeMentionPanel()
       setSkillQuery(command.query)
       setSkillCommandRange({ start: command.start, end: command.end })
@@ -310,6 +360,7 @@ function Welcome() {
     } else if (mention) {
       closeSkillPanel()
       setProjectMenuOpen(false)
+      setMultiAgentPanelOpen(false)
       setMentionRange(mention)
       setMentionPanelOpen(true)
     } else {
@@ -366,6 +417,7 @@ function Welcome() {
     setMentionRange({ start, end: start + 1, query: '' })
     setMentionPanelOpen(true)
     setProjectMenuOpen(false)
+    setMultiAgentPanelOpen(false)
     closeSkillPanel()
     window.requestAnimationFrame(() => {
       const nextCursor = start + 1
@@ -374,18 +426,63 @@ function Welcome() {
     })
   }
 
+  function insertComposerBlock(text: string) {
+    const input = messageInputRef.current
+    const source = input?.value ?? message
+    const start = input?.selectionStart ?? source.length
+    const end = input?.selectionEnd ?? source.length
+    const before = source.slice(0, start)
+    const after = source.slice(end)
+    const prefix = before.trim() && !before.endsWith('\n') ? '\n\n' : ''
+    const suffix = after.trim() && !after.startsWith('\n') ? '\n\n' : ''
+    const nextMessage = `${before}${prefix}${text}${suffix}${after}`
+    setMessage(nextMessage)
+    window.requestAnimationFrame(() => {
+      const nextCursor = before.length + prefix.length + text.length
+      messageInputRef.current?.focus()
+      messageInputRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  function applyMultiAgentMode(mode: MultiAgentMode) {
+    insertComposerBlock(mode.prompt)
+    setMultiAgentPanelOpen(false)
+    closeSkillPanel()
+    closeMentionPanel()
+    setProjectMenuOpen(false)
+    showHint(`已启用：${mode.label}`)
+  }
+
+  function toggleMultiAgentPanel() {
+    setMultiAgentPanelOpen((open) => !open)
+    setProjectMenuOpen(false)
+    closeSkillPanel()
+    closeMentionPanel()
+  }
+
   async function startThread(content: string) {
     const trimmed = content.trim()
     if (!trimmed || submitting) return
 
     setSubmitting(true)
     try {
-      const workspaceAgentId = selectedWorkspace
-        ? await defaultWorkspaceAgentId(selectedWorkspace.id)
-        : null
+      const workspace =
+        selectedWorkspace ??
+        (
+          await api.createAutoWorkspace({
+            name: titleFromMessage(trimmed),
+            goal: trimmed,
+          })
+        ).workspace
+      if (!selectedWorkspace) {
+        setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
+        setSelectedWorkspace(workspace)
+      }
       const session = await createSession(titleFromMessage(trimmed), {
-        workspaceId: selectedWorkspace?.id ?? null,
-        workspaceAgentId,
+        type: 'group',
+        workspaceId: workspace.id,
+        workspaceAgentId: null,
+        metadata: { kind: 'workspace-agent-group', managerDefault: true },
       })
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
@@ -396,13 +493,9 @@ function Welcome() {
     }
   }
 
-  async function defaultWorkspaceAgentId(workspaceId: string) {
-    const full = await api.getWorkspace(workspaceId)
-    return full.agents.length === 1 ? full.agents[0]!.id : null
-  }
-
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
+    setMultiAgentPanelOpen(false)
     await startThread(message)
   }
 
@@ -482,6 +575,7 @@ function Welcome() {
 
   function startNewWorkspace() {
     setProjectMenuOpen(false)
+    setMultiAgentPanelOpen(false)
     setSelectedWorkspace(null)
     showHint('将从新工作空间开始')
   }
@@ -649,6 +743,17 @@ function Welcome() {
                   </div>
                 </div>
               )}
+              {multiAgentPanelOpen && (
+                <WelcomeMultiAgentPanel
+                  agents={libraryAgents}
+                  modes={multiAgentModes}
+                  selectedWorkspace={selectedWorkspace}
+                  onApplyMode={applyMultiAgentMode}
+                  onClose={() => setMultiAgentPanelOpen(false)}
+                  onOpenAgentConfig={() => navigate('/agent-config')}
+                  onPickAgent={insertMentionReference}
+                />
+              )}
               <textarea
                 ref={messageInputRef}
                 value={message}
@@ -662,6 +767,11 @@ function Welcome() {
                   if (event.key === 'Escape' && mentionPanelOpen) {
                     event.preventDefault()
                     closeMentionPanel()
+                    return
+                  }
+                  if (event.key === 'Escape' && multiAgentPanelOpen) {
+                    event.preventDefault()
+                    setMultiAgentPanelOpen(false)
                     return
                   }
                   if (mentionPanelOpen && event.key === 'Enter') {
@@ -684,7 +794,10 @@ function Welcome() {
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => setProjectMenuOpen((open) => !open)}
+                    onClick={() => {
+                      setProjectMenuOpen((open) => !open)
+                      setMultiAgentPanelOpen(false)
+                    }}
                     className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white text-neutral-700 shadow-sm hover:bg-neutral-50"
                     aria-label={t('选择工作区')}
                     title="选择工作区"
@@ -693,7 +806,10 @@ function Welcome() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setProjectMenuOpen((open) => !open)}
+                    onClick={() => {
+                      setProjectMenuOpen((open) => !open)
+                      setMultiAgentPanelOpen(false)
+                    }}
                     className="inline-flex h-9 max-w-full items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
                     aria-label={t('选择工作区')}
                     title={
@@ -708,10 +824,22 @@ function Welcome() {
                     </span>
                     <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                   </button>
-                  <span className="inline-flex h-9 items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-50 px-3 text-xs font-medium text-neutral-600">
+                  <button
+                    type="button"
+                    onClick={toggleMultiAgentPanel}
+                    aria-expanded={multiAgentPanelOpen}
+                    aria-label="配置多 Agent 协作"
+                    className={[
+                      'inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium shadow-sm transition',
+                      multiAgentPanelOpen
+                        ? 'border-neutral-950 bg-neutral-950 text-white'
+                        : 'border-neutral-200 bg-neutral-50 text-neutral-700 hover:bg-white hover:text-neutral-950',
+                    ].join(' ')}
+                  >
                     <Sparkles className="h-3.5 w-3.5" />
                     多 Agent
-                  </span>
+                    <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+                  </button>
                 </div>
                 <div className="flex items-center justify-between gap-1.5 sm:justify-end">
                   <button
@@ -786,6 +914,119 @@ function Welcome() {
             onPick={(prompt: string) => void startThread(prompt)}
           />
         </section>
+      </div>
+    </div>
+  )
+}
+
+function WelcomeMultiAgentPanel({
+  agents,
+  modes,
+  onApplyMode,
+  onClose,
+  onOpenAgentConfig,
+  onPickAgent,
+  selectedWorkspace,
+}: {
+  agents: SavedAgentConfig[]
+  modes: MultiAgentMode[]
+  onApplyMode: (mode: MultiAgentMode) => void
+  onClose: () => void
+  onOpenAgentConfig: () => void
+  onPickAgent: (value: string) => void
+  selectedWorkspace: Workspace | null
+}) {
+  const visibleAgents = agents.slice(0, 6)
+
+  return (
+    <div
+      className="absolute bottom-[4.75rem] left-3 right-3 z-30 overflow-hidden rounded-2xl border border-neutral-200 bg-white text-sm shadow-[0_24px_80px_rgba(15,23,42,0.16)] sm:left-[7.25rem] sm:right-auto sm:w-[30rem]"
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <div className="flex items-center justify-between border-b border-neutral-100 px-3.5 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 font-semibold text-neutral-950">
+            <Sparkles className="h-4 w-4" />
+            多 Agent 协作
+          </div>
+          <div className="mt-1 truncate text-xs text-neutral-400">
+            {selectedWorkspace ? selectedWorkspace.name : '新工作空间'}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+        >
+          关闭
+        </button>
+      </div>
+
+      <div className="grid gap-1.5 p-2 sm:grid-cols-2">
+        {modes.map((mode) => {
+          const Icon = mode.icon
+          return (
+            <button
+              key={mode.id}
+              type="button"
+              onClick={() => onApplyMode(mode)}
+              className="group flex min-h-[5rem] items-start gap-3 rounded-xl border border-transparent p-3 text-left hover:border-neutral-200 hover:bg-neutral-50"
+            >
+              <span
+                className={[
+                  'grid h-8 w-8 shrink-0 place-items-center rounded-full',
+                  mode.iconClassName,
+                ].join(' ')}
+              >
+                <Icon className="h-4 w-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-neutral-900">{mode.label}</span>
+                <span className="mt-1 block text-xs leading-5 text-neutral-500">{mode.desc}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="border-t border-neutral-100 p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-xs font-medium text-neutral-500">提及成员</span>
+          <button
+            type="button"
+            onClick={onOpenAgentConfig}
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            配置 Agent
+          </button>
+        </div>
+        {visibleAgents.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {visibleAgents.map((agent) => (
+              <button
+                key={agent.id}
+                type="button"
+                onClick={() => {
+                  onPickAgent(`@${agent.name}`)
+                  onClose()
+                }}
+                className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                title={[agent.role, agent.description].filter(Boolean).join(' · ') || agent.name}
+              >
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: agent.color ?? '#111827' }}
+                />
+                <span className="max-w-[9rem] truncate">@{agent.name}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-4 text-center text-xs text-neutral-400">
+            还没有可提及的 Agent
+          </div>
+        )}
       </div>
     </div>
   )

@@ -78,7 +78,16 @@ export default function SkillsMarketPage() {
   const [searching, setSearching] = useState(false)
   const [message, setMessage] = useState('')
 
-  const installedIds = useMemo(() => new Set(skills.map((skill) => skill.id)), [skills])
+  const installedKeys = useMemo(
+    () =>
+      new Set(
+        skills.flatMap((skill) => [
+          normalizeSkillKey(skill.id),
+          normalizeSkillKey(skill.name),
+        ]),
+      ),
+    [skills],
+  )
   const activeQuery = viewMode === 'market' ? marketQuery : installedQuery
   const activeFilters = viewMode === 'market' ? marketFilters : installedFilters
   const deepLinkedSkillId = useMemo(() => {
@@ -97,8 +106,8 @@ export default function SkillsMarketPage() {
         sourceFilter === 'all' || classifySource(item.source || 'skillhub') === sourceFilter
       return matchesQuery && matchesSource
     })
-    return sortMarketItems(filtered, sortMode, installedIds)
-  }, [installedIds, marketQuery, results, sortMode, sourceFilter])
+    return sortMarketItems(filtered, sortMode, installedKeys)
+  }, [installedKeys, marketQuery, results, sortMode, sourceFilter])
 
   const visibleInstalledSkills = useMemo(() => {
     const query = normalizeSearch(installedQuery)
@@ -187,6 +196,9 @@ export default function SkillsMarketPage() {
       if (input === sourceUrl) setSourceUrl('')
       setSourceDialogOpen(false)
       await refreshSkills()
+      setViewMode('installed')
+      setSourceFilter('all')
+      setInstalledQuery('')
       if (result.installed) await openInstalledDetail(result.installed)
     } catch (error: any) {
       setMessage(error?.message || '安装 Skill 失败')
@@ -240,6 +252,9 @@ export default function SkillsMarketPage() {
       const result = await api.installSkillhub(slug)
       setMessage(result.message)
       await refreshSkills()
+      setViewMode('installed')
+      setSourceFilter('all')
+      setInstalledQuery('')
       if (result.installed) await openInstalledDetail(result.installed)
     } catch (error: any) {
       setMessage(error?.message || `安装 ${slug} 失败`)
@@ -412,7 +427,7 @@ export default function SkillsMarketPage() {
 
             {viewMode === 'market' ? (
               <MarketGrid
-                installedIds={installedIds}
+                installedIds={installedKeys}
                 installingSlug={installingSlug}
                 items={visibleMarketSkills}
                 searching={searching}
@@ -434,7 +449,7 @@ export default function SkillsMarketPage() {
 
       {selected && (
         <SkillDrawer
-          installed={selected.type === 'market' ? installedIds.has(selected.item.slug) : true}
+          installed={selected.type === 'market' ? isMarketSkillInstalled(selected.item, installedKeys) : true}
           installing={selected.type === 'market' ? installingSlug === selected.item.slug : false}
           loadedSkill={loadedSkill}
           loading={loadingDetail}
@@ -519,7 +534,7 @@ function MarketGrid({
         <MarketSkillCard
           key={item.slug}
           active={selected?.type === 'market' && selected.item.slug === item.slug}
-          installed={installedIds.has(item.slug)}
+          installed={isMarketSkillInstalled(item, installedIds)}
           installing={installingSlug === item.slug}
           item={item}
           onInstall={() => onInstall(item.slug)}
@@ -975,7 +990,7 @@ function sortMarketItems(items: SkillhubSearchItem[], sortMode: SortMode, instal
     next.sort((a, b) => compareText(cleanText(a.title, a.slug), cleanText(b.title, b.slug)))
   }
   if (sortMode === 'installed') {
-    next.sort((a, b) => Number(installedIds.has(b.slug)) - Number(installedIds.has(a.slug)))
+    next.sort((a, b) => Number(isMarketSkillInstalled(b, installedIds)) - Number(isMarketSkillInstalled(a, installedIds)))
   }
   return next
 }
@@ -996,10 +1011,13 @@ function classifySource(source: string): SourceBucket {
   const value = source.trim().toLowerCase()
   if (!value) return 'custom'
   if (value.includes('skillhub')) return 'skillhub'
-  if (value === 'skills' || value.includes('project')) return 'project'
+  if (value === 'skills' || value.includes('project') || value.includes('项目') || value.includes('內置') || value.includes('内置')) return 'project'
   if (
     value.includes('storage') ||
     value.includes('local') ||
+    value.includes('本机') ||
+    value.includes('安裝') ||
+    value.includes('安装') ||
     value.includes('.codex') ||
     value.includes('codex')
   ) {
@@ -1021,6 +1039,17 @@ function sourceLabel(source: string) {
   if (source === 'storage' || source === 'skills-storage') return '本机安装'
   if (source.includes('.codex')) return 'Codex 本机'
   return source || '本机'
+}
+
+function isMarketSkillInstalled(item: SkillhubSearchItem, installedKeys: Set<string>) {
+  return installedKeys.has(normalizeSkillKey(item.slug)) || installedKeys.has(normalizeSkillKey(item.title))
+}
+
+function normalizeSkillKey(value: string | undefined | null) {
+  return normalizeSearch(value)
+    .replace(/^skill:/, '')
+    .replace(/[^a-z0-9\u4e00-\u9fa5_-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
 }
 
 function normalizeSearch(value: string | undefined | null) {

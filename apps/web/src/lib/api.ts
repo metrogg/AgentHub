@@ -2069,6 +2069,10 @@ export const api = {
       `/settings/container-runtime/logs/${encodeURIComponent(name)}?tail=${encodeURIComponent(String(tail))}`,
     ),
   getManagerRuntimeStatus: () => request<ManagerRuntimeStatusResponse>('/settings/manager-runtime/status'),
+  startManagerRuntime: (type: ManagerRuntimeType) =>
+    request<{ ok: boolean; status: ManagerRuntimeStatus }>(`/settings/manager-runtime/${type}/start`, { method: 'POST' }),
+  stopManagerRuntime: (type: ManagerRuntimeType) =>
+    request<{ ok: boolean; status: ManagerRuntimeStatus }>(`/settings/manager-runtime/${type}/stop`, { method: 'POST' }),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

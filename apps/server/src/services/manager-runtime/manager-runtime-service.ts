@@ -303,19 +303,23 @@ async function appendManagerRuntimeError(
   error: unknown,
 ) {
   const managerParticipant = await ensureManagerParticipantForRoom(roomId)
+  const message = error instanceof Error ? error.message : String(error)
   return roomService.appendTimelineEvent({
     roomId,
     senderParticipantId: managerParticipant?.id ?? null,
     senderType: 'manager',
-    type: 'system',
-    body: `Manager Runtime 执行失败：${error instanceof Error ? error.message : String(error)}`,
+    type: 'manager.message',
+    body: `Manager Runtime 执行失败：${message}`,
     metadata: {
       kind: 'manager-runtime.error',
       runtimeType,
       source,
-      hiddenFromChat: true,
+      status: 'failed',
+      error: message,
+      hiddenFromChat: false,
       skipAutoDispatch: true,
-      uiPresentation: 'room-status',
+      uiPresentation: 'message',
+      messageType: 'text',
     },
   })
 }

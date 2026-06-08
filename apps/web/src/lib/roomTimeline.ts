@@ -463,6 +463,7 @@ function timelineEventToMessage(
   if (isLiveCodeAgentRunMetadataEvent(event)) return null
   const kind = asString(eventMetadata?.kind)
   if (kind?.startsWith('manager.status.')) return null
+  if (kind === 'manager.dispatch.diagnostic' && asString(eventMetadata?.reason) === 'resident-manager-started') return null
   // manager.dispatch.diagnostic is now visible (hiddenFromChat=false) — let hiddenFromChat check handle it
 
   if (

@@ -73,8 +73,9 @@ describe('ManagerRuntime primary room routing', () => {
     expect(kinds).toContain('manager-runtime.completed')
     expect(kinds).toContain('manager-runtime.room_message')
     expect(events.some((event) => event.type === 'manager.message' && event.metadata?.kind === 'manager-runtime.room_message')).toBe(true)
-    expect(events.at(-1)?.type).toBe('system')
-    expect(events.at(-1)?.metadata?.hiddenFromChat).toBe(true)
+    const completedEvent = events.find((event) => event.metadata?.kind === 'manager-runtime.completed')
+    expect(completedEvent?.type).toBe('system')
+    expect(completedEvent?.metadata?.hiddenFromChat).toBe(true)
     expect(events.some((event) => event.metadata?.kind === 'manager.action')).toBe(false)
   })
 
@@ -103,6 +104,40 @@ describe('ManagerRuntime primary room routing', () => {
       'manager-runtime.completed',
       'manager-runtime.unsupported-action',
     ])
+  })
+
+  test('ManagerRuntime errors are persisted as visible manager messages', async () => {
+    const room = await roomService.createRoom({
+      kind: 'group',
+      ownerId: 'default-user',
+      title: 'Manager Runtime Error Room',
+    })
+    await roomService.addParticipant({
+      roomId: room.id,
+      participantType: 'manager',
+      displayName: 'Manager',
+      role: 'manager',
+    })
+    const service = new ManagerRuntimeService(new ThrowingManagerRuntime())
+
+    await expect(service.stepRoom({
+      roomId: room.id,
+      ownerId: 'default-user',
+      source: 'test-error',
+    })).rejects.toThrow('provider rejected the request schema')
+
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    const errorEvent = events.find((event) => event.metadata?.kind === 'manager-runtime.error')
+    expect(errorEvent?.type).toBe('manager.message')
+    expect(errorEvent?.senderType).toBe('manager')
+    expect(errorEvent?.body).toContain('provider rejected the request schema')
+    expect(errorEvent?.metadata).toMatchObject({
+      status: 'failed',
+      hiddenFromChat: false,
+      skipAutoDispatch: true,
+      uiPresentation: 'message',
+      messageType: 'text',
+    })
   })
 
   test('ManagerRuntime create_worker action applies Member Reconcile and joins the current group room', async () => {
@@ -195,5 +230,14 @@ class FakeManagerRuntime implements ManagerRuntime {
     }
     yield { type: 'completed', actions: this.result.actions }
     return this.result
+  }
+}
+
+class ThrowingManagerRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
+
+  async *step(input: ManagerStepInput): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
+    void input
+    throw new Error('provider rejected the request schema')
   }
 }
