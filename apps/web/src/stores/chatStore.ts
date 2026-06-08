@@ -35,7 +35,6 @@ let pendingStream: {
   agentName?: string
 } | null = null
 let pendingStreamTimer: number | null = null
-let managerTypingTimer: number | null = null
 let pendingSessionRefreshTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const messageCache = new Map<string, Message[]>()
@@ -1717,7 +1716,7 @@ function projectRoomTimelineWsPayload(
   const room = payload.room
   const event = payload.event
   if (!room || !event) return null
-  const sessionId = room.sessionId ?? payload.sessionId ?? fallbackSessionId
+  const sessionId = payload.sessionId ?? room.sessionId ?? fallbackSessionId
   if (!sessionId) return null
   return {
     sessionId,
@@ -2346,6 +2345,7 @@ export const __chatStoreTestHooks = {
   describeRuntimeActivity,
   mergeSessionsWithRunProjection,
   mergeSessionsWithRuntimeProjection,
+  projectRoomTimelineWsPayload,
   reduceRuntimeActivityProjection,
   runtimeActivityDetail,
   runtimeActivityLabel,
@@ -2912,10 +2912,6 @@ function clearPendingStream() {
     window.clearTimeout(pendingStreamTimer)
     pendingStreamTimer = null
   }
-  if (managerTypingTimer !== null) {
-    window.clearTimeout(managerTypingTimer)
-    managerTypingTimer = null
-  }
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -3322,7 +3318,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // it will handle cleanup. If not (sync reply), this timeout clears it.
       window.setTimeout(() => {
         set((s) => {
-          if (s.streamingMessage || s.streamingCodeAgentRun || s.currentSessionId !== sessionId) return {}
+          if (s.streamingMessage || s.streamingCodeAgentRun || s.agentActivity || s.currentSessionId !== sessionId) return {}
           return { agentTyping: false, agentActivity: null }
         })
       }, 3000)
@@ -3645,26 +3641,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
             mergeMessages(messages, projectedMessages),
           )
           if (projectedSessionId === sessionId) {
-            set((s) => ({
-              messages: mergeMessages(s.messages, projectedMessages),
-            }))
-            // Debounce clearing agentTyping: when Manager/Worker replies arrive,
-            // reset the timer. Clear only after the agent stops sending (1.5s pause).
             const hasVisibleAgentReply = projectedMessages.some((m) => {
               const rt = asRecord(m.metadata?.roomTimeline) ?? asRecord(m.metadata?.roomTimelineProjection)
               const eventType = asString(rt?.eventType)
               return eventType === 'manager.message' || eventType === 'worker.message'
             })
-            if (hasVisibleAgentReply) {
-              if (managerTypingTimer !== null) window.clearTimeout(managerTypingTimer)
-              managerTypingTimer = window.setTimeout(() => {
-                managerTypingTimer = null
-                set((s) => {
-                  if (!s.agentTyping) return {}
-                  return { agentTyping: false, agentActivity: null }
-                })
-              }, 1500)
-            }
+            set((s) => ({
+              messages: mergeMessages(s.messages, projectedMessages),
+              // Clear thinking indicator only when actual agent output arrives.
+              // Before that, keep agentTyping true so the indicator stays visible
+              // during the entire processing period (model calls, tool calls, etc.).
+              ...(hasVisibleAgentReply && s.agentTyping ? { agentTyping: false, agentActivity: null } : {}),
+            }))
           }
         }
         if (projectedSessionId === sessionId) {
