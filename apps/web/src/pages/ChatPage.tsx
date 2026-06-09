@@ -30,6 +30,10 @@ import {
   SkillCommandPanel,
   Thread,
 } from '../components/assistant-ui/Thread'
+import {
+  CodexWorkspaceSidecar,
+  type CodexWorkspaceSidecarTab,
+} from '../components/workspace/CodexWorkspaceSidecar'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace, type WelcomeQuickPrompt } from '../lib/api'
 import {
   agentLibraryChangeEvent,
@@ -148,6 +152,8 @@ export default function ChatPage() {
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [narrowViewport, setNarrowViewport] = useState(false)
+  const [workspaceSidecarOpen, setWorkspaceSidecarOpen] = useState(false)
+  const [workspaceSidecarTab, setWorkspaceSidecarTab] = useState<CodexWorkspaceSidecarTab>('preview')
   const threadReady = Boolean(sessionId && currentSessionId === sessionId)
   const effectiveSidebarCollapsed = sidebarCollapsed || narrowViewport
 
@@ -199,7 +205,11 @@ export default function ChatPage() {
       <main className="relative min-w-0 flex-1">
         {sessionId && threadReady ? (
           <AgentHubRuntimeProvider key={sessionId}>
-            <Thread key={sessionId} />
+            <Thread
+              key={sessionId}
+              globalSidecarOpen={workspaceSidecarOpen}
+              onToggleGlobalSidecar={() => setWorkspaceSidecarOpen((open) => !open)}
+            />
           </AgentHubRuntimeProvider>
         ) : sessionId ? (
           <ThreadSwitching />
@@ -207,6 +217,15 @@ export default function ChatPage() {
           <Welcome />
         )}
       </main>
+      <CodexWorkspaceSidecar
+        activeTab={workspaceSidecarTab}
+        onClose={() => setWorkspaceSidecarOpen(false)}
+        onSelectTab={(tab) => {
+          setWorkspaceSidecarTab(tab)
+          setWorkspaceSidecarOpen(true)
+        }}
+        open={workspaceSidecarOpen}
+      />
     </div>
   )
 }

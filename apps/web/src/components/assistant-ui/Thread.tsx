@@ -297,7 +297,10 @@ function classifyAgentSession(
   return 'agent-direct'
 }
 
-export const Thread: FC = () => {
+export const Thread: FC<{
+  globalSidecarOpen?: boolean
+  onToggleGlobalSidecar?: () => void
+}> = ({ globalSidecarOpen = false, onToggleGlobalSidecar }) => {
   const currentSession = useChatStore((state) => state.currentSession)
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
@@ -362,6 +365,21 @@ export const Thread: FC = () => {
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
   const [previewCollapsed, setPreviewCollapsed] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const usesGlobalSidecar = Boolean(onToggleGlobalSidecar)
+  const headerSidecarOpen = usesGlobalSidecar
+    ? globalSidecarOpen
+    : isGroupSession
+      ? workspaceSidecarOpen
+      : singleSidecarOpen
+  const toggleHeaderSidecar =
+    onToggleGlobalSidecar ??
+    (() => {
+      if (isGroupSession) {
+        setWorkspaceSidecarOpen((open) => !open)
+      } else {
+        setSingleSidecarOpen((open) => !open)
+      }
+    })
 
   async function openGroupConversation() {
     selectAgentTab(null)
@@ -403,11 +421,8 @@ export const Thread: FC = () => {
   const chatHeader = isGroupSession && !isOrchestratorTaskChild ? (
     <GroupChatHeader
       onToggleDetails={() => setGroupDetailsOpen((open) => !open)}
-      onToggleWorkspaceSidecar={() => setWorkspaceSidecarOpen((open) => !open)}
-      workspaceSidecarOpen={workspaceSidecarOpen}
-      previewCollapsed={previewCollapsed}
-      previewAvailable={Boolean(previewItem)}
-      onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
     />
   ) : isOrchestratorTaskChild ? (
     <OrchestratorChildHeader
@@ -418,28 +433,19 @@ export const Thread: FC = () => {
           : 'Agent'
       }
       onBack={() => void openGroupConversation()}
-      onToggleSidecar={() => setSingleSidecarOpen((open) => !open)}
-      sidecarOpen={singleSidecarOpen}
-      previewCollapsed={previewCollapsed}
-      previewAvailable={Boolean(previewItem)}
-      onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
     />
   ) : isAgentDirectSession ? (
     <AgentChatHeader
       onToggleDetails={() => setChildDetailsOpen((open) => !open)}
-      onToggleSidecar={() => setSingleSidecarOpen((open) => !open)}
-      sidecarOpen={singleSidecarOpen}
-      previewCollapsed={previewCollapsed}
-      previewAvailable={Boolean(previewItem)}
-      onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
     />
   ) : (
     <RegularChatHeader
-      onToggleSidecar={() => setSingleSidecarOpen((open) => !open)}
-      sidecarOpen={singleSidecarOpen}
-      previewCollapsed={previewCollapsed}
-      previewAvailable={Boolean(previewItem)}
-      onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
     />
   )
 
@@ -483,17 +489,17 @@ export const Thread: FC = () => {
             activity={planningActivity}
           />
         )}
-        {previewItem && !previewCollapsed && (
+        {!usesGlobalSidecar && previewItem && !previewCollapsed && (
           <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
         )}
-        {isGroupSession && (
+        {!usesGlobalSidecar && isGroupSession && (
           <WorkspaceSidecarPanel
             open={workspaceSidecarOpen}
             taskBoard={roomTaskBoard}
             onClose={() => setWorkspaceSidecarOpen(false)}
           />
         )}
-        {!isGroupSession && (
+        {!usesGlobalSidecar && !isGroupSession && (
           <ThreadContextRail
             open={singleSidecarOpen}
             onClose={() => setSingleSidecarOpen(false)}
@@ -527,66 +533,57 @@ export const Thread: FC = () => {
   )
 }
 
-type PreviewHeaderControlProps = {
-  previewCollapsed?: boolean
-  previewAvailable?: boolean
-  onTogglePreview?: () => void
-}
-
-const HeaderPreviewButton: FC<PreviewHeaderControlProps> = ({
-  previewCollapsed = false,
-  previewAvailable = false,
-  onTogglePreview,
+const HeaderGlobalSidecarButton: FC<{ open: boolean; onToggle: () => void }> = ({
+  open,
+  onToggle,
 }) => {
-  if (!onTogglePreview) return null
-
-  const label = previewAvailable
-    ? previewCollapsed
-      ? '展开预览'
-      : '收起预览'
-    : '暂无预览'
-
+  const label = open ? '收起侧边栏' : '打开侧边栏'
   return (
     <button
       type="button"
-      onClick={onTogglePreview}
-      aria-disabled={!previewAvailable}
+      onClick={onToggle}
       className={cn(
         'grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950',
-        !previewAvailable && 'opacity-50',
+        open && 'bg-neutral-100 text-neutral-950',
       )}
       title={label}
       aria-label={label}
     >
-      {previewCollapsed ? (
-        <PanelRightOpen className="h-4 w-4" />
-      ) : (
-        <PanelRightClose className="h-4 w-4" />
-      )}
+      {open ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
     </button>
   )
 }
 
-const HeaderSidecarButton: FC<{ open: boolean; onToggle: () => void; label?: string }> = ({
-  open,
-  onToggle,
-  label = '运行侧栏',
-}) => (
-  <button
-    type="button"
-    onClick={onToggle}
-    className={cn(
-      'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-medium transition',
-      open
-        ? 'bg-neutral-950 text-white'
-        : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200/80 hover:text-neutral-950',
+const HeaderActionCluster: FC<{
+  onOpenOffice: () => void
+  onToggleDetails?: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onOpenOffice, onToggleDetails, onToggleSidecar, sidecarOpen }) => (
+  <div className="flex items-center gap-1">
+    <HeaderAgentStatusIndicator />
+    {onToggleDetails && (
+      <button
+        type="button"
+        onClick={onToggleDetails}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+        title="更多"
+        aria-label="更多"
+      >
+        <MoreHorizontal className="h-5 w-5" />
+      </button>
     )}
-    title={open ? `收起${label}` : `打开${label}`}
-    aria-label={open ? `收起${label}` : `打开${label}`}
-  >
-    {open ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
-    <span className="hidden xl:inline">{label}</span>
-  </button>
+    <button
+      type="button"
+      onClick={onOpenOffice}
+      className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+      title="办公室"
+      aria-label="办公室"
+    >
+      <Building2 className="h-4 w-4" />
+    </button>
+    <HeaderGlobalSidecarButton open={sidecarOpen} onToggle={onToggleSidecar} />
+  </div>
 )
 
 const HeaderAgentStatusIndicator: FC = () => {
@@ -866,29 +863,15 @@ function useWorkspaceMenuController({
   }
 }
 
-const GroupChatHeader: FC<
-  PreviewHeaderControlProps & {
-    onToggleDetails: () => void
-    onToggleWorkspaceSidecar: () => void
-    workspaceSidecarOpen: boolean
-  }
-> = ({
-  onToggleDetails,
-  onToggleWorkspaceSidecar,
-  workspaceSidecarOpen,
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const GroupChatHeader: FC<{
+  onToggleDetails: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onToggleDetails, onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const navigate = useNavigate()
-  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
-  const workspaceMenu = useWorkspaceMenuController({
-    open: workspaceMenuOpen,
-    onClose: () => setWorkspaceMenuOpen(false),
-  })
   const title = groupChatDisplayTitle(session?.title, workspace?.name)
   const memberCount = agents.length + 1
 
@@ -901,112 +884,21 @@ const GroupChatHeader: FC<
           <span className="ml-1 shrink-0 font-normal text-neutral-500">({memberCount})</span>
         </div>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderAgentStatusIndicator />
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setWorkspaceMenuOpen((open) => !open)}
-            className={cn(
-              'grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950',
-              workspaceMenuOpen && 'bg-neutral-100 text-neutral-950',
-            )}
-            title={
-              workspaceMenu.currentProjectWorkspace
-                ? `${workspaceMenu.currentProjectWorkspace.name} · ${
-                    workspaceMenu.currentProjectWorkspace.projectPath ?? '本地工作空间'
-                  }`
-                : '选择工作区'
-            }
-            aria-label="选择工作区"
-          >
-            <FolderOpen className="h-4 w-4" />
-          </button>
-          {workspaceMenuOpen && (
-            <ComposerMenu
-              type="workspace"
-              agents={agents}
-              workspaces={workspaceMenu.workspaces}
-              currentWorkspaceId={workspaceMenu.currentProjectWorkspace?.id ?? null}
-              openingWorkspaceId={workspaceMenu.openingWorkspaceId}
-              workspaceBusy={workspaceMenu.workspaceBusy}
-              planMode={false}
-              onOpenWorkspace={(workspaceId) => void workspaceMenu.openWorkspace(workspaceId)}
-              onCreateBlankWorkspace={() => void workspaceMenu.createBlankWorkspace()}
-              onOpenFolderWorkspace={() => void workspaceMenu.openFolderWorkspace()}
-              onCloneGithubWorkspace={(repoUrl, deployAfterClone) =>
-                void workspaceMenu.cloneGithubWorkspace(repoUrl, deployAfterClone)
-              }
-              onPlanMode={() => undefined}
-              onPick={() => undefined}
-              onClose={() => setWorkspaceMenuOpen(false)}
-              className="absolute right-0 top-[calc(100%+0.5rem)] z-50"
-            />
-          )}
-          {workspaceMenu.hint && !workspaceMenuOpen && (
-            <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 whitespace-nowrap rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
-              {workspaceMenu.hint}
-            </div>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onToggleWorkspaceSidecar}
-          disabled={!workspace?.id}
-          className={cn(
-            'inline-flex h-9 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-35',
-            workspaceSidecarOpen
-              ? 'bg-neutral-950 text-white'
-              : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200/80 hover:text-neutral-950',
-          )}
-          title="打开工作区文件"
-          aria-label="打开工作区文件"
-        >
-          <File className="h-4 w-4" />
-          <span className="hidden xl:inline">打开文件</span>
-        </button>
-        <button
-          type="button"
-          onClick={onToggleDetails}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-          title="群聊详情"
-          aria-label="群聊详情"
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleDetails={onToggleDetails}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
 
-const AgentChatHeader: FC<
-  PreviewHeaderControlProps & {
-    onToggleDetails: () => void
-    onToggleSidecar: () => void
-    sidecarOpen: boolean
-  }
-> = ({
-  onToggleDetails,
-  onToggleSidecar,
-  sidecarOpen,
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const AgentChatHeader: FC<{
+  onToggleDetails: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onToggleDetails, onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
@@ -1029,52 +921,22 @@ const AgentChatHeader: FC<
           <div className="mt-0.5 truncate text-xs text-neutral-500">{subtitle}</div>
         </div>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderSidecarButton open={sidecarOpen} onToggle={onToggleSidecar} />
-        <button
-          type="button"
-          onClick={onToggleDetails}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-          title="Agent 设置"
-          aria-label="Agent 设置"
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleDetails={onToggleDetails}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
 
-const OrchestratorChildHeader: FC<
-  PreviewHeaderControlProps & {
-    agentName: string
-    onBack: () => void
-    onToggleSidecar: () => void
-    sidecarOpen: boolean
-  }
-> = ({
-  agentName,
-  onBack,
-  onToggleSidecar,
-  sidecarOpen,
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const OrchestratorChildHeader: FC<{
+  agentName: string
+  onBack: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ agentName, onBack, onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const navigate = useNavigate()
 
@@ -1095,39 +957,19 @@ const OrchestratorChildHeader: FC<
           <span className="ml-1.5 text-xs text-neutral-400">成员对话</span>
         </span>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderSidecarButton open={sidecarOpen} onToggle={onToggleSidecar} />
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
 
-const RegularChatHeader: FC<
-  PreviewHeaderControlProps & {
-    onToggleSidecar: () => void
-    sidecarOpen: boolean
-  }
-> = ({
-  onToggleSidecar,
-  sidecarOpen,
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const RegularChatHeader: FC<{
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const navigate = useNavigate()
   const title = session?.title || '新会话'
@@ -1137,23 +979,11 @@ const RegularChatHeader: FC<
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="truncate text-sm font-semibold text-neutral-950">{title}</span>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderSidecarButton open={sidecarOpen} onToggle={onToggleSidecar} />
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
