@@ -1395,6 +1395,36 @@ export type WorkspaceFolderOpenResult =
   | { cancelled: true; projectPath: null; workspace?: null }
   | { cancelled: false; projectPath: string; workspace?: Workspace | null }
 
+export interface WorkspaceFileEntry {
+  name: string
+  path: string
+  type: 'directory' | 'file'
+  size: number | null
+  modifiedAt: string
+  extension: string | null
+}
+
+export interface WorkspaceFileTree {
+  workspaceId: string
+  rootName: string
+  path: string
+  projectPath: string
+  items: WorkspaceFileEntry[]
+  truncated: boolean
+}
+
+export interface WorkspaceFileContent {
+  workspaceId: string
+  path: string
+  name: string
+  size: number
+  modifiedAt: string
+  mimeType: string
+  isBinary: boolean
+  truncated: boolean
+  content: string | null
+}
+
 export interface ClarificationQuestion {
   id: string
   question: string
@@ -2456,6 +2486,14 @@ export const api = {
   },
 
   // Files
+  listWorkspaceFiles: (workspaceId: string, path = '') =>
+    request<WorkspaceFileTree>(
+      `/files/tree?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`,
+    ),
+  readWorkspaceFile: (workspaceId: string, path: string) =>
+    request<WorkspaceFileContent>(
+      `/files/read?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`,
+    ),
   writeFile: (data: {
     workspaceId: string
     filePath: string

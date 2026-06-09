@@ -237,6 +237,7 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
     body,
     metadata: {
       kind: 'matrix.sync.imported',
+      ...streamMetadata,
       matrix: {
         eventId: event.event_id,
         senderUserId: sender,
@@ -439,6 +440,18 @@ function fileRefFromContent(content: Record<string, unknown>) {
     url: typeof content.url === 'string' ? content.url : null,
     info: content.info && typeof content.info === 'object' ? content.info : null,
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function asString(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+}
+
+function asNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function asStringArray(value: unknown) {

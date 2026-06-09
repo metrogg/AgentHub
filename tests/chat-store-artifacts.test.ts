@@ -36,6 +36,70 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'typ
 }
 
 describe('chat store artifact snapshot projection', () => {
+  test('projects task room timeline broadcasts into the parent group session', () => {
+    const projected = __chatStoreTestHooks.projectRoomTimelineWsPayload(
+      {
+        sessionId: 'group-session-1',
+        room: {
+          id: 'task-room-1',
+          provider: 'matrix',
+          providerRoomId: '!task:test',
+          kind: 'task',
+          ownerId: 'user-1',
+          workspaceId: 'workspace-1',
+          sessionId: 'task-session-1',
+          runId: 'run-1',
+          taskId: 'task-1',
+          taskThreadId: 'thread-1',
+          title: 'Task room',
+          topic: null,
+          status: 'active',
+          metadata: { compatibility: { groupSessionId: 'group-session-1' } },
+          createdAt: '2026-06-08T00:00:00.000Z',
+          updatedAt: '2026-06-08T00:00:00.000Z',
+        },
+        event: {
+          id: 'event-worker-output-1',
+          roomId: 'task-room-1',
+          providerEventId: '$event-worker-output-1',
+          senderParticipantId: 'participant-worker-1',
+          senderType: 'worker',
+          type: 'worker.message',
+          body: 'Still working, generated the first draft.',
+          metadata: {},
+          sequence: 12,
+          createdAt: '2026-06-08T00:00:01.000Z',
+        },
+        participants: [
+          {
+            id: 'participant-worker-1',
+            roomId: 'task-room-1',
+            providerUserId: '@worker:test',
+            participantType: 'worker',
+            userId: null,
+            workspaceAgentId: 'agent-1',
+            workerInstanceId: 'worker-1',
+            displayName: 'Designer',
+            role: 'member',
+            status: 'joined',
+            metadata: {},
+            joinedAt: '2026-06-08T00:00:00.000Z',
+            updatedAt: '2026-06-08T00:00:00.000Z',
+          },
+        ],
+      },
+      'group-session-1',
+    )
+
+    expect(projected?.sessionId).toBe('group-session-1')
+    expect(projected?.projection.messages[0]?.content).toBe('Still working, generated the first draft.')
+    expect(projected?.projection.messages[0]?.metadata?.roomTimeline).toMatchObject({
+      eventId: 'event-worker-output-1',
+      eventType: 'worker.message',
+      sequence: 12,
+    })
+  })
+
   test('group manager startup activity exposes concrete thinking details', () => {
     expect(__chatStoreTestHooks.runtimeActivityLabel('thinking')).toBe('正在读取群聊上下文')
     expect(__chatStoreTestHooks.runtimeActivityDetail('thinking')).toBe(

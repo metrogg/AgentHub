@@ -112,6 +112,8 @@ import {
   type WelcomeQuickPrompt,
   type Workspace,
   type WorkspaceAgent,
+  type WorkspaceFileEntry,
+  type WorkspaceFileTree,
 } from '../../lib/api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
@@ -120,6 +122,7 @@ import {
   isDesktopApp,
   notifyUser,
   openExternalUrl,
+  openInEditor,
   openPath,
   openUrlWindow,
   pickWorkspaceFolder,
@@ -294,7 +297,10 @@ function classifyAgentSession(
   return 'agent-direct'
 }
 
-export const Thread: FC = () => {
+export const Thread: FC<{
+  globalSidecarOpen?: boolean
+  onToggleGlobalSidecar?: () => void
+}> = ({ globalSidecarOpen = false, onToggleGlobalSidecar }) => {
   const currentSession = useChatStore((state) => state.currentSession)
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
@@ -350,17 +356,30 @@ export const Thread: FC = () => {
       workspaceAgents,
     ],
   )
-  const showContextRail = Boolean(
-    currentSession?.workspaceId || railTaskBoard || planningActivity || directRunProgress,
-  )
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [groupTasksOpen, setGroupTasksOpen] = useState(false)
+  const [workspaceSidecarOpen, setWorkspaceSidecarOpen] = useState(false)
+  const [singleSidecarOpen, setSingleSidecarOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
   const [previewCollapsed, setPreviewCollapsed] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
-  const showInlineContextRail = !isGroupSession && showContextRail && (!previewItem || previewCollapsed)
+  const usesGlobalSidecar = Boolean(onToggleGlobalSidecar)
+  const headerSidecarOpen = usesGlobalSidecar
+    ? globalSidecarOpen
+    : isGroupSession
+      ? workspaceSidecarOpen
+      : singleSidecarOpen
+  const toggleHeaderSidecar =
+    onToggleGlobalSidecar ??
+    (() => {
+      if (isGroupSession) {
+        setWorkspaceSidecarOpen((open) => !open)
+      } else {
+        setSingleSidecarOpen((open) => !open)
+      }
+    })
 
   async function openGroupConversation() {
     selectAgentTab(null)
@@ -373,6 +392,8 @@ export const Thread: FC = () => {
   useEffect(() => {
     setGroupDetailsOpen(false)
     setGroupTasksOpen(false)
+    setWorkspaceSidecarOpen(false)
+    setSingleSidecarOpen(false)
     setChildDetailsOpen(false)
   }, [currentSession?.id])
 
@@ -397,48 +418,43 @@ export const Thread: FC = () => {
     return () => window.removeEventListener(roomTasksDrawerEvent, handleOpenRoomTasks)
   }, [isGroupSession])
 
+  const chatHeader = isGroupSession && !isOrchestratorTaskChild ? (
+    <GroupChatHeader
+      onToggleDetails={() => setGroupDetailsOpen((open) => !open)}
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
+    />
+  ) : isOrchestratorTaskChild ? (
+    <OrchestratorChildHeader
+      agentName={
+        currentSession?.workspaceAgentId
+          ? (workspaceAgents.find((a) => a.id === currentSession.workspaceAgentId)?.name ??
+            'Agent')
+          : 'Agent'
+      }
+      onBack={() => void openGroupConversation()}
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
+    />
+  ) : isAgentDirectSession ? (
+    <AgentChatHeader
+      onToggleDetails={() => setChildDetailsOpen((open) => !open)}
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
+    />
+  ) : (
+    <RegularChatHeader
+      onToggleSidecar={toggleHeaderSidecar}
+      sidecarOpen={headerSidecarOpen}
+    />
+  )
+
   return (
     <ThreadPrimitive.Root
       className="agenthub-thread-root relative flex h-full flex-col overflow-hidden bg-white"
       style={{ ['--thread-max-width' as string]: '56rem' }}
     >
-      {isGroupSession && !isOrchestratorTaskChild && (
-        <GroupChatHeader
-          onToggleDetails={() => setGroupDetailsOpen((open) => !open)}
-          previewCollapsed={previewCollapsed}
-          previewAvailable={Boolean(previewItem)}
-          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-        />
-      )}
-      {isOrchestratorTaskChild && (
-        <OrchestratorChildHeader
-          agentName={
-            currentSession?.workspaceAgentId
-              ? (workspaceAgents.find((a) => a.id === currentSession.workspaceAgentId)?.name ??
-                'Agent')
-              : 'Agent'
-          }
-          onBack={() => void openGroupConversation()}
-          previewCollapsed={previewCollapsed}
-          previewAvailable={Boolean(previewItem)}
-          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-        />
-      )}
-      {!isGroupSession && !isOrchestratorTaskChild && isAgentDirectSession && (
-        <AgentChatHeader
-          onToggleDetails={() => setChildDetailsOpen((open) => !open)}
-          previewCollapsed={previewCollapsed}
-          previewAvailable={Boolean(previewItem)}
-          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-        />
-      )}
-      {!isGroupSession && !isOrchestratorTaskChild && !isAgentDirectSession && (
-        <RegularChatHeader
-          previewCollapsed={previewCollapsed}
-          previewAvailable={Boolean(previewItem)}
-          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-        />
-      )}
+      {chatHeader}
       <div className="relative z-[1] flex min-h-0 flex-1 pt-14">
         <div className="flex min-w-0 flex-1 flex-col">
           {isGroupSession && selectedAgentTab === null && (roomTaskBoard || planningActivity) && (
@@ -473,11 +489,20 @@ export const Thread: FC = () => {
             activity={planningActivity}
           />
         )}
-        {previewItem && !previewCollapsed && (
+        {!usesGlobalSidecar && previewItem && !previewCollapsed && (
           <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
         )}
-        {showInlineContextRail && (
+        {!usesGlobalSidecar && isGroupSession && (
+          <WorkspaceSidecarPanel
+            open={workspaceSidecarOpen}
+            taskBoard={roomTaskBoard}
+            onClose={() => setWorkspaceSidecarOpen(false)}
+          />
+        )}
+        {!usesGlobalSidecar && !isGroupSession && (
           <ThreadContextRail
+            open={singleSidecarOpen}
+            onClose={() => setSingleSidecarOpen(false)}
             taskBoard={railTaskBoard}
             activity={planningActivity}
             directRunProgress={directRunProgress}
@@ -487,6 +512,14 @@ export const Thread: FC = () => {
           <GroupChatDetailsPanel
             open={groupDetailsOpen}
             onClose={() => setGroupDetailsOpen(false)}
+            onOpenRoomTasks={() => {
+              setGroupDetailsOpen(false)
+              setGroupTasksOpen(true)
+            }}
+            onOpenWorkspaceSidecar={() => {
+              setGroupDetailsOpen(false)
+              setWorkspaceSidecarOpen(true)
+            }}
           />
         )}
       </div>
@@ -500,42 +533,58 @@ export const Thread: FC = () => {
   )
 }
 
-type PreviewHeaderControlProps = {
-  previewCollapsed?: boolean
-  previewAvailable?: boolean
-  onTogglePreview?: () => void
-}
-
-const HeaderPreviewButton: FC<PreviewHeaderControlProps> = ({
-  previewCollapsed = false,
-  previewAvailable = false,
-  onTogglePreview,
+const HeaderGlobalSidecarButton: FC<{ open: boolean; onToggle: () => void }> = ({
+  open,
+  onToggle,
 }) => {
-  if (!onTogglePreview) return null
-
-  const label = previewAvailable
-    ? previewCollapsed
-      ? '展开预览'
-      : '收起预览'
-    : '暂无预览'
-
+  const label = open ? '收起侧边栏' : '打开侧边栏'
   return (
     <button
       type="button"
-      onClick={onTogglePreview}
-      disabled={!previewAvailable}
-      className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-neutral-500"
+      onClick={onToggle}
+      className={cn(
+        'grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950',
+        open && 'bg-neutral-100 text-neutral-950',
+      )}
       title={label}
       aria-label={label}
     >
-      {previewCollapsed ? (
-        <PanelRightOpen className="h-4 w-4" />
-      ) : (
-        <PanelRightClose className="h-4 w-4" />
-      )}
+      {open ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
     </button>
   )
 }
+
+const HeaderActionCluster: FC<{
+  onOpenOffice: () => void
+  onToggleDetails?: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onOpenOffice, onToggleDetails, onToggleSidecar, sidecarOpen }) => (
+  <div className="flex items-center gap-1">
+    <HeaderAgentStatusIndicator />
+    {onToggleDetails && (
+      <button
+        type="button"
+        onClick={onToggleDetails}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+        title="更多"
+        aria-label="更多"
+      >
+        <MoreHorizontal className="h-5 w-5" />
+      </button>
+    )}
+    <button
+      type="button"
+      onClick={onOpenOffice}
+      className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+      title="办公室"
+      aria-label="办公室"
+    >
+      <Building2 className="h-4 w-4" />
+    </button>
+    <HeaderGlobalSidecarButton open={sidecarOpen} onToggle={onToggleSidecar} />
+  </div>
+)
 
 const HeaderAgentStatusIndicator: FC = () => {
   const status = useHeaderAgentStatus()
@@ -814,30 +863,17 @@ function useWorkspaceMenuController({
   }
 }
 
-const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
-  onToggleDetails,
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const GroupChatHeader: FC<{
+  onToggleDetails: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onToggleDetails, onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
-  const clearMessages = useChatStore((state) => state.clearMessages)
   const navigate = useNavigate()
-  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
-  const workspaceMenu = useWorkspaceMenuController({
-    open: workspaceMenuOpen,
-    onClose: () => setWorkspaceMenuOpen(false),
-  })
   const title = groupChatDisplayTitle(session?.title, workspace?.name)
   const memberCount = agents.length + 1
-
-  async function handleClear() {
-    if (!session) return
-    if (!window.confirm('确定清空当前会话的所有消息？此操作不可撤销。')) return
-    await clearMessages(session.id)
-  }
 
   return (
     <header className="agenthub-thread-header flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
@@ -848,97 +884,21 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
           <span className="ml-1 shrink-0 font-normal text-neutral-500">({memberCount})</span>
         </div>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderAgentStatusIndicator />
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setWorkspaceMenuOpen((open) => !open)}
-            className={cn(
-              'grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950',
-              workspaceMenuOpen && 'bg-neutral-100 text-neutral-950',
-            )}
-            title={
-              workspaceMenu.currentProjectWorkspace
-                ? `${workspaceMenu.currentProjectWorkspace.name} · ${
-                    workspaceMenu.currentProjectWorkspace.projectPath ?? '本地工作空间'
-                  }`
-                : '选择工作区'
-            }
-            aria-label="选择工作区"
-          >
-            <FolderOpen className="h-4 w-4" />
-          </button>
-          {workspaceMenuOpen && (
-            <ComposerMenu
-              type="workspace"
-              agents={agents}
-              workspaces={workspaceMenu.workspaces}
-              currentWorkspaceId={workspaceMenu.currentProjectWorkspace?.id ?? null}
-              openingWorkspaceId={workspaceMenu.openingWorkspaceId}
-              workspaceBusy={workspaceMenu.workspaceBusy}
-              planMode={false}
-              onOpenWorkspace={(workspaceId) => void workspaceMenu.openWorkspace(workspaceId)}
-              onCreateBlankWorkspace={() => void workspaceMenu.createBlankWorkspace()}
-              onOpenFolderWorkspace={() => void workspaceMenu.openFolderWorkspace()}
-              onCloneGithubWorkspace={(repoUrl, deployAfterClone) =>
-                void workspaceMenu.cloneGithubWorkspace(repoUrl, deployAfterClone)
-              }
-              onPlanMode={() => undefined}
-              onPick={() => undefined}
-              onClose={() => setWorkspaceMenuOpen(false)}
-              className="absolute right-0 top-[calc(100%+0.5rem)] z-50"
-            />
-          )}
-          {workspaceMenu.hint && !workspaceMenuOpen && (
-            <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 whitespace-nowrap rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
-              {workspaceMenu.hint}
-            </div>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onToggleDetails}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-          title="群聊详情"
-          aria-label="群聊详情"
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          onClick={handleClear}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-red-50 hover:text-red-500"
-          title="清空消息"
-          aria-label="清空消息"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleDetails={onToggleDetails}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
 
-const AgentChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
-  onToggleDetails,
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const AgentChatHeader: FC<{
+  onToggleDetails: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onToggleDetails, onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
@@ -961,45 +921,22 @@ const AgentChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
           <div className="mt-0.5 truncate text-xs text-neutral-500">{subtitle}</div>
         </div>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderAgentStatusIndicator />
-        <button
-          type="button"
-          onClick={onToggleDetails}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-          title="Agent 设置"
-          aria-label="Agent 设置"
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleDetails={onToggleDetails}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
 
-const OrchestratorChildHeader: FC<
-  PreviewHeaderControlProps & { agentName: string; onBack: () => void }
-> = ({
-  agentName,
-  onBack,
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const OrchestratorChildHeader: FC<{
+  agentName: string
+  onBack: () => void
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ agentName, onBack, onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const navigate = useNavigate()
 
@@ -1020,32 +957,19 @@ const OrchestratorChildHeader: FC<
           <span className="ml-1.5 text-xs text-neutral-400">成员对话</span>
         </span>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderAgentStatusIndicator />
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
 
-const RegularChatHeader: FC<PreviewHeaderControlProps> = ({
-  previewCollapsed,
-  previewAvailable,
-  onTogglePreview,
-}) => {
+const RegularChatHeader: FC<{
+  onToggleSidecar: () => void
+  sidecarOpen: boolean
+}> = ({ onToggleSidecar, sidecarOpen }) => {
   const session = useChatStore((state) => state.currentSession)
   const navigate = useNavigate()
   const title = session?.title || '新会话'
@@ -1055,23 +979,11 @@ const RegularChatHeader: FC<PreviewHeaderControlProps> = ({
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="truncate text-sm font-semibold text-neutral-950">{title}</span>
       </div>
-      <div className="flex items-center gap-1">
-        <HeaderAgentStatusIndicator />
-        <button
-          type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <HeaderPreviewButton
-          previewCollapsed={previewCollapsed}
-          previewAvailable={previewAvailable}
-          onTogglePreview={onTogglePreview}
-        />
-      </div>
+      <HeaderActionCluster
+        onOpenOffice={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        onToggleSidecar={onToggleSidecar}
+        sidecarOpen={sidecarOpen}
+      />
     </header>
   )
 }
@@ -1199,20 +1111,157 @@ type DirectRunProgress = {
   status: CodeAgentRunMetadata['status']
   steps: Array<{
     id: string
+    kind?: 'status' | 'tool' | 'command' | 'file' | 'log'
     status: DirectRunStepStatus
     title: string
     subtitle?: string
     detail?: string
+    output?: string
   }>
   subtitle: string
   total: number
 }
 
+const SidecarBrowserTopbar: FC<{
+  activeTab: string
+  address: string
+  backDisabled?: boolean
+  forwardDisabled?: boolean
+  menu?: ReactNode
+  onAddressSubmit?: (value: string) => void
+  onBack?: () => void
+  onClose: () => void
+  onForward?: () => void
+  onPlus?: () => void
+  onRefresh?: () => void
+  plusPressed?: boolean
+}> = ({
+  activeTab,
+  address,
+  backDisabled = false,
+  forwardDisabled = true,
+  menu,
+  onAddressSubmit,
+  onBack,
+  onClose,
+  onForward,
+  onPlus,
+  onRefresh,
+  plusPressed = false,
+}) => {
+  const [draft, setDraft] = useState(address)
+
+  useEffect(() => {
+    setDraft(address)
+  }, [address])
+
+  function submitAddress(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    onAddressSubmit?.(draft)
+  }
+
+  return (
+    <div className="relative shrink-0 border-b border-neutral-200 bg-[#f7f7f4]">
+      <div className="flex h-9 items-end gap-1 px-2.5 pt-1.5">
+        <button
+          type="button"
+          className="flex h-7 min-w-0 max-w-[13rem] flex-1 items-center gap-2 rounded-t-xl bg-[#ededeb] px-3 text-left text-sm font-medium text-neutral-900"
+          title={activeTab}
+        >
+          <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-neutral-950 text-white">
+            <PanelRightOpen className="h-2.5 w-2.5" />
+          </span>
+          <span className="min-w-0 flex-1 truncate">{activeTab}</span>
+        </button>
+        {onPlus && (
+          <button
+            type="button"
+            onClick={onPlus}
+            className={cn(
+              'grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-950',
+              plusPressed && 'bg-neutral-200 text-neutral-950',
+            )}
+            aria-label="打开侧栏菜单"
+            title="打开侧栏菜单"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        )}
+        <div className="min-w-0 flex-1" />
+        <button
+          type="button"
+          onClick={onClose}
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-950"
+          aria-label="收起右侧栏"
+          title="收起右侧栏"
+        >
+          <PanelRightClose className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="flex h-11 items-center gap-1.5 px-2.5 pb-2 pt-1.5">
+        <SidecarChromeButton
+          disabled={backDisabled}
+          label="后退"
+          onClick={() => onBack?.()}
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </SidecarChromeButton>
+        <SidecarChromeButton
+          disabled={forwardDisabled}
+          label="前进"
+          onClick={() => onForward?.()}
+        >
+          <ChevronRight className="h-4 w-4" />
+        </SidecarChromeButton>
+        <SidecarChromeButton label="刷新" onClick={() => onRefresh?.()}>
+          <RefreshCw className="h-4 w-4" />
+        </SidecarChromeButton>
+        <form
+          onSubmit={submitAddress}
+          className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.86)] focus-within:border-blue-200 focus-within:ring-2 focus-within:ring-blue-100"
+        >
+          <Search className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+          <input
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onFocus={(event) => event.currentTarget.select()}
+            className="h-full min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none"
+            spellCheck={false}
+            aria-label="侧栏地址"
+          />
+        </form>
+      </div>
+      {menu}
+    </div>
+  )
+}
+
+const SidecarChromeButton: FC<{
+  children: ReactNode
+  disabled?: boolean
+  label: string
+  onClick: () => void
+}> = ({ children, disabled = false, label, onClick }) => (
+  <button
+    type="button"
+    disabled={disabled}
+    onClick={onClick}
+    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-neutral-500"
+    aria-label={label}
+    title={label}
+  >
+    {children}
+  </button>
+)
+
 const ThreadContextRail: FC<{
+  open: boolean
+  onClose: () => void
   taskBoard: LiveTaskBoard | null
   activity: LiveAgentActivity | null
   directRunProgress?: DirectRunProgress | null
-}> = ({ taskBoard, activity, directRunProgress }) => {
+}> = ({ open, onClose, taskBoard, activity, directRunProgress }) => {
   const workspace = useChatStore((state) => state.currentWorkspace)
   const [progressOpen, setProgressOpen] = useState(true)
   const [workspaceOpen, setWorkspaceOpen] = useState(true)
@@ -1241,9 +1290,26 @@ const ThreadContextRail: FC<{
         : 0
   const hasProgress = Boolean(taskBoard || directRunProgress || activity)
 
+  if (!open) return null
+
   return (
-    <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 bg-transparent px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
-      <div className="pointer-events-none max-h-full overflow-visible bg-transparent">
+    <aside className="agenthub-context-rail relative flex h-full w-[360px] max-w-[88vw] shrink-0 flex-col border-l border-neutral-200 bg-[#FBFBFB] lg:max-w-[42vw]">
+      <SidecarBrowserTopbar
+        activeTab="运行侧栏"
+        address={workspacePath ? `agenthub://workspace/${compactPath(workspacePath) ?? workspaceName}` : 'agenthub://run-sidebar'}
+        backDisabled
+        onAddressSubmit={() => undefined}
+        onClose={onClose}
+        onPlus={() => {
+          setProgressOpen(true)
+          setWorkspaceOpen(true)
+        }}
+        onRefresh={() => {
+          setProgressOpen(true)
+          setWorkspaceOpen(true)
+        }}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         <div className="flex w-full flex-col gap-3 bg-transparent">
         {hasProgress && (
           <RailCard
@@ -1292,6 +1358,11 @@ const ThreadContextRail: FC<{
                           <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-neutral-500">
                             {step.detail}
                           </div>
+                        )}
+                        {step.output && (
+                          <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 py-2 font-mono text-[11px] leading-4 whitespace-pre-wrap break-words text-neutral-700">
+                            {step.output}
+                          </pre>
                         )}
                       </div>
                     </div>
@@ -1653,33 +1724,21 @@ function isCodeAgentRunMetadataLike(value: unknown): value is CodeAgentRunMetada
 function buildDirectRunSteps(run: CodeAgentRunMetadata): DirectRunProgress['steps'] {
   const steps = run.steps ?? []
   if (steps.length) {
-    const rows = steps
-      .filter((step) => step.kind !== 'log')
-      .map((step) => ({
-        detail: step.detail ? trimLongText(step.detail, 120) : undefined,
-        id: step.id,
-        status: directRunStatusFromCodeAgent(step.status),
-        subtitle: [
-          step.subtitle,
-          step.toolName,
-          step.command,
-          step.path ? compactPath(step.path) : null,
-          step.fileStatus ? fileStatusLabel(step.fileStatus) : null,
-        ].filter(Boolean).join(' · ') || undefined,
-        title: step.title,
-      }))
-    const logSteps = steps.filter((step) => step.kind === 'log')
-    if (logSteps.length) {
-      const lastLog = logSteps[logSteps.length - 1]
-      rows.push({
-        detail: lastLog.detail ? trimLongText(lastLog.detail, 120) : undefined,
-        id: 'direct-log-summary',
-        status: logSteps.some((step) => step.status === 'failed') ? 'failed' : 'done',
-        subtitle: `${logSteps.length} 条运行日志`,
-        title: '整理过程输出',
-      })
-    }
-    return rows
+    return steps.map((step) => ({
+      detail: step.kind === 'log' ? trimLongText(step.detail ?? '', 120) : step.detail ? trimLongText(step.detail, 120) : undefined,
+      id: step.id,
+      kind: step.kind,
+      output: step.detail,
+      status: directRunStatusFromCodeAgent(step.status),
+      subtitle: [
+        step.subtitle,
+        step.toolName,
+        step.command,
+        step.path ? compactPath(step.path) : null,
+        step.fileStatus ? fileStatusLabel(step.fileStatus) : null,
+      ].filter(Boolean).join(' · ') || undefined,
+      title: step.title,
+    }))
   }
 
   const inferred: DirectRunProgress['steps'] = [
@@ -1696,6 +1755,8 @@ function buildDirectRunSteps(run: CodeAgentRunMetadata): DirectRunProgress['step
     inferred.push({
       detail: command.output ? trimLongText(command.output, 120) : undefined,
       id: `direct-command-${command.id}`,
+      kind: 'command',
+      output: command.output,
       status: 'done',
       subtitle: command.cwd ? compactPath(command.cwd) ?? command.cwd : undefined,
       title: command.command,
@@ -2031,6 +2092,9 @@ function taskArtifactPreviewItem(
   index: number,
 ): ArtifactPreviewItem {
   const title = artifact.title || artifact.filePath || artifact.url || `产物 ${index + 1}`
+  const path = artifact.filePath ?? undefined
+  const mimeType =
+    (artifact as { mimeType?: string | null }).mimeType ?? mimeFromExtension(extensionFromName(path))
   const kind: ArtifactPreviewItem['kind'] =
     artifact.type === 'diff'
       ? 'diff'
@@ -2042,7 +2106,7 @@ function taskArtifactPreviewItem(
             ? 'workflow'
             : artifact.url
               ? 'web'
-              : /\.(png|jpg|jpeg|webp|gif)$/i.test(artifact.filePath ?? '')
+              : mimeType?.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif|svg)$/i.test(path ?? '')
                 ? 'image'
                 : 'file'
   return {
@@ -2054,9 +2118,10 @@ function taskArtifactPreviewItem(
       `${taskId}-${index}`,
     title,
     kind,
+    mimeType: mimeType ?? undefined,
     url: artifact.url ?? undefined,
-    path: artifact.filePath ?? undefined,
-    source: artifact.source ?? undefined,
+    path,
+    source: inlinePreviewSource(artifact.source),
   }
 }
 
@@ -2368,6 +2433,481 @@ const RoomTaskDrawer: FC<{
   )
 }
 
+const WorkspaceSidecarPanel: FC<{
+  open: boolean
+  onClose: () => void
+  taskBoard: LiveTaskBoard | null
+}> = ({ open, onClose, taskBoard }) => {
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const [path, setPath] = useState('')
+  const [query, setQuery] = useState('')
+  const [tree, setTree] = useState<WorkspaceFileTree | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [selectedFile, setSelectedFile] = useState<WorkspaceFileEntry | null>(null)
+  const [recentFiles, setRecentFiles] = useState<WorkspaceFileEntry[]>([])
+  const [refreshToken, setRefreshToken] = useState(0)
+  const workspaceId = workspace?.id ?? ''
+  const artifactCount =
+    taskBoard?.tasks.reduce((total, task) => total + (task.artifactCount ?? task.artifacts?.length ?? 0), 0) ?? 0
+
+  useEffect(() => {
+    if (!open || !workspaceId) return
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    api
+      .listWorkspaceFiles(workspaceId, path)
+      .then((result) => {
+        if (cancelled) return
+        setTree(result)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setTree(null)
+        setError(friendlyErrorMessage(err, '读取工作区文件失败'))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, path, refreshToken, workspaceId])
+
+  useEffect(() => {
+    setPath('')
+    setQuery('')
+    setTree(null)
+    setError('')
+    setSelectedFile(null)
+    setRecentFiles([])
+  }, [workspaceId])
+
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(''), 1800)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
+  if (!open) return null
+
+  const items = tree?.items ?? []
+  const keyword = query.trim().toLowerCase()
+  const visibleItems = keyword
+    ? items.filter((item) =>
+        [item.name, item.path, item.extension ?? ''].join(' ').toLowerCase().includes(keyword),
+      )
+    : items
+  const breadcrumbs = path.split('/').filter(Boolean)
+  const parentPath = breadcrumbs.slice(0, -1).join('/')
+  const selectedFilePath = selectedFile
+    ? resolveWorkspacePath(selectedFile.path, workspace?.projectPath ?? tree?.projectPath)
+    : null
+  const recentModifiedFiles = items
+    .filter((item) => item.type === 'file')
+    .slice()
+    .sort((a, b) => Date.parse(b.modifiedAt || '') - Date.parse(a.modifiedAt || ''))
+    .slice(0, 4)
+  const quickFiles = recentFiles.length ? recentFiles : recentModifiedFiles
+
+  function openDirectory(nextPath: string) {
+    setPath(nextPath)
+    setQuery('')
+  }
+
+  function openAddress(value: string) {
+    const nextPath = normalizeWorkspaceSidecarAddress(value)
+    openDirectory(nextPath)
+  }
+
+  function previewFile(file: WorkspaceFileEntry) {
+    if (!workspaceId || file.type !== 'file') return
+    setSelectedFile(file)
+    setRecentFiles((files) => [
+      file,
+      ...files.filter((item) => item.path !== file.path),
+    ].slice(0, 6))
+    requestArtifactPreview(workspaceFilePreviewItem(file, workspaceId))
+  }
+
+  async function openWorkspaceFolderFromSidecar() {
+    const projectPath = workspace?.projectPath ?? tree?.projectPath
+    if (!projectPath) {
+      setNotice('当前工作区没有可打开的本地路径。')
+      return
+    }
+    try {
+      const opened = await openPath(projectPath)
+      setNotice(opened ? '已请求系统打开工作区。' : '当前环境不支持直接打开工作区。')
+    } catch (err) {
+      setNotice(friendlyErrorMessage(err, '打开工作区失败'))
+    }
+  }
+
+  async function openSelectedFileInEditor() {
+    if (!selectedFilePath) {
+      setNotice('先在文件树中选择一个文件。')
+      return
+    }
+    try {
+      const opened = await openInEditor(selectedFilePath)
+      if (opened) {
+        setNotice('已请求编辑器打开当前文件。')
+        return
+      }
+      const openedPath = await openPath(selectedFilePath)
+      setNotice(openedPath ? '已请求系统打开当前文件。' : '当前环境不支持直接打开文件。')
+    } catch (err) {
+      setNotice(friendlyErrorMessage(err, '打开文件失败'))
+    }
+  }
+
+  async function copySelectedPath() {
+    const value = selectedFilePath ?? (workspace?.projectPath ?? tree?.projectPath)
+    if (!value) {
+      setNotice('当前没有可复制的路径。')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(value)
+      setNotice('路径已复制。')
+    } catch (err) {
+      setNotice(friendlyErrorMessage(err, '复制路径失败'))
+    }
+  }
+
+  function showComingSoon(label: string) {
+    setNotice(`${label} 会接到同一个右侧栏，当前先开放文件。`)
+    setMenuOpen(false)
+  }
+
+  return (
+    <aside className="relative flex h-full w-[360px] max-w-[88vw] shrink-0 flex-col border-l border-neutral-200 bg-[#FBFBFB] lg:max-w-[42vw]">
+      <SidecarBrowserTopbar
+        activeTab={selectedFile?.name ?? '打开文件'}
+        address={`/${path}`}
+        backDisabled={!path}
+        menu={
+          menuOpen ? (
+          <div className="absolute left-3 top-[calc(100%+0.5rem)] z-40 w-80 rounded-2xl border border-neutral-200 bg-white p-2 shadow-[0_18px_60px_rgba(15,23,42,0.16)]">
+            <WorkspaceSidecarMenuItem
+              icon={<File className="h-4 w-4" />}
+              label="文件"
+              shortcut="Ctrl+P"
+              onClick={() => {
+                setMenuOpen(false)
+                setNotice('')
+              }}
+            />
+            <WorkspaceSidecarMenuItem
+              icon={<MessageCircleReply className="h-4 w-4" />}
+              label="侧边聊天"
+              onClick={() => showComingSoon('侧边聊天')}
+            />
+            <WorkspaceSidecarMenuItem
+              icon={<GitBranch className="h-4 w-4" />}
+              label="审查"
+              shortcut="Ctrl+Shift+G"
+              onClick={() => showComingSoon('审查')}
+            />
+            <WorkspaceSidecarMenuItem
+              icon={<TerminalSquare className="h-4 w-4" />}
+              label="终端"
+              shortcut="Ctrl+`"
+              onClick={() => showComingSoon('终端')}
+            />
+          </div>
+          ) : null
+        }
+        onAddressSubmit={openAddress}
+        onBack={() => openDirectory(parentPath)}
+        onClose={onClose}
+        onPlus={() => setMenuOpen((value) => !value)}
+        onRefresh={() => setRefreshToken((value) => value + 1)}
+        plusPressed={menuOpen}
+      />
+
+      <div className="shrink-0 border-b border-neutral-200 bg-white px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500">
+            {selectedFile ? workspaceFileIcon(selectedFile) : <FolderOpen className="h-4 w-4" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium text-neutral-950">
+              {selectedFile?.name ?? workspace?.name ?? tree?.rootName ?? '工作区'}
+            </div>
+            <div className="truncate text-[11px] text-neutral-500">
+              {selectedFile?.path ?? workspace?.projectPath ?? tree?.projectPath ?? '选择文件后可预览、打开和复制路径'}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void openWorkspaceFolderFromSidecar()}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+            title="打开工作区"
+            aria-label="打开工作区"
+          >
+            <FolderOpen className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void openSelectedFileInEditor()}
+            className={cn(
+              'grid h-8 w-8 shrink-0 place-items-center rounded-lg transition hover:bg-neutral-100 hover:text-neutral-950',
+              selectedFile ? 'text-neutral-500' : 'text-neutral-300',
+            )}
+            title="在编辑器打开"
+            aria-label="在编辑器打开"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void copySelectedPath()}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+            title="复制路径"
+            aria-label="复制路径"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="shrink-0 border-b border-neutral-200 bg-white px-4 py-3">
+        <div className="flex min-w-0 items-center gap-1.5 text-sm text-neutral-900">
+          <button
+            type="button"
+            onClick={() => openDirectory('')}
+            className="rounded-md px-1.5 py-1 font-medium transition hover:bg-neutral-100"
+          >
+            /
+          </button>
+          {breadcrumbs.map((part, index) => {
+            const nextPath = breadcrumbs.slice(0, index + 1).join('/')
+            return (
+              <span key={nextPath} className="inline-flex min-w-0 items-center gap-1">
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                <button
+                  type="button"
+                  onClick={() => openDirectory(nextPath)}
+                  className="max-w-[8rem] truncate rounded-md px-1.5 py-1 transition hover:bg-neutral-100"
+                  title={nextPath}
+                >
+                  {part}
+                </button>
+              </span>
+            )
+          })}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <label className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3">
+            <Search className="h-4 w-4 shrink-0 text-neutral-400" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
+              placeholder="筛选文件..."
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => openDirectory(parentPath)}
+            disabled={!path}
+            className="grid h-10 w-10 place-items-center rounded-xl border border-neutral-200 bg-white text-neutral-500 transition hover:bg-neutral-50 disabled:opacity-40"
+            title="上级目录"
+            aria-label="上级目录"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+        </div>
+        {artifactCount > 0 && (
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent(roomTasksDrawerEvent))}
+            className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-50 px-2.5 text-xs text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
+          >
+            <Blocks className="h-3.5 w-3.5" />
+            {artifactCount} 个运行产物
+          </button>
+        )}
+      </div>
+
+      {notice && (
+        <div className="mx-3 mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+          {notice}
+        </div>
+      )}
+      {error && (
+        <div className="mx-3 mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {workspaceId && !keyword && quickFiles.length > 0 && (
+          <div className="mb-3 rounded-xl border border-neutral-200 bg-white p-2">
+            <div className="mb-1.5 flex items-center justify-between px-1">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+                {recentFiles.length ? '最近打开' : '最近修改'}
+              </span>
+              <span className="text-[11px] text-neutral-400">{quickFiles.length}</span>
+            </div>
+            <div className="space-y-0.5">
+              {quickFiles.map((file) => (
+                <button
+                  key={`quick-${file.path}`}
+                  type="button"
+                  onClick={() => previewFile(file)}
+                  className={cn(
+                    'group flex min-h-8 w-full items-center gap-2 rounded-lg px-2 py-1 text-left transition hover:bg-neutral-100',
+                    selectedFile?.path === file.path && 'bg-neutral-100',
+                  )}
+                  title={file.path}
+                >
+                  <span className="grid h-5 w-5 shrink-0 place-items-center text-neutral-400">
+                    {workspaceFileIcon(file)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-xs text-neutral-800">
+                    {file.name}
+                  </span>
+                  {file.size !== null && (
+                    <span className="shrink-0 text-[10px] text-neutral-400">
+                      {formatBytes(file.size)}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!workspaceId ? (
+          <WorkspaceSidecarEmpty
+            icon={<FolderOpen className="h-5 w-5" />}
+            title="没有工作区"
+            text="当前群聊尚未绑定工作区。"
+          />
+        ) : loading && !tree ? (
+          <WorkspaceSidecarEmpty
+            icon={<Loader2 className="h-5 w-5 animate-spin" />}
+            title="正在读取"
+            text="正在同步工作区目录树。"
+          />
+        ) : visibleItems.length === 0 ? (
+          <WorkspaceSidecarEmpty
+            icon={<File className="h-5 w-5" />}
+            title="没有文件"
+            text={query ? '当前筛选没有匹配文件。' : '当前目录没有可显示的文件。'}
+          />
+        ) : (
+          <div className="space-y-0.5">
+            {visibleItems.map((item) => (
+              <button
+                key={item.path}
+                type="button"
+                onClick={() => (item.type === 'directory' ? openDirectory(item.path) : previewFile(item))}
+                className={cn(
+                  'group flex min-h-10 w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-neutral-100',
+                  selectedFile?.path === item.path && 'bg-neutral-100 ring-1 ring-neutral-200',
+                )}
+                title={item.path}
+              >
+                <span className="grid h-6 w-6 shrink-0 place-items-center text-neutral-400 transition group-hover:text-neutral-600">
+                  {item.type === 'directory' ? (
+                    <ChevronRight className="h-4 w-4" />
+                  ) : (
+                    workspaceFileIcon(item)
+                  )}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm text-neutral-900">{item.name}</span>
+                {item.type === 'file' && item.size !== null && (
+                  <span className="shrink-0 text-[11px] text-neutral-400">{formatBytes(item.size)}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </aside>
+  )
+}
+
+const WorkspaceSidecarMenuItem: FC<{
+  icon: ReactNode
+  label: string
+  shortcut?: string
+  onClick: () => void
+}> = ({ icon, label, shortcut, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className="flex h-10 w-full items-center gap-3 rounded-xl px-2.5 text-left text-sm text-neutral-800 transition hover:bg-neutral-100"
+  >
+    <span className="grid h-6 w-6 shrink-0 place-items-center text-neutral-500">{icon}</span>
+    <span className="min-w-0 flex-1 truncate">{label}</span>
+    {shortcut && <span className="shrink-0 text-xs text-neutral-400">{shortcut}</span>}
+  </button>
+)
+
+const WorkspaceSidecarEmpty: FC<{ icon: ReactNode; title: string; text: string }> = ({
+  icon,
+  title,
+  text,
+}) => (
+  <div className="grid min-h-[20rem] place-items-center text-center">
+    <div className="px-5">
+      <div className="mx-auto grid h-11 w-11 place-items-center rounded-xl border border-neutral-200 bg-white text-neutral-500">
+        {icon}
+      </div>
+      <div className="mt-3 text-sm font-semibold text-neutral-900">{title}</div>
+      <div className="mt-1 text-xs leading-5 text-neutral-500">{text}</div>
+    </div>
+  </div>
+)
+
+function normalizeWorkspaceSidecarAddress(value: string) {
+  return value
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*(\/)?/i, '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter((part) => part && part !== '.' && part !== '..')
+    .join('/')
+}
+
+function workspaceFilePreviewItem(file: WorkspaceFileEntry, workspaceId: string): ArtifactPreviewItem {
+  const extension = extensionFromName(file.path)
+  const mimeType = mimeFromExtension(extension)
+  const isHtml = extension === 'html' || extension === 'htm'
+  const isImage = mimeType?.startsWith('image/')
+  const kind: ArtifactPreviewItem['kind'] = isHtml ? 'web' : isImage ? 'image' : 'file'
+  return {
+    id: `workspace-file:${workspaceId}:${file.path}`,
+    kind,
+    mimeType,
+    path: file.path,
+    title: file.name,
+    subtitle: file.path,
+    url: isHtml ? artifactPreviewFileUrl(workspaceId, file.path) : artifactFileUrl(workspaceId, file.path),
+    workspaceId,
+  }
+}
+
+function workspaceFileIcon(file: WorkspaceFileEntry) {
+  const extension = file.extension?.replace(/^\./, '') || extensionFromName(file.path)
+  const mimeType = mimeFromExtension(extension)
+  if (mimeType?.startsWith('image/')) return <ImagePlus className="h-4 w-4 text-blue-500" />
+  if (extension === 'md' || extension === 'markdown') return <FileText className="h-4 w-4 text-emerald-600" />
+  if (['json', 'jsonl'].includes(extension ?? '')) return <Blocks className="h-4 w-4 text-orange-500" />
+  if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(extension ?? '')) {
+    return <FileText className="h-4 w-4 text-sky-600" />
+  }
+  return <FileText className="h-4 w-4" />
+}
+
 const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = ({
   open,
   onClose,
@@ -2656,7 +3196,12 @@ function syncAgentLibraryFromWorkspaceAgent(agent: WorkspaceAgent) {
   )
 }
 
-const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+const GroupChatDetailsPanel: FC<{
+  open: boolean
+  onClose: () => void
+  onOpenRoomTasks: () => void
+  onOpenWorkspaceSidecar: () => void
+}> = ({ open, onClose, onOpenRoomTasks, onOpenWorkspaceSidecar }) => {
   const navigate = useNavigate()
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
@@ -2864,6 +3409,24 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
               </button>
               <button
                 type="button"
+                onClick={onOpenRoomTasks}
+                disabled={!workspace}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70 disabled:opacity-50"
+              >
+                <Blocks className="h-5 w-5" />
+                <span className="text-xs">运行产物</span>
+              </button>
+              <button
+                type="button"
+                onClick={onOpenWorkspaceSidecar}
+                disabled={!workspace?.id}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70 disabled:opacity-50"
+              >
+                <File className="h-5 w-5" />
+                <span className="text-xs">打开文件</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setInviteOpen((value) => !value)}
                 disabled={!workspace || busyAction === 'invite'}
                 className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70 disabled:opacity-50"
@@ -2884,7 +3447,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                 <span className="text-xs">编辑房间</span>
               </button>
               {inviteOpen && (
-                <div className="absolute left-0 right-0 top-[5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
+                <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
                   {inviteCandidates.map((agent) => (
                     <button
                       key={agent.id}
@@ -3749,7 +4312,7 @@ const Composer: FC = () => {
 
   function insertSkillReference(skill: SkillSummary) {
     const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
-    const reference = `$${skill.id || skill.name} `
+    const reference = `$${skillReferenceKey(skill)} `
     if (!input) {
       void navigator.clipboard?.writeText(reference).catch(() => undefined)
       return
@@ -3975,7 +4538,7 @@ const Composer: FC = () => {
                   className="whitespace-pre-wrap break-words"
                   style={{ transform: `translateY(-${composerScrollTop}px)` }}
                 >
-                  {renderMentionHighlights(composerText, workspaceAgents)}
+                  {renderComposerHighlights(composerText, workspaceAgents, skills)}
                 </div>
               </div>
             )}
@@ -4008,7 +4571,9 @@ const Composer: FC = () => {
               onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
               className={cn(
                 'relative max-h-[180px] min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 outline-none placeholder:text-neutral-400',
-                composerText ? 'text-transparent caret-neutral-950' : 'text-neutral-950',
+                composerText
+                  ? 'text-transparent caret-neutral-950 [-webkit-text-fill-color:transparent]'
+                  : 'text-neutral-950',
               )}
             />
           </div>
@@ -5649,7 +6214,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   const canOpen = Boolean(item.url)
   const previewSourcePath = item.path ?? previewPathFromUrl(item.url) ?? undefined
   const canInspectSource =
-    Boolean(item.source?.trim()) || canFetchWorkspaceTextSource(item, previewSourcePath)
+    hasInlinePreviewSource(item) || canFetchWorkspaceTextSource(item, previewSourcePath)
   const runnablePreview = (item.kind === 'web' || item.kind === 'deploy') && Boolean(item.url)
   const [maximized, setMaximized] = useState(false)
   const [visible, setVisible] = useState(false)
@@ -6188,7 +6753,9 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
               <WordDocumentPreview item={item} />
             ) : isPptxPreviewItem(item) ? (
               <PresentationDocumentPreview item={item} />
-            ) : item.source ? (
+            ) : isPdfPreviewItem(item) ? (
+              <PdfDocumentPreview item={item} />
+            ) : canInspectSource ? (
               <TextFilePreview item={item} />
             ) : (
               <DocumentPreviewPlaceholder item={item} />
@@ -6492,6 +7059,22 @@ const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }
   )
 }
 
+const PdfDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const url = officePreviewUrl(item)
+  if (!url) return <DocumentPreviewPlaceholder item={item} />
+
+  return (
+    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
+      <OfficePreviewHeader item={item} label="PDF" />
+      <iframe
+        title={item.title}
+        src={url}
+        className="min-h-0 flex-1 border-0 bg-white"
+      />
+    </div>
+  )
+}
+
 const OfficePreviewHeader: FC<{ item: ArtifactPreviewItem; label: string }> = ({
   item,
   label,
@@ -6544,7 +7127,7 @@ const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
     'idle',
   )
   const [sourceLoadError, setSourceLoadError] = useState('')
-  const source = loadedSource ?? item.source ?? ''
+  const source = loadedSource ?? inlinePreviewSource(item.source) ?? ''
   const lines = useMemo(() => source.replace(/\n$/, '').split('\n'), [source])
   const highlightedLines = useMemo(
     () => lines.map((line) => highlightCode(line, language)),
@@ -7826,7 +8409,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       id: artifact.id,
       description: artifact.description,
       kind: 'web',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: previewKindName(artifact.previewKind),
       title: artifact.title,
       url: artifact.url,
@@ -7839,7 +8422,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       id: artifact.id,
       description: artifact.description ?? artifact.logs,
       kind: 'deploy',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: `${artifact.provider} · ${deployStatusLabel(artifact.status)}`,
       title: artifact.title,
       url: artifact.url,
@@ -7863,24 +8446,25 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       id: artifact.id,
       description: artifact.description,
       kind: 'workflow',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: `${artifact.nodes.length} 个节点 · ${artifact.edges.length} 条连接`,
       title: artifact.title,
     }
   }
   // HTML 文件生成预览 URL
   const ext = artifact.path.split('.').pop()?.toLowerCase()
+  const mimeType = artifact.mimeType ?? mimeFromExtension(ext)
   const isHtml = ext === 'html' || ext === 'htm'
 
   return {
     id: artifact.id,
     description: artifact.description,
     kind: isHtml ? 'web' : filePreviewKind(artifact),
-    mimeType: artifact.mimeType,
+    mimeType,
     path: artifact.path,
-    source: artifact.source,
+    source: inlinePreviewSource(artifact.source),
     subtitle:
-      [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null]
+      [mimeType, artifact.size ? formatBytes(artifact.size) : null]
         .filter(Boolean)
         .join(' · ') || fileStatusLabel(artifact.status ?? 'created'),
     title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
@@ -7891,7 +8475,9 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
 function filePreviewKind(
   artifact: Extract<AgentArtifact, { type: 'file' }>,
 ): ArtifactPreviewItem['kind'] {
-  if (artifact.mimeType?.startsWith('image/')) return 'image'
+  const extension = extensionFromName(artifact.path)
+  const mimeType = artifact.mimeType ?? mimeFromExtension(extension)
+  if (mimeType?.startsWith('image/')) return 'image'
   return 'file'
 }
 
@@ -8414,6 +9000,139 @@ const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...prop
   />
 )
 
+function renderComposerHighlights(
+  text: string,
+  agents: WorkspaceAgent[],
+  skills: SkillSummary[],
+) {
+  const skillTokens = composerSkillTokens(text, skills)
+  if (!skillTokens.length) return renderMentionHighlights(text, agents)
+
+  const tokens = [
+    ...composerMentionTokens(text, agents),
+    ...skillTokens,
+  ].sort((a, b) => (a.index === b.index ? b.length - a.length : a.index - b.index))
+  const parts: ReactNode[] = []
+  let lastIndex = 0
+
+  for (const token of tokens) {
+    if (token.index < lastIndex) continue
+    if (token.index > lastIndex) parts.push(text.slice(lastIndex, token.index))
+    parts.push(
+      token.kind === 'skill' ? (
+        <SkillComposerToken
+          key={`${token.kind}-${token.index}-${token.raw}`}
+          label={token.label}
+          raw={token.raw}
+        />
+      ) : (
+        <span
+          key={`${token.kind}-${token.index}-${token.raw}`}
+          className="font-normal text-[#0969ff]"
+        >
+          {token.raw}
+        </span>
+      ),
+    )
+    lastIndex = token.index + token.length
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return parts.length ? parts : text
+}
+
+type ComposerToken = {
+  index: number
+  kind: 'mention' | 'skill'
+  label: string
+  length: number
+  raw: string
+}
+
+const composerTokenBoundary = '(?=$|\\s|[，,。.!！?？:：；;）)\\]】}])'
+
+function composerMentionTokens(text: string, agents: WorkspaceAgent[]): ComposerToken[] {
+  const aliases = mentionAliasEntries(agents).map((entry) => entry.alias)
+  if (!aliases.length) return []
+
+  const pattern = new RegExp(
+    `@(${aliases.map(escapeRegExp).join('|')})${composerTokenBoundary}`,
+    'gi',
+  )
+  return Array.from(text.matchAll(pattern)).map((match) => ({
+    index: match.index ?? 0,
+    kind: 'mention' as const,
+    label: match[1] ?? match[0],
+    length: match[0].length,
+    raw: match[0],
+  }))
+}
+
+function composerSkillTokens(text: string, skills: SkillSummary[]): ComposerToken[] {
+  const entries = skillAliasEntries(skills)
+  if (!entries.length) return []
+
+  const pattern = new RegExp(
+    `([$\\/])(${entries.map((entry) => escapeRegExp(entry.alias)).join('|')})${composerTokenBoundary}`,
+    'gi',
+  )
+  const aliasToSkill = new Map(entries.map((entry) => [entry.alias.toLowerCase(), entry.skill]))
+  return Array.from(text.matchAll(pattern)).flatMap((match) => {
+    const raw = match[0]
+    const alias = match[2] ?? ''
+    const skill = aliasToSkill.get(alias.toLowerCase())
+    if (!skill) return []
+    return {
+      index: match.index ?? 0,
+      kind: 'skill' as const,
+      label: skillDisplayLabel(skill),
+      length: raw.length,
+      raw,
+    }
+  })
+}
+
+function skillAliasEntries(skills: SkillSummary[]) {
+  const deduped = new Map<string, SkillSummary>()
+  for (const skill of skills) {
+    for (const alias of [skill.id, skill.name].map((value) => value.trim()).filter(Boolean)) {
+      const key = alias.toLowerCase()
+      if (!deduped.has(key)) deduped.set(key, skill)
+    }
+  }
+  return Array.from(deduped.entries())
+    .map(([alias, skill]) => ({ alias, skill }))
+    .sort((a, b) => b.alias.length - a.alias.length)
+}
+
+function skillDisplayLabel(skill: SkillSummary) {
+  const raw = skill.name || skill.id
+  if (!raw.includes('-') && !raw.includes('_')) return raw
+  return raw
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
+}
+
+function skillReferenceKey(skill: SkillSummary) {
+  const candidates = [skill.name, skill.id]
+    .map((value) => value.trim())
+    .filter((value) => /^[a-z0-9][a-z0-9_-]*$/i.test(value))
+    .sort((a, b) => b.length - a.length)
+  return candidates[0] || skill.id || skill.name
+}
+
+const SkillComposerToken: FC<{ label: string; raw: string }> = ({ label, raw }) => (
+  <span className="relative inline-block max-w-[14rem] align-baseline">
+    <span className="invisible whitespace-pre">{raw}</span>
+    <span className="absolute inset-x-0 top-1/2 inline-flex h-[1.3rem] -translate-y-1/2 items-center gap-1 rounded-md border border-[#cfe0ff] bg-[#eaf2ff] px-1 text-[0.78em] font-semibold leading-none text-[#0b57d0] shadow-[0_1px_0_rgba(9,105,255,0.12)]">
+      <Blocks className="h-3 w-3 shrink-0 text-[#0969ff]" />
+      <span className="truncate">{label}</span>
+    </span>
+  </span>
+)
+
 function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
   const aliases = mentionAliasEntries(agents).map((entry) => entry.alias)
   if (!aliases.length) return text
@@ -8429,7 +9148,7 @@ function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
     const index = match.index ?? 0
     if (index > lastIndex) parts.push(text.slice(lastIndex, index))
     parts.push(
-      <span key={`${index}-${match[0]}`} className="font-medium text-blue-600">
+      <span key={`${index}-${match[0]}`} className="font-normal text-[#0969ff]">
         {match[0]}
       </span>,
     )
@@ -8774,6 +9493,27 @@ function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
   return isTextLikeAttachment(mimeType, extension)
 }
 
+const provenanceSourceLabels = new Set([
+  'artifact-store',
+  'blackboard.handoffpath',
+  'code-agent',
+  'file',
+  'git',
+  'matrix-file',
+  'task artifact',
+])
+
+function inlinePreviewSource(value?: string | null) {
+  const trimmed = value?.trim()
+  if (!trimmed) return undefined
+  if (provenanceSourceLabels.has(trimmed.toLowerCase())) return undefined
+  return value ?? undefined
+}
+
+function hasInlinePreviewSource(item: ArtifactPreviewItem) {
+  return Boolean(inlinePreviewSource(item.source)?.trim())
+}
+
 function enrichPreviewItem(item: ArtifactPreviewItem, workspaceId?: string): ArtifactPreviewItem {
   const urlWorkspaceId = workspaceIdFromUrl(item.url)
   const url = normalizePreviewUrl(item.url)
@@ -8837,6 +9577,12 @@ function isPptxPreviewItem(item: ArtifactPreviewItem) {
   const extension = previewFileExtension(item)
   const mimeType = item.mimeType?.toLowerCase() ?? ''
   return extension === 'pptx' || mimeType.includes('presentationml.presentation')
+}
+
+function isPdfPreviewItem(item: ArtifactPreviewItem) {
+  const extension = previewFileExtension(item)
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  return extension === 'pdf' || mimeType === 'application/pdf'
 }
 
 function officePreviewUrl(item: ArtifactPreviewItem) {

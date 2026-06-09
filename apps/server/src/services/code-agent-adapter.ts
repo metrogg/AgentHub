@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   type AgentArtifact,
@@ -2723,12 +2723,14 @@ function buildArtifactsFromMetadata(input: {
   const artifacts: AgentArtifact[] = []
   const createdAt = new Date().toISOString()
   for (const file of input.files.slice(0, 40)) {
+    const mimeType = artifactMimeType(file.path)
     artifacts.push({
       id: `file:${file.path}`,
       type: 'file',
       title: file.path,
       path: file.path,
       status: file.status,
+      mimeType,
       source: 'code-agent',
       createdAt,
       workspaceId: input.workspaceId ?? undefined,
@@ -2805,6 +2807,29 @@ function buildArtifactsFromMetadata(input: {
 
 function isHtmlFile(path: string) {
   return /\.html?$/i.test(path)
+}
+
+function artifactMimeType(path: string) {
+  const ext = extname(path).toLowerCase()
+  if (ext === '.html' || ext === '.htm') return 'text/html; charset=utf-8'
+  if (ext === '.md' || ext === '.markdown') return 'text/markdown; charset=utf-8'
+  if (ext === '.txt' || ext === '.log') return 'text/plain; charset=utf-8'
+  if (ext === '.json') return 'application/json; charset=utf-8'
+  if (ext === '.jsonl') return 'application/jsonl'
+  if (ext === '.csv') return 'text/csv; charset=utf-8'
+  if (ext === '.svg') return 'image/svg+xml'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.gif') return 'image/gif'
+  if (ext === '.webp') return 'image/webp'
+  if (ext === '.pdf') return 'application/pdf'
+  if (ext === '.doc') return 'application/msword'
+  if (ext === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (ext === '.ppt') return 'application/vnd.ms-powerpoint'
+  if (ext === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  if (ext === '.xls') return 'application/vnd.ms-excel'
+  if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  return undefined
 }
 
 export function staticPreviewUrl(cwd: string | undefined, path: string, workspaceId?: string | null) {

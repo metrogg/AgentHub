@@ -23,6 +23,30 @@ describe('Controller HTTP API', () => {
     expect(response.status).toBe(401)
   })
 
+  test('rejects question-mark mojibake worker fields before creating a Worker', async () => {
+    const token = await createManagerToken()
+    const response = await app.request('/api/controller/workers', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'workspace-not-needed-for-encoding-guard',
+        name: '????',
+        role: '?????',
+        description: '????????',
+        systemPrompt: '????????',
+        runtimeBase: 'claude-code',
+        modelId: 'test-model',
+      }),
+    })
+
+    expect(response.status).toBe(400)
+    const agents = await db.select().from(workspaceAgents).where(eq(workspaceAgents.name, '????'))
+    expect(agents).toEqual([])
+  })
+
   test('exposes Room and Reconcile resources for Manager skills', async () => {
     const token = await createManagerToken()
     const [workspace] = await db

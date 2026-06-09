@@ -207,6 +207,13 @@ export class TestRoomAdapter implements RoomAdapter {
   }
 
   async appendTimelineEvent(input: AppendTimelineEventInput) {
+    const resolvedProviderEventId = input.providerEventId ?? providerEventId()
+    const [existing] = await db
+      .select()
+      .from(timelineEvents)
+      .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, resolvedProviderEventId)))
+      .limit(1)
+    if (existing) return existing
     const sequenceRows = await db
       .select({ nextSequence: sql<number>`coalesce(max(${timelineEvents.sequence}), 0) + 1` })
       .from(timelineEvents)
@@ -216,7 +223,7 @@ export class TestRoomAdapter implements RoomAdapter {
       .insert(timelineEvents)
       .values({
         roomId: input.roomId,
-        providerEventId: input.providerEventId ?? providerEventId(),
+        providerEventId: resolvedProviderEventId,
         senderParticipantId: input.senderParticipantId ?? null,
         senderType: input.senderType,
         type: input.type,
@@ -224,8 +231,19 @@ export class TestRoomAdapter implements RoomAdapter {
         metadata: input.metadata ?? {},
         sequence: nextSequence ?? 1,
       })
+      .onConflictDoNothing({
+        target: [timelineEvents.roomId, timelineEvents.providerEventId],
+      })
       .returning()
-    if (!event) throw new Error('Timeline event create failed')
+    if (!event) {
+      const [existingAfterConflict] = await db
+        .select()
+        .from(timelineEvents)
+        .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, resolvedProviderEventId)))
+        .limit(1)
+      if (existingAfterConflict) return existingAfterConflict
+      throw new Error('Timeline event create failed')
+    }
     await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
     return event
   }

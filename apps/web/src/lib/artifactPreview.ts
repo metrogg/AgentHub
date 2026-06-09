@@ -38,7 +38,7 @@ export function previewItemFromAgentArtifact(
       id: artifact.id,
       description: artifact.description,
       kind: 'web',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: options.previewKindName?.(artifact.previewKind) ?? artifact.previewKind,
       title: artifact.title,
       url: artifact.url,
@@ -53,7 +53,7 @@ export function previewItemFromAgentArtifact(
       id: artifact.id,
       description: artifact.description ?? artifact.logs,
       kind: 'deploy',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: `${artifact.provider} · ${statusLabel}`,
       title: artifact.title,
       url: artifact.url,
@@ -80,17 +80,18 @@ export function previewItemFromAgentArtifact(
       id: artifact.id,
       description: artifact.description,
       kind: 'workflow',
-      source: artifact.source,
+      source: inlinePreviewSource(artifact.source),
       subtitle: `${artifact.nodes.length} nodes · ${artifact.edges.length} edges`,
       title: artifact.title,
     }
   }
 
   const ext = artifact.path.split('.').pop()?.toLowerCase()
+  const mimeType = artifact.mimeType ?? mimeFromExtension(ext)
   const isHtml = ext === 'html' || ext === 'htm'
   const status = artifact.status ?? 'created'
   const subtitle =
-    [artifact.mimeType, artifact.size ? options.formatBytes?.(artifact.size) ?? String(artifact.size) : null]
+    [mimeType, artifact.size ? options.formatBytes?.(artifact.size) ?? String(artifact.size) : null]
       .filter(Boolean)
       .join(' · ') || options.fileStatusLabel?.(status) || status
 
@@ -98,9 +99,9 @@ export function previewItemFromAgentArtifact(
     id: artifact.id,
     description: artifact.description,
     kind: isHtml ? 'web' : filePreviewKindFromAgentArtifact(artifact),
-    mimeType: artifact.mimeType,
+    mimeType,
     path: artifact.path,
-    source: artifact.source,
+    source: inlinePreviewSource(artifact.source),
     subtitle,
     title: artifact.title || fileNameFromPath(artifact.path) || artifact.path,
     url: undefined,
@@ -111,8 +112,27 @@ export function previewItemFromAgentArtifact(
 function filePreviewKindFromAgentArtifact(
   artifact: Extract<AgentArtifact, { type: 'file' }>,
 ): ArtifactPreviewItem['kind'] {
-  if (artifact.mimeType?.startsWith('image/')) return 'image'
+  const extension = extensionFromName(artifact.path)
+  const mimeType = artifact.mimeType ?? mimeFromExtension(extension)
+  if (mimeType?.startsWith('image/')) return 'image'
   return 'file'
+}
+
+const provenanceSourceLabels = new Set([
+  'artifact-store',
+  'blackboard.handoffpath',
+  'code-agent',
+  'file',
+  'git',
+  'matrix-file',
+  'task artifact',
+])
+
+export function inlinePreviewSource(value?: string | null) {
+  const trimmed = value?.trim()
+  if (!trimmed) return undefined
+  if (provenanceSourceLabels.has(trimmed.toLowerCase())) return undefined
+  return value ?? undefined
 }
 
 export function requestArtifactPreview(item: ArtifactPreviewItem) {
@@ -148,6 +168,10 @@ export function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: st
   const extension = extensionFromName(path)
   const mimeType = item.mimeType?.toLowerCase() || mimeFromExtension(extension) || 'text/plain'
   return isTextLikeAttachment(mimeType, extension)
+}
+
+export function hasInlinePreviewSource(item: ArtifactPreviewItem) {
+  return Boolean(inlinePreviewSource(item.source)?.trim())
 }
 
 export function enrichPreviewItem(
@@ -331,6 +355,12 @@ export function isPptxPreviewItem(item: ArtifactPreviewItem) {
   const extension = previewFileExtension(item)
   const mimeType = item.mimeType?.toLowerCase() ?? ''
   return extension === 'pptx' || mimeType.includes('presentationml.presentation')
+}
+
+export function isPdfPreviewItem(item: ArtifactPreviewItem) {
+  const extension = previewFileExtension(item)
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  return extension === 'pdf' || mimeType === 'application/pdf'
 }
 
 export function officePreviewUrl(item: ArtifactPreviewItem) {
