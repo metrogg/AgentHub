@@ -53,8 +53,10 @@ export type CodexWorkspaceSidecarTab = 'preview' | 'files' | 'tasks' | 'changes'
 
 const codexSidecarWidthStorageKey = 'agenthub:codex-workspace-sidecar-width'
 const codexSidecarMinWidth = 420
+const codexSidecarNavigatorMinWidth = 560
 const codexSidecarDefaultMaxWidth = 780
 const codexSidecarMaxWidth = 1040
+const codexSidecarReservedMainWidth = 760
 
 type CodexWorkspaceSidecarProps = {
   activeTab: CodexWorkspaceSidecarTab
@@ -203,6 +205,11 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
       ? [selectedFile.name]
       : []),
   ].slice(0, 4)
+  const shouldShowFileNavigator = activeTab === 'files' || (activeTab === 'preview' && Boolean(selectedFile))
+  const requiredSidecarWidth = shouldShowFileNavigator
+    ? Math.min(codexSidecarNavigatorMinWidth, clampCodexSidecarWidth(codexSidecarMaxWidth))
+    : codexSidecarMinWidth
+  const visibleSidecarWidth = Math.max(sidecarWidth, requiredSidecarWidth)
   const quickFiles =
     recentFiles.length > 0
       ? recentFiles
@@ -337,7 +344,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
       applySidecarWidth(sidecarWidthRef.current - 32, true)
     } else if (event.key === 'Home') {
       event.preventDefault()
-      applySidecarWidth(codexSidecarMinWidth, true)
+      applySidecarWidth(requiredSidecarWidth, true)
     } else if (event.key === 'End') {
       event.preventDefault()
       applySidecarWidth(codexSidecarMaxWidth, true)
@@ -347,7 +354,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
   return (
     <aside
       className="agenthub-codex-sidecar relative flex h-full min-w-[420px] shrink-0 flex-col bg-white text-neutral-950"
-      style={{ width: sidecarWidth }}
+      style={{ width: visibleSidecarWidth }}
     >
       <div
         role="separator"
@@ -355,8 +362,8 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
         aria-label="调整侧边栏宽度"
         aria-orientation="vertical"
         aria-valuemax={clampCodexSidecarWidth(codexSidecarMaxWidth)}
-        aria-valuemin={codexSidecarMinWidth}
-        aria-valuenow={sidecarWidth}
+        aria-valuemin={requiredSidecarWidth}
+        aria-valuenow={visibleSidecarWidth}
         onKeyDown={handleResizeKeyDown}
         onPointerCancel={finishSidecarResize}
         onPointerDown={handleResizePointerDown}
@@ -513,50 +520,8 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
       </div>
 
       <div className="order-3 flex min-h-0 flex-1">
-        <section className="min-w-0 flex-1 overflow-hidden bg-white">
-          <div className="flex h-10 shrink-0 items-center gap-2 px-4 text-sm text-neutral-500">
-            <span className="truncate">{workspace?.name ?? tree?.rootName ?? 'AgentHub'}</span>
-            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate font-medium text-neutral-900">{activeTabLabel}</span>
-            <div className="min-w-0 flex-1" />
-            {notice && (
-              <span className="max-w-[16rem] truncate text-xs text-neutral-400" title={notice}>
-                {notice}
-              </span>
-            )}
-          </div>
-          <div className="agenthub-codex-sidecar-pane h-[calc(100%-2.5rem)] min-h-0 overflow-hidden">
-            {activeTab === 'preview' ? (
-              previewItem ? (
-                <ArtifactPreviewSurface
-                  className="h-full"
-                  item={previewItem}
-                  workspaceId={previewItem.workspaceId ?? workspaceId}
-                />
-              ) : (
-                <CodexEmptyState
-                  icon={<FileText className="h-5 w-5" />}
-                  title="暂无预览"
-                  text="从右侧文件树或消息里的产物卡打开一个文件。"
-                />
-              )
-            ) : activeTab === 'changes' ? (
-              <CodexChangesPane taskCount={taskBoard?.tasks.length ?? 0} />
-            ) : activeTab === 'tasks' ? (
-              <CodexTasksPane taskBoard={taskBoard} />
-            ) : (
-              <CodexWorkspaceLanding
-                projectPath={workspace?.projectPath ?? tree?.projectPath}
-                quickFiles={quickFiles}
-                workspaceName={workspace?.name ?? tree?.rootName ?? '工作区'}
-                onOpenFile={previewWorkspaceFile}
-              />
-            )}
-          </div>
-        </section>
-
-        {activeTab === 'files' && (
-          <aside className="flex w-[286px] shrink-0 flex-col bg-white">
+        {shouldShowFileNavigator && (
+          <aside className="flex w-[240px] shrink-0 flex-col bg-white">
             <div className="flex h-10 shrink-0 items-center gap-2 px-3">
               <button
                 type="button"
@@ -655,6 +620,48 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
             )}
           </aside>
         )}
+
+        <section className="min-w-0 flex-1 overflow-hidden bg-white">
+          <div className="flex h-10 shrink-0 items-center gap-2 px-4 text-sm text-neutral-500">
+            <span className="truncate">{workspace?.name ?? tree?.rootName ?? 'AgentHub'}</span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate font-medium text-neutral-900">{activeTabLabel}</span>
+            <div className="min-w-0 flex-1" />
+            {notice && (
+              <span className="max-w-[16rem] truncate text-xs text-neutral-400" title={notice}>
+                {notice}
+              </span>
+            )}
+          </div>
+          <div className="agenthub-codex-sidecar-pane h-[calc(100%-2.5rem)] min-h-0 overflow-hidden">
+            {activeTab === 'preview' ? (
+              previewItem ? (
+                <ArtifactPreviewSurface
+                  className="h-full"
+                  item={previewItem}
+                  workspaceId={previewItem.workspaceId ?? workspaceId}
+                />
+              ) : (
+                <CodexEmptyState
+                  icon={<FileText className="h-5 w-5" />}
+                  title="暂无预览"
+                  text="从左侧文件树或消息里的产物卡打开一个文件。"
+                />
+              )
+            ) : activeTab === 'changes' ? (
+              <CodexChangesPane taskCount={taskBoard?.tasks.length ?? 0} />
+            ) : activeTab === 'tasks' ? (
+              <CodexTasksPane taskBoard={taskBoard} />
+            ) : (
+              <CodexWorkspaceLanding
+                projectPath={workspace?.projectPath ?? tree?.projectPath}
+                quickFiles={quickFiles}
+                workspaceName={workspace?.name ?? tree?.rootName ?? '工作区'}
+                onOpenFile={previewWorkspaceFile}
+              />
+            )}
+          </div>
+        </section>
       </div>
     </aside>
   )
@@ -968,7 +975,7 @@ function persistCodexSidecarWidth(width: number) {
 
 function clampCodexSidecarWidth(width: number) {
   const viewportWidth = typeof window === 'undefined' ? codexSidecarMaxWidth : window.innerWidth
-  const viewportMax = Math.max(codexSidecarMinWidth, viewportWidth - 360)
+  const viewportMax = Math.max(codexSidecarMinWidth, viewportWidth - codexSidecarReservedMainWidth)
   const maxWidth = Math.min(codexSidecarMaxWidth, viewportMax)
   return Math.min(Math.max(Math.round(width), codexSidecarMinWidth), maxWidth)
 }

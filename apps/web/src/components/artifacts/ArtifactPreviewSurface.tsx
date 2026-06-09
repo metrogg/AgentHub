@@ -596,10 +596,10 @@ const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
 
   return (
     <div className="flex h-full flex-col bg-white">
-      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
+      <div className="flex h-11 shrink-0 items-center gap-2 bg-white px-3 text-xs text-neutral-500">
         <FileText className="h-4 w-4 text-neutral-400" />
         <span className="min-w-0 flex-1 truncate">{fileName}</span>
-        <span className="rounded-md bg-[#F7F7F7] px-2 py-1">{language}</span>
+        <span className="rounded-md bg-white px-2 py-1 text-neutral-500">{language}</span>
         {sourceLoadState === 'loading' && (
           <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-blue-600">
             <Loader2 className="h-3 w-3 animate-spin" />
