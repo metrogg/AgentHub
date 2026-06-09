@@ -1956,12 +1956,12 @@
   .agenthub-docx-host,
   .agenthub-pptx-host {
     min-height: 100%;
-    padding: 1rem;
   }
 
   .agenthub-docx-host {
     display: flex;
     justify-content: center;
+    padding: 1rem;
   }
 
   .agenthub-docx-host .docx-wrapper {
@@ -1986,10 +1986,16 @@
 
   .agenthub-pptx-host {
     display: flex;
+    align-items: stretch;
+    background: #000000;
     justify-content: center;
+    padding: 0.5rem;
   }
 
   .agenthub-pptx-host > div {
+    display: flex;
+    justify-content: center;
+    min-height: 100%;
     width: max-content;
     max-width: 100%;
   }
@@ -1997,6 +2003,10 @@
   .agenthub-pptx-host .pptx-preview-wrapper,
   .agenthub-pptx-host .pptx-preview-slide-wrapper {
     border-radius: 0.75rem;
+  }
+
+  .agenthub-pptx-host .pptx-preview-wrapper {
+    min-height: 100%;
   }
 
   .agenthub-pptx-host canvas,

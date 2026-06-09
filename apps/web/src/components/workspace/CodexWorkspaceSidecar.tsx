@@ -40,6 +40,7 @@ import {
   artifactPreviewEvent,
   enrichPreviewItem,
   extensionFromName,
+  isPptxPreviewItem,
   mimeFromExtension,
   previewFileName,
   requestArtifactPreview,
@@ -54,9 +55,8 @@ export type CodexWorkspaceSidecarTab = 'preview' | 'files' | 'tasks' | 'changes'
 const codexSidecarWidthStorageKey = 'agenthub:codex-workspace-sidecar-width'
 const codexSidecarMinWidth = 420
 const codexSidecarNavigatorMinWidth = 560
+const codexSidecarPresentationMinWidth = 1200
 const codexSidecarDefaultMaxWidth = 780
-const codexSidecarMaxWidth = 1040
-const codexSidecarReservedMainWidth = 760
 
 type CodexWorkspaceSidecarProps = {
   activeTab: CodexWorkspaceSidecarTab
@@ -206,9 +206,12 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
       : []),
   ].slice(0, 4)
   const shouldShowFileNavigator = activeTab === 'files' || (activeTab === 'preview' && Boolean(selectedFile))
-  const requiredSidecarWidth = shouldShowFileNavigator
-    ? Math.min(codexSidecarNavigatorMinWidth, clampCodexSidecarWidth(codexSidecarMaxWidth))
-    : codexSidecarMinWidth
+  const shouldExpandPresentationPreview = activeTab === 'preview' && Boolean(previewItem && isPptxPreviewItem(previewItem))
+  const requiredSidecarWidth = shouldExpandPresentationPreview
+    ? Math.min(codexSidecarPresentationMinWidth, getCodexSidecarMaxWidth())
+    : shouldShowFileNavigator
+      ? Math.min(codexSidecarNavigatorMinWidth, getCodexSidecarMaxWidth())
+      : codexSidecarMinWidth
   const visibleSidecarWidth = Math.max(sidecarWidth, requiredSidecarWidth)
   const quickFiles =
     recentFiles.length > 0
@@ -347,7 +350,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
       applySidecarWidth(requiredSidecarWidth, true)
     } else if (event.key === 'End') {
       event.preventDefault()
-      applySidecarWidth(codexSidecarMaxWidth, true)
+      applySidecarWidth(getCodexSidecarMaxWidth(), true)
     }
   }
 
@@ -361,7 +364,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
         tabIndex={0}
         aria-label="调整侧边栏宽度"
         aria-orientation="vertical"
-        aria-valuemax={clampCodexSidecarWidth(codexSidecarMaxWidth)}
+        aria-valuemax={getCodexSidecarMaxWidth()}
         aria-valuemin={requiredSidecarWidth}
         aria-valuenow={visibleSidecarWidth}
         onKeyDown={handleResizeKeyDown}
@@ -519,7 +522,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
         </div>
       </div>
 
-      <div className="order-3 flex min-h-0 flex-1">
+      <div className="order-3 flex min-h-0 flex-1 flex-row-reverse">
         {shouldShowFileNavigator && (
           <aside className="flex w-[240px] shrink-0 flex-col bg-white">
             <div className="flex h-10 shrink-0 items-center gap-2 px-3">
@@ -645,7 +648,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
                 <CodexEmptyState
                   icon={<FileText className="h-5 w-5" />}
                   title="暂无预览"
-                  text="从左侧文件树或消息里的产物卡打开一个文件。"
+                  text="从右侧文件树或消息里的产物卡打开一个文件。"
                 />
               )
             ) : activeTab === 'changes' ? (
@@ -974,10 +977,13 @@ function persistCodexSidecarWidth(width: number) {
 }
 
 function clampCodexSidecarWidth(width: number) {
-  const viewportWidth = typeof window === 'undefined' ? codexSidecarMaxWidth : window.innerWidth
-  const viewportMax = Math.max(codexSidecarMinWidth, viewportWidth - codexSidecarReservedMainWidth)
-  const maxWidth = Math.min(codexSidecarMaxWidth, viewportMax)
+  const maxWidth = getCodexSidecarMaxWidth()
   return Math.min(Math.max(Math.round(width), codexSidecarMinWidth), maxWidth)
+}
+
+function getCodexSidecarMaxWidth() {
+  if (typeof window === 'undefined') return codexSidecarDefaultMaxWidth
+  return Math.max(codexSidecarMinWidth, window.innerWidth)
 }
 
 function resolveWorkspacePath(path: string, workspacePath?: string | null) {
