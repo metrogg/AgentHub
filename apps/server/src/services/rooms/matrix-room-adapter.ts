@@ -293,36 +293,20 @@ export class MatrixRoomAdapter implements RoomAdapter {
       accessToken: senderIdentity?.accessToken ?? null,
       send: sendMessage,
     })
-    const sequenceRows = await db
-      .select({ nextSequence: sql<number>`coalesce(max(${timelineEvents.sequence}), 0) + 1` })
-      .from(timelineEvents)
-      .where(eq(timelineEvents.roomId, input.roomId))
-    const nextSequence = sequenceRows[0]?.nextSequence ?? 1
-    const [event] = await db
-      .insert(timelineEvents)
-      .values({
-        roomId: input.roomId,
-        providerEventId: input.providerEventId ?? matrixEvent.event_id,
-        senderParticipantId: input.senderParticipantId ?? null,
-        senderType: input.senderType,
-        type: input.type,
-        body: input.body ?? '',
-        metadata: {
-          ...(input.metadata ?? {}),
-          matrix: {
-            ...readMatrixMetadata(input.metadata),
-            eventId: matrixEvent.event_id,
-            roomId: room.providerRoomId,
-            senderUserId: senderIdentity?.userId ?? null,
-            usedParticipantToken: Boolean(senderIdentity?.accessToken),
-          },
+    return this.insertLocalTimelineEvent({
+      ...input,
+      providerEventId: input.providerEventId ?? matrixEvent.event_id,
+      metadata: {
+        ...(input.metadata ?? {}),
+        matrix: {
+          ...readMatrixMetadata(input.metadata),
+          eventId: matrixEvent.event_id,
+          roomId: room.providerRoomId,
+          senderUserId: senderIdentity?.userId ?? null,
+          usedParticipantToken: Boolean(senderIdentity?.accessToken),
         },
-        sequence: nextSequence ?? 1,
-      })
-      .returning()
-    if (!event) throw new Error('Matrix timeline event create failed')
-    await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
-    return event
+      },
+    })
   }
 
   async appendMentionTimelineEvent(input: AppendTimelineEventInput & { mentionParticipantId: string }) {
@@ -438,8 +422,19 @@ export class MatrixRoomAdapter implements RoomAdapter {
         metadata: input.metadata ?? {},
         sequence: nextSequence ?? 1,
       })
+      .onConflictDoNothing({
+        target: [timelineEvents.roomId, timelineEvents.providerEventId],
+      })
       .returning()
-    if (!event) throw new Error('Matrix timeline event import failed')
+    if (!event) {
+      const [existingAfterConflict] = await db
+        .select()
+        .from(timelineEvents)
+        .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, input.providerEventId)))
+        .limit(1)
+      if (existingAfterConflict) return existingAfterConflict
+      throw new Error('Matrix timeline event create failed')
+    }
     await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
     return event
   }

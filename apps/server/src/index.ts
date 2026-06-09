@@ -153,6 +153,23 @@ if (residentManagerAutoStartEnabled && (provider.runtimeType === 'openclaw' || p
     }
   } else {
     logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
+    if (status.running && !status.error) {
+      const timer = setTimeout(() => {
+        void import('./services/rooms/matrix-event-dispatcher')
+          .then(({ matrixRoomEventDispatcher }) =>
+            matrixRoomEventDispatcher.recoverRecentUnhandledManagerMessages({
+              reason: 'server-start-manager-already-active',
+            }),
+          )
+          .catch((error) => {
+            logger.warn(
+              { err: error instanceof Error ? error.message : String(error) },
+              'Failed to recover recent Manager room messages during server startup',
+            )
+          })
+      }, 3000)
+      ;(timer as any).unref?.()
+    }
   }
 } else if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
   logger.info({ runtimeType: provider.runtimeType, autoStart: residentManagerAutoStartEnabled }, 'Resident Manager auto-start is disabled. Use `bash infra/start-hiclaw-lite.sh` to start Manager/Worker externally.')

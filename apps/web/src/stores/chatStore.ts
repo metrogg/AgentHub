@@ -104,7 +104,8 @@ function roomTimelineShouldRefreshResources(
       kind === 'manager.status.pending' ||
       kind === 'manager.status.slow' ||
       kind === 'manager.status.timeout' ||
-      kind === 'manager.dispatch.diagnostic'
+      kind === 'manager.dispatch.diagnostic' ||
+      kind === 'manager.dispatch.timeout'
     )
   })
 }
@@ -112,6 +113,12 @@ function roomTimelineShouldRefreshResources(
 function messageTime(message: Message): number {
   const time = Date.parse(message.createdAt)
   return Number.isFinite(time) ? time : 0
+}
+
+function messageTimelineSequence(message: Message): number | undefined {
+  const metadata = message.metadata ?? {}
+  const roomTimeline = asRecord(metadata.roomTimeline) ?? asRecord(metadata.roomTimelineProjection)
+  return asNumber(roomTimeline?.sequence)
 }
 
 function messageSortPriority(message: Message): number {
@@ -122,6 +129,12 @@ function messageSortPriority(message: Message): number {
 
 function sortMessages(messages: Message[]): Message[] {
   return [...messages].sort((a, b) => {
+    const aSequence = messageTimelineSequence(a)
+    const bSequence = messageTimelineSequence(b)
+    if (aSequence !== undefined && bSequence !== undefined) {
+      const bySequence = aSequence - bSequence
+      if (bySequence !== 0) return bySequence
+    }
     const byTime = messageTime(a) - messageTime(b)
     if (byTime !== 0) return byTime
     const byPriority = messageSortPriority(a) - messageSortPriority(b)
@@ -1703,7 +1716,7 @@ function projectRoomTimelineWsPayload(
   const room = payload.room
   const event = payload.event
   if (!room || !event) return null
-  const sessionId = room.sessionId ?? payload.sessionId ?? fallbackSessionId
+  const sessionId = payload.sessionId ?? room.sessionId ?? fallbackSessionId
   if (!sessionId) return null
   return {
     sessionId,
@@ -2332,6 +2345,7 @@ export const __chatStoreTestHooks = {
   describeRuntimeActivity,
   mergeSessionsWithRunProjection,
   mergeSessionsWithRuntimeProjection,
+  projectRoomTimelineWsPayload,
   reduceRuntimeActivityProjection,
   runtimeActivityDetail,
   runtimeActivityLabel,
@@ -3304,7 +3318,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // it will handle cleanup. If not (sync reply), this timeout clears it.
       window.setTimeout(() => {
         set((s) => {
-          if (s.streamingMessage || s.streamingCodeAgentRun || s.currentSessionId !== sessionId) return {}
+          if (s.streamingMessage || s.streamingCodeAgentRun || s.agentActivity || s.currentSessionId !== sessionId) return {}
           return { agentTyping: false, agentActivity: null }
         })
       }, 3000)
@@ -3627,8 +3641,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
             mergeMessages(messages, projectedMessages),
           )
           if (projectedSessionId === sessionId) {
-            // Clear typing indicator when a visible Manager/Worker reply arrives.
-            // These messages were already filtered (hiddenFromChat, manager.status.* removed).
             const hasVisibleAgentReply = projectedMessages.some((m) => {
               const rt = asRecord(m.metadata?.roomTimeline) ?? asRecord(m.metadata?.roomTimelineProjection)
               const eventType = asString(rt?.eventType)
@@ -3636,6 +3648,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             })
             set((s) => ({
               messages: mergeMessages(s.messages, projectedMessages),
+              // Clear thinking indicator only when actual agent output arrives.
+              // Before that, keep agentTyping true so the indicator stays visible
+              // during the entire processing period (model calls, tool calls, etc.).
               ...(hasVisibleAgentReply && s.agentTyping ? { agentTyping: false, agentActivity: null } : {}),
             }))
           }

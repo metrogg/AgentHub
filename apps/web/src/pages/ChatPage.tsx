@@ -1,9 +1,10 @@
-import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { workspaceNameFromPath } from '@agenthub/shared'
 import {
   ArrowUp,
   AtSign,
+  Blocks,
   Check,
   ChevronDown,
   CircleHelp,
@@ -29,6 +30,10 @@ import {
   SkillCommandPanel,
   Thread,
 } from '../components/assistant-ui/Thread'
+import {
+  CodexWorkspaceSidecar,
+  type CodexWorkspaceSidecarTab,
+} from '../components/workspace/CodexWorkspaceSidecar'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace, type WelcomeQuickPrompt } from '../lib/api'
 import {
   agentLibraryChangeEvent,
@@ -47,6 +52,7 @@ import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
+import { cn } from '../lib/utils'
 
 type WelcomeStarterAction = {
   label: string
@@ -146,6 +152,8 @@ export default function ChatPage() {
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [narrowViewport, setNarrowViewport] = useState(false)
+  const [workspaceSidecarOpen, setWorkspaceSidecarOpen] = useState(false)
+  const [workspaceSidecarTab, setWorkspaceSidecarTab] = useState<CodexWorkspaceSidecarTab>('preview')
   const threadReady = Boolean(sessionId && currentSessionId === sessionId)
   const effectiveSidebarCollapsed = sidebarCollapsed || narrowViewport
 
@@ -197,7 +205,11 @@ export default function ChatPage() {
       <main className="relative min-w-0 flex-1">
         {sessionId && threadReady ? (
           <AgentHubRuntimeProvider key={sessionId}>
-            <Thread key={sessionId} />
+            <Thread
+              key={sessionId}
+              globalSidecarOpen={workspaceSidecarOpen}
+              onToggleGlobalSidecar={() => setWorkspaceSidecarOpen((open) => !open)}
+            />
           </AgentHubRuntimeProvider>
         ) : sessionId ? (
           <ThreadSwitching />
@@ -205,6 +217,15 @@ export default function ChatPage() {
           <Welcome />
         )}
       </main>
+      <CodexWorkspaceSidecar
+        activeTab={workspaceSidecarTab}
+        onClose={() => setWorkspaceSidecarOpen(false)}
+        onSelectTab={(tab) => {
+          setWorkspaceSidecarTab(tab)
+          setWorkspaceSidecarOpen(true)
+        }}
+        open={workspaceSidecarOpen}
+      />
     </div>
   )
 }
@@ -234,6 +255,7 @@ function Welcome() {
   const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(
     null,
   )
+  const [messageScrollTop, setMessageScrollTop] = useState(0)
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false)
   const [mentionRange, setMentionRange] = useState<{
     start: number
@@ -371,7 +393,7 @@ function Welcome() {
 
   function insertSkillReference(skill: SkillSummary) {
     const input = messageInputRef.current
-    const reference = `$${skill.id || skill.name} `
+    const reference = `$${welcomeSkillReferenceKey(skill)} `
     const cursor = input?.selectionStart ?? message.length
     const liveCommand = input ? readSlashCommand(input.value, cursor) : null
     const range = liveCommand ?? skillCommandRange ?? { start: message.length, end: message.length }
@@ -754,42 +776,63 @@ function Welcome() {
                   onPickAgent={insertMentionReference}
                 />
               )}
-              <textarea
-                ref={messageInputRef}
-                value={message}
-                onChange={handleMessageChange}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape' && skillPanelOpen) {
-                    event.preventDefault()
-                    closeSkillPanel()
-                    return
-                  }
-                  if (event.key === 'Escape' && mentionPanelOpen) {
-                    event.preventDefault()
-                    closeMentionPanel()
-                    return
-                  }
-                  if (event.key === 'Escape' && multiAgentPanelOpen) {
-                    event.preventDefault()
-                    setMultiAgentPanelOpen(false)
-                    return
-                  }
-                  if (mentionPanelOpen && event.key === 'Enter') {
-                    event.preventDefault()
-                    return
-                  }
-                  if (skillPanelOpen && event.key === 'Enter') {
-                    event.preventDefault()
-                    return
-                  }
-                  if (sendModeShouldSubmit(sendMode, event)) {
-                    event.preventDefault()
-                    void startThread(message)
-                  }
-                }}
-                className="h-28 w-full resize-none bg-transparent px-3 py-3 text-base leading-6 text-neutral-900 outline-none placeholder:text-neutral-400 sm:h-24"
-                placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
-              />
+              <div className="relative">
+                {message && (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 overflow-hidden px-3 py-3 text-base leading-6 text-neutral-900"
+                  >
+                    <div
+                      className="whitespace-pre-wrap break-words"
+                      style={{ transform: `translateY(-${messageScrollTop}px)` }}
+                    >
+                      {renderWelcomeComposerHighlights(message, libraryAgents, skills)}
+                    </div>
+                  </div>
+                )}
+                <textarea
+                  ref={messageInputRef}
+                  value={message}
+                  onChange={handleMessageChange}
+                  onScroll={(event) => setMessageScrollTop(event.currentTarget.scrollTop)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && skillPanelOpen) {
+                      event.preventDefault()
+                      closeSkillPanel()
+                      return
+                    }
+                    if (event.key === 'Escape' && mentionPanelOpen) {
+                      event.preventDefault()
+                      closeMentionPanel()
+                      return
+                    }
+                    if (event.key === 'Escape' && multiAgentPanelOpen) {
+                      event.preventDefault()
+                      setMultiAgentPanelOpen(false)
+                      return
+                    }
+                    if (mentionPanelOpen && event.key === 'Enter') {
+                      event.preventDefault()
+                      return
+                    }
+                    if (skillPanelOpen && event.key === 'Enter') {
+                      event.preventDefault()
+                      return
+                    }
+                    if (sendModeShouldSubmit(sendMode, event)) {
+                      event.preventDefault()
+                      void startThread(message)
+                    }
+                  }}
+                  className={cn(
+                    'h-28 w-full resize-none bg-transparent px-3 py-3 text-base leading-6 outline-none placeholder:text-neutral-400 sm:h-24',
+                    message
+                      ? 'text-transparent caret-neutral-950 [-webkit-text-fill-color:transparent]'
+                      : 'text-neutral-900',
+                  )}
+                  placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
+                />
+              </div>
               <div className="flex flex-col gap-2 border-t border-neutral-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                   <button
@@ -1099,6 +1142,148 @@ function WelcomeMentionPanel({
       </div>
     </div>
   )
+}
+
+function renderWelcomeComposerHighlights(
+  text: string,
+  agents: SavedAgentConfig[],
+  skills: SkillSummary[],
+) {
+  const tokens = [
+    ...welcomeMentionTokens(text, agents),
+    ...welcomeSkillTokens(text, skills),
+  ].sort((a, b) => (a.index === b.index ? b.length - a.length : a.index - b.index))
+  if (!tokens.length) return text
+
+  const parts: ReactNode[] = []
+  let lastIndex = 0
+
+  for (const token of tokens) {
+    if (token.index < lastIndex) continue
+    if (token.index > lastIndex) parts.push(text.slice(lastIndex, token.index))
+    parts.push(
+      token.kind === 'skill' ? (
+        <WelcomeSkillToken
+          key={`${token.kind}-${token.index}-${token.raw}`}
+          label={token.label}
+          raw={token.raw}
+        />
+      ) : (
+        <span key={`${token.kind}-${token.index}-${token.raw}`} className="font-normal text-[#0969ff]">
+          {token.raw}
+        </span>
+      ),
+    )
+    lastIndex = token.index + token.length
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return parts.length ? parts : text
+}
+
+type WelcomeComposerToken = {
+  index: number
+  kind: 'mention' | 'skill'
+  label: string
+  length: number
+  raw: string
+}
+
+const welcomeComposerTokenBoundary = '(?=$|\\s|[，,。.!！?？:：；;）)\\]】}])'
+
+function welcomeMentionTokens(text: string, agents: SavedAgentConfig[]): WelcomeComposerToken[] {
+  const aliases = welcomeMentionAliases(agents)
+  if (!aliases.length) return []
+  const pattern = new RegExp(
+    `@(${aliases.map((entry) => escapeRegExp(entry.alias)).join('|')})${welcomeComposerTokenBoundary}`,
+    'gi',
+  )
+  return Array.from(text.matchAll(pattern)).map((match) => ({
+    index: match.index ?? 0,
+    kind: 'mention' as const,
+    label: match[1] ?? match[0],
+    length: match[0].length,
+    raw: match[0],
+  }))
+}
+
+function welcomeSkillTokens(text: string, skills: SkillSummary[]): WelcomeComposerToken[] {
+  const entries = welcomeSkillAliases(skills)
+  if (!entries.length) return []
+  const pattern = new RegExp(
+    `([$\\/])(${entries.map((entry) => escapeRegExp(entry.alias)).join('|')})${welcomeComposerTokenBoundary}`,
+    'gi',
+  )
+  const aliasToSkill = new Map(entries.map((entry) => [entry.alias.toLowerCase(), entry.skill]))
+  return Array.from(text.matchAll(pattern)).flatMap((match) => {
+    const alias = match[2] ?? ''
+    const skill = aliasToSkill.get(alias.toLowerCase())
+    if (!skill) return []
+    return {
+      index: match.index ?? 0,
+      kind: 'skill' as const,
+      label: welcomeSkillDisplayLabel(skill),
+      length: match[0].length,
+      raw: match[0],
+    }
+  })
+}
+
+function welcomeMentionAliases(agents: SavedAgentConfig[]) {
+  const deduped = new Set<string>()
+  for (const agent of agents) {
+    for (const alias of [agent.name, agent.role].map((value) => value?.trim()).filter(Boolean)) {
+      deduped.add(alias)
+    }
+  }
+  return Array.from(deduped)
+    .map((alias) => ({ alias }))
+    .sort((a, b) => b.alias.length - a.alias.length)
+}
+
+function welcomeSkillAliases(skills: SkillSummary[]) {
+  const deduped = new Map<string, SkillSummary>()
+  for (const skill of skills) {
+    for (const alias of [skill.id, skill.name].map((value) => value.trim()).filter(Boolean)) {
+      const key = alias.toLowerCase()
+      if (!deduped.has(key)) deduped.set(key, skill)
+    }
+  }
+  return Array.from(deduped.entries())
+    .map(([alias, skill]) => ({ alias, skill }))
+    .sort((a, b) => b.alias.length - a.alias.length)
+}
+
+function welcomeSkillDisplayLabel(skill: SkillSummary) {
+  const raw = skill.name || skill.id
+  if (!raw.includes('-') && !raw.includes('_')) return raw
+  return raw
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
+}
+
+function welcomeSkillReferenceKey(skill: SkillSummary) {
+  const candidates = [skill.name, skill.id]
+    .map((value) => value.trim())
+    .filter((value) => /^[a-z0-9][a-z0-9_-]*$/i.test(value))
+    .sort((a, b) => b.length - a.length)
+  return candidates[0] || skill.id || skill.name
+}
+
+const WelcomeSkillToken = ({ label, raw }: { label: string; raw: string }) => (
+  <span className="relative inline-block max-w-[16rem] align-baseline">
+    <span className="invisible whitespace-pre">{raw}</span>
+    <span className="absolute inset-x-0 top-1/2 inline-flex h-[1.38rem] -translate-y-1/2 items-center gap-1 rounded-md border border-[#cfe0ff] bg-[#eaf2ff] px-1 text-[0.8em] font-semibold leading-none text-[#0b57d0] shadow-[0_1px_0_rgba(9,105,255,0.12)]">
+      <Blocks className="h-3 w-3 shrink-0 text-[#0969ff]" />
+      <span className="truncate">{label}</span>
+    </span>
+  </span>
+)
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function titleFromMessage(message: string) {

@@ -194,7 +194,7 @@ function normalizeArtifact(artifact: Record<string, unknown>): NormalizedArtifac
     sourcePath: stringValue(artifact.sourcePath) ?? null,
     handoffPath: stringValue(artifact.handoffPath) ?? null,
     relativePath,
-    mimeType: stringValue(artifact.mimeType) ?? null,
+    mimeType: stringValue(artifact.mimeType) ?? inferArtifactMimeType(relativePath ?? title),
     size: numberValue(artifact.size) ?? null,
     checksum: stringValue(artifact.checksum) ?? null,
     status: normalizeArtifactStatus(stringValue(artifact.status)) ?? 'registered',
@@ -460,6 +460,29 @@ function artifactBucket() {
 
 function shouldUseS3ObjectStore() {
   return (process.env.AGENTHUB_OBJECT_STORE_PROVIDER ?? '').trim().toLowerCase() === 's3'
+}
+
+function inferArtifactMimeType(pathOrTitle?: string | null) {
+  const ext = extname(pathOrTitle ?? '').toLowerCase()
+  if (ext === '.html' || ext === '.htm') return 'text/html; charset=utf-8'
+  if (ext === '.md' || ext === '.markdown') return 'text/markdown; charset=utf-8'
+  if (ext === '.txt' || ext === '.log') return 'text/plain; charset=utf-8'
+  if (ext === '.json') return 'application/json; charset=utf-8'
+  if (ext === '.jsonl') return 'application/jsonl'
+  if (ext === '.csv') return 'text/csv; charset=utf-8'
+  if (ext === '.svg') return 'image/svg+xml'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.gif') return 'image/gif'
+  if (ext === '.webp') return 'image/webp'
+  if (ext === '.pdf') return 'application/pdf'
+  if (ext === '.doc') return 'application/msword'
+  if (ext === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (ext === '.ppt') return 'application/vnd.ms-powerpoint'
+  if (ext === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  if (ext === '.xls') return 'application/vnd.ms-excel'
+  if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  return null
 }
 
 let cachedS3Client: S3Client | null = null

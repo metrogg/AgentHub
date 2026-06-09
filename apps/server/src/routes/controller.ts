@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono'
 import { and, controllerAuditEvents, db, desc, eq, matrixIdentities } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
+import { questionMarkMojibakeField } from '../lib/text-encoding-guard'
 import { controllerApi } from '../services/controller-plane/controller-api'
 import {
   applyControllerManifest,
@@ -64,6 +65,12 @@ controllerRoutes.get('/audit-events', async (c) => {
 
 controllerRoutes.post('/workers', async (c) => {
   const body = await c.req.json()
+  rejectMojibakeInput({
+    name: body.name,
+    role: body.role,
+    description: body.description,
+    systemPrompt: body.systemPrompt,
+  })
   const result = await controllerApi.createWorker({
     workspaceId: requireP(body, 'workspaceId'),
     name: requireP(body, 'name'),
@@ -474,6 +481,15 @@ controllerRoutes.post('/heartbeat', async (c) => {
 })
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+function rejectMojibakeInput(values: Record<string, unknown>) {
+  const field = questionMarkMojibakeField(values)
+  if (!field) return
+  throw AppError.fromCode(
+    AppErrorCodes.VALIDATION_FAILED,
+    `Request text appears to have been corrupted into question marks. Send JSON as UTF-8 bytes with Content-Type: application/json; charset=utf-8. Malformed field: ${field}`,
+  )
+}
 
 function requireP(body: Record<string, unknown>, key: string): string {
   const val = body[key]

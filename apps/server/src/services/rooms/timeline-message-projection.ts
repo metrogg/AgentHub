@@ -84,10 +84,18 @@ export function projectTimelineMessages(input: {
   )
 
   return projectedMessages.sort((a, b) => {
+    const bySequence = messageTimelineSequence(a) - messageTimelineSequence(b)
+    if (bySequence !== 0) return bySequence
     const byTime = a.createdAt.getTime() - b.createdAt.getTime()
     if (byTime !== 0) return byTime
     return a.id.localeCompare(b.id)
   })
+}
+
+function messageTimelineSequence(message: MessageRow) {
+  const roomTimeline = asRecord(asRecord(message.metadata).roomTimeline)
+  const sequence = asNumber(roomTimeline.sequence)
+  return typeof sequence === 'number' ? sequence : Number.MAX_SAFE_INTEGER
 }
 
 type TimelineProjectionControls = {
@@ -268,6 +276,10 @@ function collapseTimelineStreamMessages(messages: MessageRow[]) {
       output[output.length - 1] = mergeTimelineStreamMessage(previous, message)
       continue
     }
+    if (previous && shouldMergeAdjacentMatrixSnapshot(previous, message)) {
+      output[output.length - 1] = mergeTimelineStreamMessage(previous, message)
+      continue
+    }
     output.push(message)
   }
   return output
@@ -299,6 +311,53 @@ function roomTimelineStreamKey(message: MessageRow) {
     message.senderId
   if (!traceId || !senderParticipantId) return null
   return `${traceId}:${senderParticipantId}`
+}
+
+function shouldMergeAdjacentMatrixSnapshot(base: MessageRow, next: MessageRow) {
+  const baseMetadata = asRecord(base.metadata)
+  const nextMetadata = asRecord(next.metadata)
+  if (asString(baseMetadata.kind) !== 'matrix.sync.imported') return false
+  if (asString(nextMetadata.kind) !== 'matrix.sync.imported') return false
+  if (asString(baseMetadata.actionType) || asString(nextMetadata.actionType)) return false
+
+  const baseRoomTimeline = asRecord(baseMetadata.roomTimeline)
+  const nextRoomTimeline = asRecord(nextMetadata.roomTimeline)
+  const baseEventType = asString(baseRoomTimeline.eventType)
+  const nextEventType = asString(nextRoomTimeline.eventType)
+  if (baseEventType !== nextEventType) return false
+  if (baseEventType !== 'manager.message' && baseEventType !== 'worker.message') return false
+  if (asString(baseRoomTimeline.roomId) !== asString(nextRoomTimeline.roomId)) return false
+
+  const baseSender =
+    asString(baseMetadata.senderParticipantId) ??
+    asString(baseMetadata.senderWorkerInstanceId) ??
+    asString(baseMetadata.senderWorkspaceAgentId) ??
+    base.senderId
+  const nextSender =
+    asString(nextMetadata.senderParticipantId) ??
+    asString(nextMetadata.senderWorkerInstanceId) ??
+    asString(nextMetadata.senderWorkspaceAgentId) ??
+    next.senderId
+  if (!baseSender || baseSender !== nextSender) return false
+
+  const baseSequence = asNumber(baseRoomTimeline.sequence)
+  const nextSequence = asNumber(nextRoomTimeline.sequence)
+  if (
+    typeof baseSequence === 'number' &&
+    typeof nextSequence === 'number' &&
+    (nextSequence <= baseSequence || nextSequence - baseSequence > 3)
+  ) {
+    return false
+  }
+  if (Math.abs(next.createdAt.getTime() - base.createdAt.getTime()) > 15_000) return false
+
+  const baseContent = normalizeMatrixSnapshotContent(base.content)
+  const nextContent = normalizeMatrixSnapshotContent(next.content)
+  return Boolean(
+    baseContent &&
+    nextContent &&
+    (nextContent.startsWith(baseContent) || baseContent.startsWith(nextContent)),
+  )
 }
 
 function mergeTimelineStreamMessage(base: MessageRow, next: MessageRow): MessageRow {
@@ -351,6 +410,12 @@ function mergeTimelineStreamContent(base: string, next: string) {
   if (!next) return base
   if (next.startsWith(base)) return next
   if (base.startsWith(next)) return base
+  const normalizedBase = normalizeMatrixSnapshotContent(base)
+  const normalizedNext = normalizeMatrixSnapshotContent(next)
+  if (normalizedBase && normalizedNext) {
+    if (normalizedNext.startsWith(normalizedBase)) return next.length >= base.length ? next : base
+    if (normalizedBase.startsWith(normalizedNext)) return base.length >= next.length ? base : next
+  }
   return `${base}${next}`
 }
 
