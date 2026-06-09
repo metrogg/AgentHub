@@ -4,6 +4,7 @@ import { prepareSharedTaskDirectory } from './shared-task-directory'
 import { type WorkerRuntimeAgentConfig } from './worker-runtime-resources'
 import { workerController } from './worker-controller'
 import { roomController, roomService } from '../rooms'
+import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
 
 export interface EnsureTaskThreadInput {
   workspaceId: string
@@ -422,8 +423,10 @@ async function ensureTaskThreadRoomTimeline(input: EnsureTaskThreadInput, taskTh
   const events = await roomService.listTimelineEvents({ roomId: room.id, limit: 20 })
   const hasPreparedEvent = events.some((event) => event.metadata?.kind === 'task-thread-prepared')
   if (hasPreparedEvent) return
+  const managerParticipant = await ensureManagerParticipantForRoom(room.id)
   await roomService.appendTimelineEvent({
     roomId: room.id,
+    senderParticipantId: managerParticipant.id,
     senderType: 'manager',
     type: 'task.assigned',
     body: input.agentName

@@ -179,33 +179,55 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   const content = event.content ?? {}
   const body = typeof content.body === 'string' ? content.body : ''
   const msgtype = typeof content.msgtype === 'string' ? content.msgtype : 'm.text'
+
+  // Handle Matrix edit events (m.replace) — OpenClaw uses these for streaming updates.
+  // Instead of importing as a new message, update the original timeline event's body.
+  const relatesTo = content['m.relates_to']
+  if (
+    relatesTo &&
+    typeof relatesTo === 'object' &&
+    !Array.isArray(relatesTo)
+  ) {
+    const rel = relatesTo as Record<string, unknown>
+    if (rel.rel_type === 'm.replace' && typeof rel.event_id === 'string') {
+      const replacedEventId = rel.event_id
+      const [replacedEvent] = await db
+        .select({ id: timelineEvents.id, body: timelineEvents.body })
+        .from(timelineEvents)
+        .where(and(eq(timelineEvents.roomId, roomId), eq(timelineEvents.providerEventId, replacedEventId)))
+        .limit(1)
+      if (replacedEvent) {
+        // Update the original event's body with the new content (streaming accumulation)
+        const newBody = body || replacedEvent.body
+        await db
+          .update(timelineEvents)
+          .set({ body: newBody })
+          .where(eq(timelineEvents.id, replacedEvent.id))
+        return replacedEvent
+      }
+    }
+  }
+
   const sender = event.sender ?? null
   const senderParticipant = sender ? await ensureParticipantForMatrixSender(roomId, sender) : null
   const mentions = parseMatrixMentions(content, body)
   const mentionedParticipantIds = await findMentionedParticipantIds(roomId, mentions)
   const eventType = timelineEventTypeFor(msgtype, senderParticipant?.participantType)
   if (
-    (eventType === 'manager.message' || eventType === 'human.message') &&
+    eventType === 'manager.message' &&
     senderParticipant &&
-    (await isDuplicateRecentMessage({
+    (await isDuplicateManagerReply({
       roomId,
       senderParticipantId: senderParticipant.id,
-      senderType: eventType === 'manager.message' ? 'manager' : 'human',
       body,
       originServerTs: event.origin_server_ts ?? null,
     }))
   ) {
     return null
   }
-  const streamMetadata = await matrixMessageStreamMetadata({
-    roomId,
-    providerEventId: event.event_id,
-    eventType,
-    senderParticipantId: senderParticipant?.id ?? null,
-    sender,
-    body,
-    originServerTs: event.origin_server_ts ?? null,
-  })
+  if (eventType === 'manager.message' && isManagerSkillIntermediateOutput(body)) {
+    return null
+  }
   return roomService.importTimelineEvent({
     roomId,
     providerEventId: event.event_id,
@@ -229,118 +251,9 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   })
 }
 
-async function matrixMessageStreamMetadata(input: {
-  roomId: string
-  providerEventId: string
-  eventType: TimelineEventType
-  senderParticipantId: string | null
-  sender: string | null
-  body: string
-  originServerTs: number | null
-}) {
-  if (input.eventType !== 'manager.message' && input.eventType !== 'worker.message') return {}
-  const [room] = await db
-    .select({ providerRoomId: rooms.providerRoomId })
-    .from(rooms)
-    .where(eq(rooms.id, input.roomId))
-    .limit(1)
-  const sessionKey = matrixMessageSessionKey({
-    providerRoomId: room?.providerRoomId ?? null,
-    eventType: input.eventType,
-    sender: input.sender,
-  })
-  const traceId =
-    (await findRecentMatrixStreamTraceId({
-      roomId: input.roomId,
-      senderParticipantId: input.senderParticipantId,
-      senderType: input.eventType === 'manager.message' ? 'manager' : 'worker',
-      body: input.body,
-      originServerTs: input.originServerTs,
-    })) ??
-    [
-      'matrix',
-      input.eventType,
-      room?.providerRoomId ?? input.roomId,
-      input.senderParticipantId ?? input.sender ?? 'unknown-sender',
-      input.providerEventId,
-    ]
-      .map((part) => encodeURIComponent(part))
-      .join(':')
-
-  return {
-    ...(sessionKey ? { sessionKey } : {}),
-    traceId,
-  }
-}
-
-function matrixMessageSessionKey(input: {
-  providerRoomId: string | null
-  eventType: TimelineEventType
-  sender: string | null
-}) {
-  if (!input.providerRoomId) return null
-  if (input.eventType === 'manager.message') {
-    return `agent:manager:matrix:channel:${input.providerRoomId}`
-  }
-  if (input.eventType === 'worker.message') {
-    return `agent:worker:matrix:channel:${input.providerRoomId}:${input.sender ?? 'unknown-worker'}`
-  }
-  return null
-}
-
-async function findRecentMatrixStreamTraceId(input: {
-  roomId: string
-  senderParticipantId: string | null
-  senderType: 'manager' | 'worker'
-  body: string
-  originServerTs: number | null
-}) {
-  const normalizedIncoming = normalizeStreamBody(input.body)
-  if (!normalizedIncoming || !input.senderParticipantId) return null
-  const recent = await db
-    .select({
-      body: timelineEvents.body,
-      createdAt: timelineEvents.createdAt,
-      metadata: timelineEvents.metadata,
-    })
-    .from(timelineEvents)
-    .where(
-      and(
-        eq(timelineEvents.roomId, input.roomId),
-        eq(timelineEvents.senderParticipantId, input.senderParticipantId),
-        eq(timelineEvents.senderType, input.senderType),
-      ),
-    )
-    .orderBy(desc(timelineEvents.sequence))
-    .limit(12)
-
-  const incomingAt = input.originServerTs ? input.originServerTs : Date.now()
-  for (const event of recent) {
-    if (Math.abs(incomingAt - matrixEventTime(event.metadata, event.createdAt)) > 15_000) continue
-    const normalizedExisting = normalizeStreamBody(event.body)
-    if (!normalizedExisting) continue
-    if (!normalizedIncoming.startsWith(normalizedExisting) && !normalizedExisting.startsWith(normalizedIncoming)) {
-      continue
-    }
-    const metadata = asRecord(event.metadata)
-    const traceId = asString(metadata.traceId)
-    if (traceId) return traceId
-  }
-  return null
-}
-
-function matrixEventTime(metadata: Record<string, unknown> | null | undefined, createdAt: Date) {
-  const matrix = asRecord(metadata?.matrix)
-  const originServerTs = asNumber(matrix.originServerTs)
-  if (typeof originServerTs === 'number') return originServerTs
-  const created = createdAt.getTime()
-  return Number.isFinite(created) ? created : Date.now()
-}
-
-async function isDuplicateRecentMessage(input: {
+async function isDuplicateManagerReply(input: {
   roomId: string
   senderParticipantId: string
-  senderType: 'manager' | 'human'
   body: string
   originServerTs: number | null
 }) {
@@ -358,7 +271,8 @@ async function isDuplicateRecentMessage(input: {
       and(
         eq(timelineEvents.roomId, input.roomId),
         eq(timelineEvents.senderParticipantId, input.senderParticipantId),
-        eq(timelineEvents.senderType, input.senderType),
+        eq(timelineEvents.senderType, 'manager'),
+        eq(timelineEvents.type, 'manager.message'),
       ),
     )
     .orderBy(desc(timelineEvents.sequence))
@@ -380,8 +294,30 @@ function normalizeDedupeBody(body: string) {
   return body.replace(/\s+/g, ' ').trim()
 }
 
-function normalizeStreamBody(body: string) {
-  return normalizeDedupeBody(body).replace(/^[*-]\s+/, '')
+/**
+ * Filter out Manager skill intermediate outputs that are not meaningful user-facing messages.
+ * These are typically tool call names, memory search indicators, or internal state dumps
+ * that OpenClaw sends to the Matrix room during skill execution.
+ */
+function isManagerSkillIntermediateOutput(body: string): boolean {
+  const trimmed = body.trim()
+  if (!trimmed) return true
+
+  // Single word tool call names (e.g. "Barnacing", "Searching", "Thinking")
+  if (/^[A-Z][a-zA-Z]{2,20}$/.test(trimmed)) return true
+
+  // Memory search / file read indicators
+  if (/^Memory Search:/i.test(trimmed)) return true
+  if (/^Read: from .+/i.test(trimmed)) return true
+  if (/^→ Read .+/i.test(trimmed)) return true
+
+  // Skill execution markers
+  if (/^\[?[A-Z][a-z]+:\s*.+\]?$/.test(trimmed)) return true
+
+  // Very short placeholder messages (single emoji + short text)
+  if (/^[\p{Emoji}\s]{0,5}\s*\.{0,3}$/u.test(trimmed)) return true
+
+  return false
 }
 
 async function dispatchImportedEvents(eventIds: string[]) {

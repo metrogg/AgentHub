@@ -89,7 +89,7 @@ function serverHealthOk(port: number) {
       '-e',
       [
         'const http = require("node:http");',
-        'const port = Number(process.argv[1]);',
+        'const port = Number(process.argv[2]);',
         'const req = http.get({ hostname: "127.0.0.1", port, path: "/health", timeout: 350 }, (res) => {',
         '  let body = "";',
         '  res.setEncoding("utf8");',

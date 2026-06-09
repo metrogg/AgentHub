@@ -9,12 +9,14 @@ import {
   runtimeLeases,
   sessions,
   taskThreads,
+  timelineEvents,
   workerInstances,
   workspaceAgents,
   workspaces,
   workspaceTasks,
 } from '@agenthub/db'
 import { TaskStatus } from '@agenthub/shared'
+import { logger } from '../../lib/logger'
 
 import { blackboard, Blackboard } from '../blackboard'
 import { appendHumanInterruptConstraint } from './human-interrupts'
@@ -667,25 +669,45 @@ async function dispatchPreparedTaskRooms(input: {
     })
     await updateTaskThreadStatus(thread.id, 'assigned')
 
-    const assignedEvent = await roomService.appendMentionTimelineEvent({
-      roomId: room.id,
-      mentionParticipantId: workerParticipant.id,
-      senderType: 'manager',
-      type: 'task.assigned',
-      body: `@${workerParticipant.displayName} Manager 正式派发任务：${task.title}\n\n${task.description}`,
-      metadata: {
-        kind: 'manager-loop.dispatch',
-        runId: input.ctx.runId,
-        taskId: task.id,
-        taskThreadId: thread.id,
-        workspaceAgentId,
-        workerInstanceId: thread.workerInstanceId ?? null,
+    // Guard: skip writing another task.assigned if the task room already has one.
+    const existingAssignment = await db
+      .select({ id: timelineEvents.id })
+      .from(timelineEvents)
+      .where(
+        and(
+          eq(timelineEvents.roomId, room.id),
+          eq(timelineEvents.type, 'task.assigned'),
+        ),
+      )
+      .limit(1)
+    let assignedEventId: string | null = existingAssignment[0]?.id ?? null
+    if (assignedEventId) {
+      logger.info(
+        { taskId: task.id, roomId: room.id, existingEventId: assignedEventId },
+        'ManagerLoop skipped duplicate task.assignment in task room',
+      )
+    } else {
+      const assignedEvent = await roomService.appendMentionTimelineEvent({
+        roomId: room.id,
         mentionParticipantId: workerParticipant.id,
-        taskDescription: task.description,
-        coordinationSource: 'matrix-mention',
-        matrixExecutionBus: true,
-      },
-    })
+        senderType: 'manager',
+        type: 'task.assigned',
+        body: `@${workerParticipant.displayName} Manager 正式派发任务：${task.title}\n\n${task.description}`,
+        metadata: {
+          kind: 'manager-loop.dispatch',
+          runId: input.ctx.runId,
+          taskId: task.id,
+          taskThreadId: thread.id,
+          workspaceAgentId,
+          workerInstanceId: thread.workerInstanceId ?? null,
+          mentionParticipantId: workerParticipant.id,
+          taskDescription: task.description,
+          coordinationSource: 'matrix-mention',
+          matrixExecutionBus: true,
+        },
+      })
+      assignedEventId = assignedEvent.id
+    }
 
     await emitRunEvent({
       runId: input.ctx.runId,
@@ -703,7 +725,7 @@ async function dispatchPreparedTaskRooms(input: {
         taskThreadId: thread.id,
         taskThreadStatus: 'assigned',
         taskRoomId: room.id,
-        timelineEventId: assignedEvent.id,
+        timelineEventId: assignedEventId,
         coordinationSource: 'room-timeline',
       },
     })

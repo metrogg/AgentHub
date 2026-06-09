@@ -40,7 +40,7 @@
       ],
       "groups": {
         "*": {
-          "requireMention": true
+          "requireMention": false
         }
       },
       "streaming": "partial",
