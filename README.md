@@ -19,6 +19,14 @@ The current north star is not "one model pretending to be a team." AgentHub is d
 4. The main room shows progress, reports, artifacts, and the final synthesis.
 5. Users can inspect the full worker process instead of only seeing the final answer.
 
+## Preview
+
+![AgentHub home screen](public/img/首页.png)
+
+![AgentHub direct chat](public/img/单聊.png)
+
+![AgentHub workspace preview](public/img/image.png)
+
 ## Highlights
 
 - **Chat-native workspace**: direct agent chats, project group chats, and task sub-rooms.

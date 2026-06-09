@@ -9,9 +9,7 @@ export const serverLogPath = join(serverLogDir, 'agenthub-server.log')
 const fileDestination = createFileDestination()
 export const serverFileLoggingEnabled = Boolean(fileDestination)
 
-const prettyDestination = env.NODE_ENV === 'development'
-  ? pino.transport({ target: 'pino-pretty', options: { colorize: true } })
-  : undefined
+const prettyDestination = createPrettyDestination()
 
 const destinations = [
   prettyDestination ? { stream: prettyDestination } : undefined,
@@ -28,6 +26,15 @@ function createFileDestination() {
   try {
     mkdirSync(serverLogDir, { recursive: true })
     return pino.destination({ dest: serverLogPath, sync: false, mkdir: true })
+  } catch {
+    return undefined
+  }
+}
+
+function createPrettyDestination() {
+  if (env.NODE_ENV !== 'development') return undefined
+  try {
+    return pino.transport({ target: 'pino-pretty', options: { colorize: true } })
   } catch {
     return undefined
   }
