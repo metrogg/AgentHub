@@ -68,6 +68,33 @@ export function defaultNoProjectExecutionRoot() {
   return resolve(agentHubUserCacheRoot(), 'execution')
 }
 
+/**
+ * Workspace-aware data root. When a project workspace is selected,
+ * all AgentHub data lives under {projectPath}/.agenthub/data/ instead
+ * of the system-wide %LOCALAPPDATA%/AgentHub/ directory.
+ */
+export function workspaceDataRoot(projectPath?: string | null) {
+  if (projectPath) {
+    const root = resolve(projectPath, '.agenthub', 'data')
+    mkdirSync(root, { recursive: true })
+    return root
+  }
+  return agentHubUserDataRoot()
+}
+
+/**
+ * Workspace-aware cache root. When a project workspace is selected,
+ * all AgentHub cache/runtime state lives under {projectPath}/.agenthub/cache/.
+ */
+export function workspaceCacheRoot(projectPath?: string | null) {
+  if (projectPath) {
+    const root = resolve(projectPath, '.agenthub', 'cache')
+    mkdirSync(root, { recursive: true })
+    return root
+  }
+  return agentHubUserCacheRoot()
+}
+
 export function safePathSegment(value: string) {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'unknown'
 }

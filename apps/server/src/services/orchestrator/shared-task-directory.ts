@@ -143,16 +143,19 @@ export async function prepareSharedTaskDirectory(
       objectKey: sharedTaskObjectKey(input.taskId, 'meta.json'),
       content: metaText,
       mimeType: 'application/json; charset=utf-8',
+      projectPath,
     }),
     spec: await putSharedObject({
       objectKey: sharedTaskObjectKey(input.taskId, 'spec.md'),
       content: specText,
       mimeType: 'text/markdown; charset=utf-8',
+      projectPath,
     }),
     plan: await putSharedObject({
       objectKey: sharedTaskObjectKey(input.taskId, 'plan.md'),
       content: planText,
       mimeType: 'text/markdown; charset=utf-8',
+      projectPath,
     }),
   }
 
@@ -232,6 +235,7 @@ export async function updateSharedTaskDirectoryStatus(
       objectKey: sharedTaskObjectKey(taskId, 'meta.json'),
       content: metaText,
       mimeType: 'application/json; charset=utf-8',
+      projectPath,
     }),
   }
 
@@ -247,6 +251,7 @@ export async function updateSharedTaskDirectoryStatus(
       objectKey: sharedTaskObjectKey(taskId, 'result.md'),
       content: resultText,
       mimeType: 'text/markdown; charset=utf-8',
+      projectPath,
     })
   }
   return result
