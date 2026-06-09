@@ -17,14 +17,16 @@ import {
   Plus,
   RefreshCw,
   Search,
-  SplitSquareHorizontal,
   X,
 } from 'lucide-react'
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FC,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
 import { ArtifactPreviewSurface } from '../artifacts/ArtifactPreviewSurface'
@@ -48,6 +50,11 @@ import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
 
 export type CodexWorkspaceSidecarTab = 'preview' | 'files' | 'tasks' | 'changes'
+
+const codexSidecarWidthStorageKey = 'agenthub:codex-workspace-sidecar-width'
+const codexSidecarMinWidth = 420
+const codexSidecarDefaultMaxWidth = 780
+const codexSidecarMaxWidth = 1040
 
 type CodexWorkspaceSidecarProps = {
   activeTab: CodexWorkspaceSidecarTab
@@ -75,6 +82,11 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
   const [selectedFile, setSelectedFile] = useState<WorkspaceFileEntry | null>(null)
   const [recentFiles, setRecentFiles] = useState<WorkspaceFileEntry[]>([])
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
+  const [newTabMenuOpen, setNewTabMenuOpen] = useState(false)
+  const [sidecarWidth, setSidecarWidth] = useState(() => readStoredCodexSidecarWidth())
+  const [resizingSidecar, setResizingSidecar] = useState(false)
+  const addressInputRef = useRef<HTMLInputElement>(null)
+  const sidecarWidthRef = useRef(sidecarWidth)
 
   useEffect(() => {
     function handlePreview(event: Event) {
@@ -134,6 +146,35 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
     }
   }, [open, path, refreshToken, workspaceId])
 
+  useEffect(() => {
+    sidecarWidthRef.current = sidecarWidth
+  }, [sidecarWidth])
+
+  useEffect(() => {
+    if (!resizingSidecar || typeof document === 'undefined') return
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    return () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+    }
+  }, [resizingSidecar])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    function handleWindowResize() {
+      setSidecarWidth((value) => {
+        const nextWidth = clampCodexSidecarWidth(value)
+        sidecarWidthRef.current = nextWidth
+        return nextWidth
+      })
+    }
+    window.addEventListener('resize', handleWindowResize)
+    return () => window.removeEventListener('resize', handleWindowResize)
+  }, [])
+
   const items = useMemo(() => sortWorkspaceItems(tree?.items ?? []), [tree?.items])
   const filteredItems = useMemo(() => {
     const keyword = query.trim().toLowerCase()
@@ -145,6 +186,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
   const selectedFilePath = selectedFile
     ? resolveWorkspacePath(selectedFile.path, workspace?.projectPath ?? tree?.projectPath)
     : null
+  const addressValue = activeTab === 'preview' && previewItem?.url ? previewItem.url : `/${path}`
   const previewTitle = previewItem ? previewFileName(previewItem) : selectedFile?.name ?? 'README.md'
   const activeTabLabel =
     activeTab === 'preview'
@@ -178,7 +220,24 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
   }
 
   function openAddress(value: string) {
+    const previewUrl = normalizeWorkspaceSidecarPreviewUrl(value)
+    if (previewUrl) {
+      const item = webPreviewItemFromUrl(previewUrl)
+      setPreviewItem(item)
+      setSelectedFile(null)
+      onSelectTab('preview')
+      requestArtifactPreview(item)
+      return
+    }
     openDirectory(normalizeWorkspaceSidecarAddress(value))
+  }
+
+  function focusAddressBar() {
+    setNewTabMenuOpen(false)
+    window.setTimeout(() => {
+      addressInputRef.current?.focus()
+      addressInputRef.current?.select()
+    }, 0)
   }
 
   function previewWorkspaceFile(file: WorkspaceFileEntry) {
@@ -237,19 +296,93 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
     }
   }
 
+  function applySidecarWidth(value: number, persist = false) {
+    const nextWidth = clampCodexSidecarWidth(value)
+    sidecarWidthRef.current = nextWidth
+    setSidecarWidth(nextWidth)
+    if (persist) persistCodexSidecarWidth(nextWidth)
+  }
+
+  function updateSidecarWidthFromPointer(clientX: number) {
+    if (typeof window === 'undefined') return
+    applySidecarWidth(window.innerWidth - clientX)
+  }
+
+  function handleResizePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    setResizingSidecar(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    updateSidecarWidthFromPointer(event.clientX)
+  }
+
+  function handleResizePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!resizingSidecar || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+    updateSidecarWidthFromPointer(event.clientX)
+  }
+
+  function finishSidecarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    setResizingSidecar(false)
+    persistCodexSidecarWidth(sidecarWidthRef.current)
+  }
+
+  function handleResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      applySidecarWidth(sidecarWidthRef.current + 32, true)
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      applySidecarWidth(sidecarWidthRef.current - 32, true)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      applySidecarWidth(codexSidecarMinWidth, true)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      applySidecarWidth(codexSidecarMaxWidth, true)
+    }
+  }
+
   return (
     <aside
-      className="agenthub-codex-sidecar flex h-full min-w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-[#f7f7f4] text-neutral-950 shadow-[-14px_0_36px_rgba(15,23,42,0.06)]"
-      style={{ width: 'min(780px, 58vw)' }}
+      className="agenthub-codex-sidecar relative flex h-full min-w-[420px] shrink-0 flex-col bg-white text-neutral-950"
+      style={{ width: sidecarWidth }}
     >
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 bg-[#f4f4f1] px-2.5">
+      <div
+        role="separator"
+        tabIndex={0}
+        aria-label="调整侧边栏宽度"
+        aria-orientation="vertical"
+        aria-valuemax={clampCodexSidecarWidth(codexSidecarMaxWidth)}
+        aria-valuemin={codexSidecarMinWidth}
+        aria-valuenow={sidecarWidth}
+        onKeyDown={handleResizeKeyDown}
+        onPointerCancel={finishSidecarResize}
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={finishSidecarResize}
+        className={cn(
+          'group absolute -left-1 top-0 z-50 h-full w-2 cursor-col-resize touch-none outline-none',
+          resizingSidecar && 'bg-blue-500/5',
+        )}
+        title="拖动调整侧边栏宽度"
+      >
+        <span
+          className={cn(
+            'absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-transparent transition group-hover:bg-blue-500 group-focus-visible:bg-blue-500',
+            resizingSidecar && 'bg-blue-500',
+          )}
+        />
+      </div>
+      <div className="order-2 flex h-11 shrink-0 items-center gap-2 bg-white px-2.5">
         <CodexChromeButton label="后退" disabled={!path} onClick={() => openDirectory(parentPath)}>
           <ChevronLeft className="h-4 w-4" />
         </CodexChromeButton>
         <CodexChromeButton label="前进" disabled onClick={() => undefined}>
           <ChevronRight className="h-4 w-4" />
         </CodexChromeButton>
-        <div className="flex h-8 min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-xl border border-neutral-200 bg-white px-2">
+        <div className="mx-auto flex h-8 min-w-[180px] max-w-[560px] flex-[1_1_560px] items-center gap-1 overflow-hidden rounded-xl bg-white px-2">
           <Search className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
           <form
             className="min-w-0 flex-1"
@@ -260,9 +393,10 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
             }}
           >
             <input
+              ref={addressInputRef}
               name="address"
-              defaultValue={`/${path}`}
-              key={path}
+              defaultValue={addressValue}
+              key={addressValue}
               className="h-7 w-full bg-transparent text-sm text-neutral-700 outline-none"
               spellCheck={false}
               aria-label="工作区地址"
@@ -272,20 +406,17 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
         <CodexChromeButton label="刷新" onClick={() => setRefreshToken((value) => value + 1)}>
           <RefreshCw className="h-4 w-4" />
         </CodexChromeButton>
-        <CodexChromeButton label="收起侧边栏" onClick={onClose}>
-          <PanelRightClose className="h-4 w-4" />
-        </CodexChromeButton>
       </div>
 
-      <div className="flex h-11 shrink-0 items-center border-b border-neutral-200 bg-[#fafaf8] px-2.5">
+      <div className="relative order-1 flex h-11 shrink-0 items-center bg-white px-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
           <button
             type="button"
             onClick={() => onSelectTab('files')}
             className={cn(
-              'inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
+              'agenthub-codex-sidecar-tab inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
               activeTab === 'files'
-                ? 'bg-neutral-200 text-neutral-950'
+                ? 'text-neutral-950'
                 : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
             )}
             title={workspace?.projectPath ?? tree?.projectPath ?? workspace?.name ?? '工作区'}
@@ -299,9 +430,9 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
               type="button"
               onClick={() => onSelectTab('preview')}
               className={cn(
-                'inline-flex h-8 max-w-[10rem] shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
+                'agenthub-codex-sidecar-tab inline-flex h-8 max-w-[10rem] shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
                 activeTab === 'preview'
-                  ? 'bg-neutral-200 text-neutral-950'
+                  ? 'text-neutral-950'
                   : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
               )}
               title={tab}
@@ -314,9 +445,9 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
             type="button"
             onClick={() => onSelectTab('changes')}
             className={cn(
-              'inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
+              'agenthub-codex-sidecar-tab inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
               activeTab === 'changes'
-                ? 'bg-neutral-200 text-neutral-950'
+                ? 'text-neutral-950'
                 : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
             )}
           >
@@ -327,9 +458,9 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
             type="button"
             onClick={() => onSelectTab('tasks')}
             className={cn(
-              'inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
+              'agenthub-codex-sidecar-tab inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-2.5 text-sm transition',
               activeTab === 'tasks'
-                ? 'bg-neutral-200 text-neutral-950'
+                ? 'text-neutral-950'
                 : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
             )}
           >
@@ -338,14 +469,36 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => onSelectTab('files')}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+            onClick={() => setNewTabMenuOpen((value) => !value)}
+            className={cn(
+              'agenthub-codex-sidecar-button grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950',
+              newTabMenuOpen && 'text-neutral-950',
+            )}
+            aria-expanded={newTabMenuOpen}
+            aria-haspopup="menu"
             aria-label="新建侧栏标签"
             title="新建侧栏标签"
           >
             <Plus className="h-4 w-4" />
           </button>
         </div>
+        {newTabMenuOpen && (
+          <CodexSidecarNewTabMenu
+            onFocusAddress={focusAddressBar}
+            onOpenChanges={() => {
+              setNewTabMenuOpen(false)
+              onSelectTab('changes')
+            }}
+            onOpenFiles={() => {
+              setNewTabMenuOpen(false)
+              onSelectTab('files')
+            }}
+            onOpenTasks={() => {
+              setNewTabMenuOpen(false)
+              onSelectTab('tasks')
+            }}
+          />
+        )}
         <div className="ml-2 flex shrink-0 items-center gap-1">
           <CodexChromeButton label="弹出预览" onClick={() => setNotice('外部预览入口稍后接入。')}>
             <Maximize2 className="h-4 w-4" />
@@ -353,15 +506,15 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
           <CodexChromeButton label="最小化" onClick={onClose}>
             <Minimize2 className="h-4 w-4" />
           </CodexChromeButton>
-          <CodexChromeButton label="拆分视图" onClick={() => onSelectTab(activeTab === 'files' ? 'preview' : 'files')}>
-            <SplitSquareHorizontal className="h-4 w-4" />
+          <CodexChromeButton label="收起侧边栏" onClick={onClose}>
+            <PanelRightClose className="h-4 w-4" />
           </CodexChromeButton>
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="order-3 flex min-h-0 flex-1">
         <section className="min-w-0 flex-1 overflow-hidden bg-white">
-          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-200 px-4 text-sm text-neutral-500">
+          <div className="flex h-10 shrink-0 items-center gap-2 px-4 text-sm text-neutral-500">
             <span className="truncate">{workspace?.name ?? tree?.rootName ?? 'AgentHub'}</span>
             <ChevronRight className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate font-medium text-neutral-900">{activeTabLabel}</span>
@@ -372,7 +525,7 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
               </span>
             )}
           </div>
-          <div className="h-[calc(100%-2.5rem)] min-h-0 overflow-hidden">
+          <div className="agenthub-codex-sidecar-pane h-[calc(100%-2.5rem)] min-h-0 overflow-hidden">
             {activeTab === 'preview' ? (
               previewItem ? (
                 <ArtifactPreviewSurface
@@ -402,104 +555,106 @@ export const CodexWorkspaceSidecar: FC<CodexWorkspaceSidecarProps> = ({
           </div>
         </section>
 
-        <aside className="flex w-[286px] shrink-0 flex-col border-l border-neutral-200 bg-[#fbfbf9]">
-          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-200 px-3">
-            <button
-              type="button"
-              onClick={() => void openWorkspaceFolder()}
-              className="inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white px-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
-              title="用系统打开工作区"
-            >
-              <FolderOpen className="h-4 w-4 shrink-0 text-blue-600" />
-              打开
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
-            </button>
-            <button
-              type="button"
-              onClick={() => void openSelectedInEditor()}
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-neutral-200 bg-white text-neutral-500 transition hover:bg-neutral-50 hover:text-neutral-950"
-              aria-label="在编辑器打开"
-              title="在编辑器打开"
-            >
-              <ExternalLink className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => void copyPath()}
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-neutral-200 bg-white text-neutral-500 transition hover:bg-neutral-50 hover:text-neutral-950"
-              aria-label="复制路径"
-              title="复制路径"
-            >
-              <Copy className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="shrink-0 border-b border-neutral-200 p-3">
-            <div className="flex h-8 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-2.5">
-              <Search className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="h-full min-w-0 flex-1 bg-transparent text-sm text-neutral-700 outline-none"
-                placeholder="筛选文件..."
-                aria-label="筛选文件"
-              />
-              {query && (
-                <button
-                  type="button"
-                  onClick={() => setQuery('')}
-                  className="grid h-5 w-5 place-items-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
-                  aria-label="清空筛选"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
+        {activeTab === 'files' && (
+          <aside className="flex w-[286px] shrink-0 flex-col bg-white">
+            <div className="flex h-10 shrink-0 items-center gap-2 px-3">
+              <button
+                type="button"
+                onClick={() => void openWorkspaceFolder()}
+                className="inline-flex h-8 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl bg-white px-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
+                title="用系统打开工作区"
+              >
+                <FolderOpen className="h-4 w-4 shrink-0 text-blue-600" />
+                打开
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void openSelectedInEditor()}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-neutral-500 transition hover:bg-neutral-50 hover:text-neutral-950"
+                aria-label="在编辑器打开"
+                title="在编辑器打开"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void copyPath()}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-neutral-500 transition hover:bg-neutral-50 hover:text-neutral-950"
+                aria-label="复制路径"
+                title="复制路径"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
             </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {!workspaceId ? (
-              <CodexEmptyState
-                compact
-                icon={<FolderOpen className="h-5 w-5" />}
-                title="未选择工作区"
-                text="选择工作区后这里会显示文件树。"
-              />
-            ) : loading ? (
-              <CodexEmptyState compact icon={<RefreshCw className="h-5 w-5 animate-spin" />} title="加载中" text="正在读取文件树。" />
-            ) : error ? (
-              <CodexEmptyState compact icon={<FileText className="h-5 w-5" />} title="读取失败" text={error} />
-            ) : (
-              <div className="space-y-0.5">
-                {path && (
-                  <WorkspaceFileRow
-                    icon={<FolderOpen className="h-4 w-4" />}
-                    label=".."
-                    muted
-                    onClick={() => openDirectory(parentPath)}
-                  />
-                )}
-                {filteredItems.map((item) => (
-                  <WorkspaceFileRow
-                    key={item.path}
-                    active={selectedFile?.path === item.path}
-                    icon={workspaceFileIcon(item)}
-                    label={item.name}
-                    meta={item.type === 'file' && item.size !== null ? formatBytes(item.size) : undefined}
-                    onClick={() => (item.type === 'directory' ? openDirectory(item.path) : previewWorkspaceFile(item))}
-                    title={item.path}
-                  />
-                ))}
-                {!filteredItems.length && (
-                  <CodexEmptyState compact icon={<Search className="h-5 w-5" />} title="没有匹配文件" text="换一个筛选词试试。" />
+            <div className="shrink-0 p-3">
+              <div className="flex h-8 items-center gap-2 rounded-xl bg-white px-2.5">
+                <Search className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="h-full min-w-0 flex-1 bg-transparent text-sm text-neutral-700 outline-none"
+                  placeholder="筛选文件..."
+                  aria-label="筛选文件"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery('')}
+                    className="grid h-5 w-5 place-items-center rounded-full text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                    aria-label="清空筛选"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 )}
               </div>
-            )}
-          </div>
-          {tree?.truncated && (
-            <div className="shrink-0 border-t border-neutral-200 px-3 py-2 text-xs text-amber-700">
-              文件较多，已截断显示。
             </div>
-          )}
-        </aside>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {!workspaceId ? (
+                <CodexEmptyState
+                  compact
+                  icon={<FolderOpen className="h-5 w-5" />}
+                  title="未选择工作区"
+                  text="选择工作区后这里会显示文件树。"
+                />
+              ) : loading ? (
+                <CodexEmptyState compact icon={<RefreshCw className="h-5 w-5 animate-spin" />} title="加载中" text="正在读取文件树。" />
+              ) : error ? (
+                <CodexEmptyState compact icon={<FileText className="h-5 w-5" />} title="读取失败" text={error} />
+              ) : (
+                <div className="space-y-0.5">
+                  {path && (
+                    <WorkspaceFileRow
+                      icon={<FolderOpen className="h-4 w-4" />}
+                      label=".."
+                      muted
+                      onClick={() => openDirectory(parentPath)}
+                    />
+                  )}
+                  {filteredItems.map((item) => (
+                    <WorkspaceFileRow
+                      key={item.path}
+                      active={selectedFile?.path === item.path}
+                      icon={workspaceFileIcon(item)}
+                      label={item.name}
+                      meta={item.type === 'file' && item.size !== null ? formatBytes(item.size) : undefined}
+                      onClick={() => (item.type === 'directory' ? openDirectory(item.path) : previewWorkspaceFile(item))}
+                      title={item.path}
+                    />
+                  ))}
+                  {!filteredItems.length && (
+                    <CodexEmptyState compact icon={<Search className="h-5 w-5" />} title="没有匹配文件" text="换一个筛选词试试。" />
+                  )}
+                </div>
+              )}
+            </div>
+            {tree?.truncated && (
+              <div className="shrink-0 px-3 py-2 text-xs text-amber-700">
+                文件较多，已截断显示。
+              </div>
+            )}
+          </aside>
+        )}
       </div>
     </aside>
   )
@@ -515,11 +670,69 @@ const CodexChromeButton: FC<{
     type="button"
     disabled={disabled}
     onClick={onClick}
-    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-neutral-500"
+    className="agenthub-codex-sidecar-button grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-neutral-500"
     aria-label={label}
     title={label}
   >
     {children}
+  </button>
+)
+
+const CodexSidecarNewTabMenu: FC<{
+  onFocusAddress: () => void
+  onOpenChanges: () => void
+  onOpenFiles: () => void
+  onOpenTasks: () => void
+}> = ({ onFocusAddress, onOpenChanges, onOpenFiles, onOpenTasks }) => (
+  <div
+    role="menu"
+    className="agenthub-codex-sidecar-menu absolute right-24 top-10 z-50 w-64 overflow-hidden rounded-xl bg-white py-1.5 text-sm text-neutral-800"
+  >
+    <CodexSidecarMenuItem
+      icon={<FolderOpen className="h-4 w-4" />}
+      label="打开文件树"
+      shortcut="Files"
+      onClick={onOpenFiles}
+    />
+    <CodexSidecarMenuItem
+      icon={<Search className="h-4 w-4" />}
+      label="输入网址或路径"
+      shortcut="URL"
+      onClick={onFocusAddress}
+    />
+    <div className="my-1" />
+    <CodexSidecarMenuItem
+      icon={<GitBranch className="h-4 w-4" />}
+      label="打开 Changes"
+      shortcut="Diff"
+      onClick={onOpenChanges}
+    />
+    <CodexSidecarMenuItem
+      icon={<PanelsRightBottom className="h-4 w-4" />}
+      label="打开 Tasks"
+      shortcut="Run"
+      onClick={onOpenTasks}
+    />
+  </div>
+)
+
+const CodexSidecarMenuItem: FC<{
+  icon: ReactNode
+  label: string
+  onClick: () => void
+  shortcut: string
+}> = ({ icon, label, onClick, shortcut }) => (
+  <button
+    type="button"
+    role="menuitem"
+    onClick={onClick}
+    className="agenthub-codex-sidecar-menu-item flex h-9 w-full items-center gap-2 px-3 text-left transition hover:bg-neutral-100"
+  >
+    <span className="grid h-5 w-5 shrink-0 place-items-center text-neutral-500">{icon}</span>
+    <span className="min-w-0 flex-1 truncate">{label}</span>
+    <span className="shrink-0 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-neutral-400">
+      {shortcut}
+    </span>
   </button>
 )
 
@@ -536,8 +749,8 @@ const WorkspaceFileRow: FC<{
     type="button"
     onClick={onClick}
     className={cn(
-      'group flex min-h-8 w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-sm transition hover:bg-neutral-100',
-      active && 'bg-neutral-100 ring-1 ring-neutral-200',
+      'agenthub-codex-sidecar-row group flex min-h-8 w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-sm transition hover:bg-neutral-100',
+      active && 'text-neutral-950',
       muted ? 'text-neutral-400' : 'text-neutral-800',
     )}
     title={title ?? label}
@@ -562,7 +775,7 @@ const CodexEmptyState: FC<{
       compact ? 'py-8' : 'py-16',
     )}
   >
-    <div className="grid h-10 w-10 place-items-center rounded-2xl border border-neutral-200 bg-white text-neutral-400">
+    <div className="grid h-10 w-10 place-items-center rounded-2xl bg-white text-neutral-400">
       {icon}
     </div>
     <div className="mt-3 text-sm font-semibold text-neutral-950">{title}</div>
@@ -576,10 +789,10 @@ const CodexWorkspaceLanding: FC<{
   quickFiles: WorkspaceFileEntry[]
   workspaceName: string
 }> = ({ onOpenFile, projectPath, quickFiles, workspaceName }) => (
-  <div className="h-full overflow-y-auto bg-[#f8f8f6] p-5">
-    <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+  <div className="h-full overflow-y-auto bg-white p-5">
+    <div className="rounded-2xl bg-white p-4">
       <div className="flex items-start gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-blue-600">
           <FolderOpen className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
@@ -590,7 +803,7 @@ const CodexWorkspaceLanding: FC<{
         </div>
       </div>
     </div>
-    <div className="mt-4 rounded-2xl border border-neutral-200 bg-white p-3">
+    <div className="mt-4 rounded-2xl bg-white p-3">
       <div className="mb-2 flex items-center justify-between px-1">
         <span className="text-xs font-medium uppercase tracking-wide text-neutral-400">
           最近文件
@@ -640,15 +853,15 @@ const CodexTasksPane: FC<{ taskBoard: ReturnType<typeof useChatStore.getState>['
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#f8f8f6] p-4">
+    <div className="h-full overflow-y-auto bg-white p-4">
       <div className="space-y-2">
         {tasks.map((task) => (
-          <div key={task.id} className="rounded-2xl border border-neutral-200 bg-white p-3">
+          <div key={task.id} className="rounded-2xl bg-white p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-950">
                 {task.title}
               </div>
-              <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
+              <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] text-neutral-500">
                 {task.status}
               </span>
             </div>
@@ -710,6 +923,54 @@ function normalizeWorkspaceSidecarAddress(value: string) {
     .split('/')
     .filter((part) => part && part !== '.' && part !== '..')
     .join('/')
+}
+
+function normalizeWorkspaceSidecarPreviewUrl(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('.') || trimmed.includes('\\')) return null
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : /^(localhost|127\.0\.0\.1|\[[\d:a-f]+\]|[\w-]+(?:\.[\w-]+)+)(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
+      ? `http://${trimmed}`
+      : null
+  if (!candidate) return null
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.href
+  } catch {
+    return null
+  }
+}
+
+function webPreviewItemFromUrl(url: string): ArtifactPreviewItem {
+  const parsed = new URL(url)
+  const title = parsed.hostname + (parsed.port ? `:${parsed.port}` : '')
+  return {
+    id: `web-preview-${url}`,
+    kind: 'web',
+    subtitle: parsed.href,
+    title,
+    url,
+  }
+}
+
+function readStoredCodexSidecarWidth() {
+  if (typeof window === 'undefined') return codexSidecarDefaultMaxWidth
+  const stored = Number(window.localStorage.getItem(codexSidecarWidthStorageKey))
+  return clampCodexSidecarWidth(Number.isFinite(stored) ? stored : codexSidecarDefaultMaxWidth)
+}
+
+function persistCodexSidecarWidth(width: number) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(codexSidecarWidthStorageKey, String(clampCodexSidecarWidth(width)))
+}
+
+function clampCodexSidecarWidth(width: number) {
+  const viewportWidth = typeof window === 'undefined' ? codexSidecarMaxWidth : window.innerWidth
+  const viewportMax = Math.max(codexSidecarMinWidth, viewportWidth - 360)
+  const maxWidth = Math.min(codexSidecarMaxWidth, viewportMax)
+  return Math.min(Math.max(Math.round(width), codexSidecarMinWidth), maxWidth)
 }
 
 function resolveWorkspacePath(path: string, workspacePath?: string | null) {
