@@ -23,6 +23,7 @@ import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resource
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { roomController, roomService } from '../rooms'
+import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
 import type { WorkerRuntime } from '../worker-runtime'
 
 // ─── Types ──────────────────────────────────────────────────────────────
@@ -311,8 +312,10 @@ async function prepareAssignedTask(input: {
     dependsOn: input.spec.dependsOnKeys,
     dependencyTaskIds,
   }
+  const groupManagerParticipant = await ensureManagerParticipantForRoom(input.groupRoomId)
   await roomService.appendTimelineEvent({
     roomId: input.groupRoomId,
+    senderParticipantId: groupManagerParticipant.id,
     senderType: 'manager',
     type: 'task.assigned',
     body: input.spec.action.message ?? '',
@@ -329,10 +332,12 @@ async function prepareAssignedTask(input: {
       taskDescription: input.spec.taskDescription,
     })
   let mentionEventId: string | null = null
+  const managerParticipant = await ensureManagerParticipantForRoom(taskRoom.id)
   if (taskRoomWorkerParticipant) {
     const mentionEvent = await roomService.appendMentionTimelineEvent({
       roomId: taskRoom.id,
       mentionParticipantId: taskRoomWorkerParticipant.id,
+      senderParticipantId: managerParticipant.id,
       senderType: 'manager',
       type: 'task.assigned',
       body: taskRoomAssignmentBody,
@@ -348,19 +353,7 @@ async function prepareAssignedTask(input: {
   } else {
     await roomService.appendTimelineEvent({
       roomId: taskRoom.id,
-      senderType: 'system',
-      type: 'system',
-      body: `任务房间缺少 ${input.spec.worker.name} 的 Worker participant，无法写入 Matrix @mention；已降级为普通派发事件。`,
-      metadata: {
-        kind: 'manager.assign.mention-missing',
-        runId: input.run.runId,
-        taskId: task.id,
-        taskRoomId: taskRoom.id,
-        targetWorkerId: input.spec.worker.id,
-      },
-    })
-    await roomService.appendTimelineEvent({
-      roomId: taskRoom.id,
+      senderParticipantId: managerParticipant.id,
       senderType: 'manager',
       type: 'task.assigned',
       body: taskRoomAssignmentBody,
