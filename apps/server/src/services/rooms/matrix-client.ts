@@ -1,5 +1,16 @@
 import { randomUUID } from 'node:crypto'
 
+const matrixEventMetadataKey = 'org.agenthub.metadata'
+// Matrix homeservers validate the full PDU, not just the client request body.
+// Keep content comfortably below 64KB so server-added event fields still fit.
+const matrixSafeEventBytes = 48_000
+const matrixTextBodyBudgetBytes = 36_000
+const matrixMentionBodyBudgetBytes = 20_000
+const matrixCompactMetadataBudgetBytes = 10_000
+const matrixTruncationNotice =
+  '\n\n[AgentHub: Matrix event was truncated; full content is preserved in the local AgentHub timeline.]'
+const matrixTextEncoder = new TextEncoder()
+
 export interface MatrixClientOptions {
   homeserverUrl: string
   serverName: string
@@ -256,11 +267,11 @@ export class MatrixClient {
       {
         method: 'PUT',
         accessToken: auth.accessToken,
-        body: {
+        body: fitMatrixMessageContent({
           msgtype: 'm.text',
           body,
-          'org.agenthub.metadata': metadata,
-        },
+          [matrixEventMetadataKey]: metadata,
+        }),
       },
     )
   }
@@ -278,22 +289,23 @@ export class MatrixClient {
     const txId = `agenthub-${randomUUID()}`
     const linkLabel = input.mentionDisplayName || input.mentionUserId
     const mentionHtml = `<a href="https://matrix.to/#/${escapeHtml(input.mentionUserId)}">${escapeHtml(linkLabel)}</a>`
-    const visibleBody = `@${linkLabel.replace(/^@/, '')} ${input.body}`
+    const mentionBody = truncateUtf8(input.body, matrixMentionBodyBudgetBytes)
+    const visibleBody = `@${linkLabel.replace(/^@/, '')} ${mentionBody}`
     return this.request<{ event_id: string }>(
       `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${encodeURIComponent(txId)}`,
       {
         method: 'PUT',
         accessToken: auth.accessToken,
-        body: {
+        body: fitMatrixMessageContent({
           msgtype: 'm.text',
           body: visibleBody,
           format: 'org.matrix.custom.html',
-          formatted_body: `${mentionHtml} ${escapeHtml(input.body)}`,
+          formatted_body: `${mentionHtml} ${escapeHtml(mentionBody)}`,
           'm.mentions': {
             user_ids: [input.mentionUserId],
           },
-          'org.agenthub.metadata': input.metadata ?? {},
-        },
+          [matrixEventMetadataKey]: input.metadata ?? {},
+        }),
       },
     )
   }
@@ -439,6 +451,160 @@ function fileNameFromContentDisposition(value: string | null) {
   if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1])
   const asciiMatch = value.match(/filename="?([^";]+)"?/i)
   return asciiMatch?.[1] ?? null
+}
+
+function fitMatrixMessageContent(content: Record<string, unknown>) {
+  if (jsonByteLength(content) <= matrixSafeEventBytes) return content
+
+  const body = readString(content.body)
+  const formattedBody = readString(content.formatted_body)
+  const metadata = readRecord(content[matrixEventMetadataKey])
+  const compactMetadata = compactMatrixMetadata(metadata, {
+    originalBodyBytes: body ? utf8ByteLength(body) : 0,
+    originalFormattedBodyBytes: formattedBody ? utf8ByteLength(formattedBody) : 0,
+    originalMetadataBytes: jsonByteLength(metadata),
+  })
+
+  const next: Record<string, unknown> = {
+    ...content,
+    [matrixEventMetadataKey]: compactMetadata,
+  }
+
+  const initialBodyBudget = formattedBody ? matrixMentionBodyBudgetBytes : matrixTextBodyBudgetBytes
+  if (body) next.body = truncateUtf8(body, initialBodyBudget)
+  if (formattedBody) next.formatted_body = truncateUtf8(formattedBody, matrixMentionBodyBudgetBytes)
+  if (jsonByteLength(next) <= matrixSafeEventBytes) return next
+
+  for (const budget of [16_000, 8_000, 4_000, 2_000]) {
+    if (body) next.body = truncateUtf8(body, formattedBody ? Math.floor(budget / 2) : budget)
+    if (formattedBody) next.formatted_body = truncateUtf8(formattedBody, Math.floor(budget / 2))
+    if (jsonByteLength(next) <= matrixSafeEventBytes) return next
+  }
+
+  delete next.format
+  delete next.formatted_body
+  if (body) next.body = truncateUtf8(body, 2_000)
+  next[matrixEventMetadataKey] = {
+    matrixPayloadTruncated: true,
+    originalBodyBytes: body ? utf8ByteLength(body) : 0,
+    originalFormattedBodyBytes: formattedBody ? utf8ByteLength(formattedBody) : 0,
+    originalMetadataBytes: jsonByteLength(metadata),
+  }
+  return next
+}
+
+function compactMatrixMetadata(
+  metadata: Record<string, unknown>,
+  truncation: {
+    originalBodyBytes: number
+    originalFormattedBodyBytes: number
+    originalMetadataBytes: number
+  },
+) {
+  const compact: Record<string, unknown> = {}
+  const keepKeys = new Set([
+    'kind',
+    'type',
+    'status',
+    'source',
+    'senderType',
+    'eventType',
+    'senderParticipantId',
+    'sentAsMatrixUserId',
+    'mentionParticipantId',
+    'mentionUserId',
+    'workspaceId',
+    'workspaceAgentId',
+    'workerInstanceId',
+    'orchestratorRunId',
+    'orchestratorTaskId',
+    'taskThreadId',
+    'taskId',
+    'runId',
+    'traceId',
+    'messageId',
+    'sourceMessageId',
+    'sourceEventId',
+    'clarificationId',
+    'clarificationQuestion',
+    'control',
+  ])
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!keepKeys.has(key)) continue
+    const compactValue = compactMatrixMetadataValue(value)
+    if (compactValue !== undefined) compact[key] = compactValue
+  }
+
+  compact.matrixPayloadTruncated = {
+    ...truncation,
+    fullContentLocation: 'local-agenthub-timeline',
+  }
+
+  if (jsonByteLength(compact) <= matrixCompactMetadataBudgetBytes) return compact
+
+  for (const [key, value] of Object.entries(compact)) {
+    if (typeof value === 'string') compact[key] = truncateUtf8(value, 256, '')
+  }
+  if (jsonByteLength(compact) <= matrixCompactMetadataBudgetBytes) return compact
+
+  return {
+    kind: compact.kind,
+    type: compact.type,
+    senderType: compact.senderType,
+    eventType: compact.eventType,
+    senderParticipantId: compact.senderParticipantId,
+    traceId: compact.traceId,
+    matrixPayloadTruncated: compact.matrixPayloadTruncated,
+  }
+}
+
+function compactMatrixMetadataValue(value: unknown): unknown {
+  if (value === null) return null
+  if (typeof value === 'string') return truncateUtf8(value, 512, '')
+  if (typeof value === 'number' || typeof value === 'boolean') return value
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, 20)
+      .map(compactMatrixMetadataValue)
+      .filter((item) => item !== undefined)
+    return items.length ? items : undefined
+  }
+  return undefined
+}
+
+function truncateUtf8(value: string, maxBytes: number, notice = matrixTruncationNotice) {
+  if (utf8ByteLength(value) <= maxBytes) return value
+  const noticeBytes = utf8ByteLength(notice)
+  const targetBytes = Math.max(0, maxBytes - noticeBytes)
+  const chars = Array.from(value)
+  let low = 0
+  let high = chars.length
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    if (utf8ByteLength(chars.slice(0, mid).join('')) <= targetBytes) {
+      low = mid
+    } else {
+      high = mid - 1
+    }
+  }
+  return `${chars.slice(0, low).join('')}${notice}`
+}
+
+function jsonByteLength(value: unknown) {
+  return utf8ByteLength(JSON.stringify(value) ?? '')
+}
+
+function utf8ByteLength(value: string) {
+  return matrixTextEncoder.encode(value).length
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' ? value : ''
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
 function escapeHtml(value: string) {

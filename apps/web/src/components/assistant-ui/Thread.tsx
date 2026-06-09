@@ -142,6 +142,7 @@ import {
   workspaceSubtitle,
 } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
+import { normalizePptxPreviewDom } from '../../lib/pptxPreviewFixups'
 import {
   getCachedCodeAgentRunMetadata,
   type ThreadCodeAgentRunData,
@@ -6984,7 +6985,7 @@ const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }
     if (!scrollEl) return
 
     const updateWidth = () => {
-      const nextWidth = Math.max(320, Math.min(1120, Math.floor(scrollEl.clientWidth - 32)))
+      const nextWidth = Math.max(320, Math.floor(scrollEl.clientWidth - 16))
       setRenderWidth((current) => (Math.abs(current - nextWidth) > 24 ? nextWidth : current))
     }
 
@@ -7012,10 +7013,11 @@ const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }
       ])
       if (cancelled) return
       const width = Math.max(320, Math.floor(renderWidth))
-      const height = Math.round(width * 0.5625)
-      const nextPreviewer = init(hostContainer, { height, mode: 'list', width })
+      const nextPreviewer = init(hostContainer, { mode: 'list', width })
       previewer = nextPreviewer
       await nextPreviewer.preview(data)
+      if (cancelled) return
+      normalizePptxPreviewDom(hostContainer, nextPreviewer)
       if (!cancelled) setStatus('ready')
     }
 

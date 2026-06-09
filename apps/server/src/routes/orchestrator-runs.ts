@@ -1465,6 +1465,14 @@ function buildRuntimeActivitySnapshot(input: {
   const taskBoardSnapshot = input.taskBoardSnapshot
   const sessionId = taskBoardSnapshot?.sessionId ?? null
 
+  if (isTerminalTaskBoardSnapshotStatus(taskBoardSnapshot?.status)) {
+    return {
+      agentTyping: false,
+      agentActivity: null,
+      source: 'task-board',
+    }
+  }
+
   if (taskBoardSnapshot?.tasks?.length) {
     const runningTask = taskBoardSnapshot.tasks.find((task) => task.status === 'running')
     if (runningTask && sessionId) {
@@ -1520,6 +1528,10 @@ function buildRuntimeActivitySnapshot(input: {
     agentActivity: null,
     source: 'none',
   }
+}
+
+function isTerminalTaskBoardSnapshotStatus(status: unknown) {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
 }
 
 function deriveRuntimeActivityFromAgUiEvents(

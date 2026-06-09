@@ -114,7 +114,7 @@ const wsProxyTarget = resolveWsProxyTarget()
 
 export default defineConfig({
   plugins: [react()],
-  publicDir: path.resolve(__dirname, '../../public'),
+  publicDir: path.resolve(__dirname, 'public'),
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

@@ -1171,6 +1171,8 @@ function runtimeActivityFromSnapshot(input: {
   serverRuntimeActivity?: OrchestratorRunListItem['runtimeActivitySnapshot']
 }): RuntimeActivityProjection {
   const { taskBoard, agUiEvents, serverRuntimeActivity } = input
+  if (isTerminalTaskBoardStatus(taskBoard.status)) return clearRuntimeActivity()
+
   if (serverRuntimeActivity) {
     return {
       agentTyping: serverRuntimeActivity.agentTyping,
@@ -2763,6 +2765,10 @@ function applyAgUiEventToState(
     }
   }
 
+  if (nextTaskBoard && isTerminalTaskBoardStatus(nextTaskBoard.status)) {
+    runtimeActivity = clearRuntimeActivity()
+  }
+
   const reprojected =
     nextTaskBoard && nextTaskBoard !== state.taskBoard
       ? reprojectRunResourcesIntoUi(
@@ -2801,6 +2807,10 @@ function applyAgUiEventToState(
   }
 
   return state
+}
+
+function isTerminalTaskBoardStatus(status: NonNullable<ChatState['taskBoard']>['status'] | null | undefined) {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
 }
 
 interface ChatState {
