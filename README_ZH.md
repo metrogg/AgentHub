@@ -1,130 +1,173 @@
 # AgentHub
 
-> 一个本地优先的 AI 工作台，用聊天、房间、任务和产物来协调多个真实 Coding Agent。
+> 开放、本地优先的多 Coding Agent 工作台，用群聊、任务房间、真实运行时和产物库组织 AI 团队协作。
 
-[![状态](https://img.shields.io/badge/status-alpha-orange)](#路线图)
-[![运行时](https://img.shields.io/badge/runtime-Bun-black)](https://bun.sh)
-[![前端](https://img.shields.io/badge/frontend-React%20%2B%20Vite-61dafb)](https://vite.dev)
-[![许可证](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Local First](https://img.shields.io/badge/local--first-AgentHub-111827)](#本地启动)
+[![Matrix](https://img.shields.io/badge/room-Matrix-0f766e)](#运行模型)
+[![Runtime](https://img.shields.io/badge/runtime-HiClaw--lite-2563eb)](#运行模型)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-[English](README.md) · [安全策略](SECURITY.md) · [项目文档](docs/)
+[主 README](README.md) · [安全策略](SECURITY.md) · [工程文档](docs/) · [Agent 指南](AGENTS.md)
 
-AgentHub 正在从 IM 式多 Agent 协作原型，演进为一个接近 Coze / Kimi 风格的开源 AI 工作平台。产品外壳保持 AgentHub 自己的聊天式工作区体验，底层方向是轻量版 HiClaw open kernel：Matrix Room 作为协作事实源，Manager 常驻运行，Worker 真实执行，产物进入共享存储。
+AgentHub 是一个面向真实执行的 AI 工作平台。它借鉴 Coze / Kimi 的工作台体验，用 IM 式产品外壳承载多 Agent 协作；底层采用 HiClaw-lite Open Kernel：Matrix Room 是协作事实源，Manager 是常驻协调者，Worker 是真实运行实体，产物进入可追踪的共享存储。
 
-它的目标不是“一个模型假装多人协作”，而是下面这条真实链路：
+它不是“一个模型假装很多人在说话”，也不是固定模板驱动的任务流水线。AgentHub 的核心是一个可观察、可打断、可接力的协作闭环：用户提出目标，Manager 组织团队，Worker 在各自房间里执行，主群聊呈现进度、汇报、产物和最终综合结果。
 
-1. 用户从群聊或 Agent 私聊发起目标。
-2. Manager / Orchestrator 理解目标，并决定回复、追问、补员、派活或总结。
-3. Worker 在自己的房间和工作目录里真实执行。
-4. 主群聊展示进度、汇报、产物和最终综合结果。
-5. 用户可以进入任务子对话查看完整执行过程。
+## 产品形态
 
-## 主要特性
+AgentHub 的第一屏是工作台，不是营销页。用户可以从一个空间、一个群聊、一个 Agent 私聊或一个历史产物继续工作。
 
-- **聊天式工作区**：Agent 私聊、项目群聊、任务子对话。
-- **常驻 Manager Runtime**：OpenClaw Manager 是当前主要协调器路径。
-- **Matrix-first 通信层**：Room、timeline、participant、mention 是内部协作事实源。
-- **真实 Coding Worker**：OpenClaw resident Worker，以及 Codex CLI、Claude Code、OpenCode、Gemini CLI bridge。
-- **任务与产物可见**：任务房间、运行状态、进度事件、生成文件、预览和 artifact 记录。
-- **本地优先存储**：默认使用本地 filesystem SharedStorage，并按 S3-compatible object key 语义设计。
-- **Controller Plane**：Manager skills 和后续 CLI/API 通过统一控制面操作真实资源。
-- **开发体验简单**：Bun、Hono、React、Vite、Drizzle、SQLite，Docker Compose 启动本地 Matrix / MinIO。
+![AgentHub 首页](public/img/首页.png)
 
-## 当前状态
+在 AgentHub 中，聊天不是简单输入框，而是协作现场：
 
-AgentHub 仍处于 alpha 快速开发阶段。API、数据库 schema、runtime contract、workspace/storage 格式都还会调整。旧会话、旧任务、旧数据库行和旧 workspace 数据不是当前架构约束，必要时可以清库重建。
+- **群聊**承载目标、讨论、安排、任务状态、成员汇报和最终复盘。
+- **Agent 私聊**用于和单个专家长期对话，保持上下文和工作区绑定。
+- **任务子对话**记录某个 Worker 的完整执行过程，包含接单、进度、澄清、失败、重试和产物。
+- **产物预览**把生成文件、网页、报告和共享任务目录变成可检查的工作资产。
 
-适合用来探索：
+![AgentHub 单聊](public/img/单聊.png)
 
-- 本地优先多 Coding Agent 协作，
-- Matrix-backed Agent Room，
-- OpenClaw 风格常驻 Manager / Worker，
-- 任务子对话和产物交接，
-- Coze 风格 AI 工作台的开源产品壳。
+![AgentHub 产物预览](public/img/image.png)
 
-## 架构概览
+## 设计理念
+
+### 1. 协作事实来自 Room
+
+Human、Manager、Worker 都是 Room participant。消息、mention、文件、审批、澄清和进度都进入 timeline。前端从 Room timeline 和资源状态投影 UI，而不是依赖一份难以审计的聊天缓存。
+
+### 2. Manager 是协调者，不是一次性 Planner
+
+Manager / Orchestrator 像团队负责人一样观察 Room、理解目标、追问信息、提出补员、派发任务、处理打断并做最终复盘。任务拆解只是 Manager 可调用的能力之一，不是系统主脑。
+
+### 3. Worker 是真实运行实体
+
+Worker 有身份、状态、模型、技能、工作目录、RuntimeLease、Room membership 和 heartbeat。OpenClaw resident Worker、Codex CLI、Claude Code、OpenCode、Gemini CLI 都通过统一 contract 暴露给 Controller 和 Manager。
+
+### 4. 产物是一等资源
+
+代码、网页、文档、图片、报告和中间交接文件都进入 ArtifactStore / SharedStorage。产物引用使用 S3-compatible object key 语义，本地 filesystem 是默认实现，MinIO/S3 是同一语义下的可切换适配器。
+
+### 5. 本地优先，团队可托管
+
+AgentHub 默认在本机运行，适合个人开发者和本地项目工作流。通信、存储、运行时和模型网关都按可替换 adapter 设计，可以连接真实 Matrix homeserver、MinIO/S3、Docker resident runtime 和 OpenAI-compatible gateway。
+
+## 核心体验
 
 ```text
-Human
-  -> AgentHub Web
-  -> AgentHub Server / Controller API
-  -> RoomService + Matrix adapter
-  -> Matrix homeserver / Tuwunel
-  -> OpenClaw Manager
-  -> Controller Plane
-  -> Worker runtime / task room
-  -> ArtifactStore / SharedStorage
-  -> UI projections
+用户在群聊提出目标
+  -> Manager 观察上下文并决定回复、追问、补员或派活
+  -> Controller Plane 创建 Run / Task / TaskRoom / RuntimeLease
+  -> Worker 在任务房间接单并执行
+  -> 过程事件、澄清、产物和结果写回 Room timeline
+  -> 主群聊展示进度、成员汇报、产物卡和最终复盘
 ```
 
-### 分层
+用户可以随时进入某个任务子对话，看见 Worker 做了什么、卡在哪里、产物从哪里来。复杂任务不再是黑盒的一句“完成了”，而是一条能被检查和继续协作的执行轨迹。
+
+## 产品模块
+
+| 模块 | 作用 |
+| --- | --- |
+| Space | 组织项目、团队成员、Agent、任务和资产 |
+| Agent Chat | 与单个专家 Agent 建立长期私聊 |
+| Agent Group | 在群聊中组织 Manager、Worker 和用户协作 |
+| Task Room | 保存单个 Worker 的任务上下文、过程和输出 |
+| Task Center | 汇总 Run、Task、状态、依赖、重试和人工介入 |
+| Asset Center | 管理生成产物、共享文件、预览和交付记录 |
+| Expert / Skill Center | 管理 Agent 配置、角色背景、技能包、MCP 和工具权限 |
+| Eval / Trace | 检查运行事件、模型调用、资源状态和失败原因 |
+
+## 运行模型
+
+```text
+AgentHub Web / Desktop
+  -> AgentHub Server
+  -> Controller API
+  -> RoomService + Matrix Adapter
+  -> Matrix Homeserver / Tuwunel
+  -> OpenClaw Manager
+  -> Worker Runtime
+  -> ArtifactStore / SharedStorage
+  -> UI Projection
+```
+
+### 分层职责
 
 | 层 | 职责 |
 | --- | --- |
-| 产品外壳 | 群聊、私聊、任务子对话、任务看板、产物卡 |
-| 编排层 | Manager / Orchestrator、controller actions、run、任务分配、最终复盘 |
+| 产品交互层 | IM 群聊、Agent 私聊、任务子对话、任务看板、产物卡 |
+| 编排层 | Manager、Controller actions、Run、Task、RuntimeLease、最终复盘 |
 | 通信层 | Matrix Room、timeline、participant、mention、file event |
-| 协议投影层 | AG-UI 和从 Room/resource event 到前端 UI 的投影 |
-| 执行层 | OpenClaw Manager、OpenClaw resident Worker、Codex CLI、Claude Code、OpenCode、Gemini CLI |
-| 能力层 | MCP、Skills、Rules、shell、文件、浏览器、模型网关 |
-| 存储层 | SQLite 资源索引、本地文件对象存储、可选 MinIO/S3-compatible adapter |
+| 协议投影层 | AG-UI、Room timeline projection、资源状态 projection |
+| 执行层 | OpenClaw Manager、OpenClaw Worker、Codex CLI、Claude Code、OpenCode、Gemini CLI |
+| 能力层 | MCP、Skills、Rules、shell、文件系统、浏览器、模型网关 |
+| 存储层 | SQLite 资源索引、本地 SharedStorage、MinIO/S3-compatible object store |
 
-## 目录结构
+## 仓库结构
 
 ```text
 apps/
   server/       Hono/Bun API、Room、Manager runtime、Worker runtime、Controller Plane
-  web/          React/Vite Web 应用
+  web/          React/Vite Web 工作台
   desktop/      Tauri 桌面壳
-  Android/      Android 实验
+  Android/      Android 客户端
 packages/
   db/           Drizzle schema、migration、SQLite 访问
   shared/       共享 schema、常量和类型
 infra/
   docker-compose.hiclaw-lite.yml
+  start-hiclaw-lite.sh
+  stop-hiclaw-lite.sh
   openclaw-runtime/
-docs/           产品、架构、迁移文档
-tests/          bun:test 集成测试和投影测试
+docs/           产品、架构、运行时和工程说明
+tests/          bun:test 集成测试、投影测试和边界测试
 scripts/        开发进程脚本
 ```
 
-## 快速开始
+## 本地启动
 
-### 前置依赖
+### 依赖
 
 - [Bun](https://bun.sh) >= 1.1.0
-- Node.js 可从 PATH 调用
-- 推荐安装 Docker Desktop，用于本地 Matrix / MinIO
-- 可选本地 Agent CLI：Codex CLI、Claude Code、OpenCode、Gemini CLI
+- Node.js，可在 PATH 中调用
+- Docker Desktop，用于本地 Tuwunel / MinIO
+- 可选 Coding Agent CLI：Codex CLI、Claude Code、OpenCode、Gemini CLI
 
 ### 安装
 
 ```bash
 bun install
-```
-
-### 配置
-
-```bash
 cp .env.example .env
 ```
 
-至少检查：
+至少检查这些配置：
 
-- `DATABASE_URL`
-- `LLM_PROVIDER`、`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`
-- `AGENTHUB_ROOM_PROVIDER=matrix`
-- `AGENTHUB_MATRIX_HOMESERVER_URL`
-- `AGENTHUB_MATRIX_SERVER_NAME`
-- `AGENTHUB_MATRIX_REGISTRATION_TOKEN`
-
-### 启动本地基础设施
-
-```bash
-bun run infra:up
+```text
+DATABASE_URL
+LLM_PROVIDER
+LLM_API_KEY
+LLM_BASE_URL
+LLM_MODEL
+AGENTHUB_ROOM_PROVIDER=matrix
+AGENTHUB_MATRIX_HOMESERVER_URL
+AGENTHUB_MATRIX_SERVER_NAME
+AGENTHUB_MATRIX_REGISTRATION_TOKEN
 ```
 
-这会启动 `infra/docker-compose.hiclaw-lite.yml` 中定义的本地基础设施，包括 Matrix 使用的 Tuwunel 和用于 S3-compatible 存储实验的 MinIO。
+### 启动 HiClaw-lite 基础设施
+
+```bash
+bash infra/start-hiclaw-lite.sh
+```
+
+这个脚本负责准备本地 Matrix / MinIO / OpenClaw runtime 所需环境，并输出关键端口、健康状态和诊断信息。
+
+停止基础设施：
+
+```bash
+bash infra/stop-hiclaw-lite.sh
+```
 
 ### 启动 AgentHub
 
@@ -132,15 +175,9 @@ bun run infra:up
 bun run dev
 ```
 
-开发脚本会：
+开发脚本会执行数据库迁移、启动 server、选择可用 Web 端口、写入 `.agenthub-port`，并在配置允许时启动 resident Manager。
 
-- 执行数据库迁移，
-- 启动 server，
-- 从 `5644-5700` 自动选择可用 web 端口，
-- 把真实 server 端口写入 `.agenthub-port`，
-- 在配置允许时自动启动 resident Manager。
-
-通常打开：
+打开终端输出中的 Web 地址，通常是：
 
 ```text
 http://127.0.0.1:5644/
@@ -150,109 +187,86 @@ http://127.0.0.1:5644/
 
 ```bash
 bun run dev              # server + web
-bun run dev:stop         # 停止旧 AgentHub dev 进程
-bun run dev:server       # 只启动 server
-bun run dev:web          # 只启动 web
-bun run dev:desktop      # 启动桌面壳
+bun run dev:stop         # 停止 AgentHub dev 进程
+bun run dev:server       # server only
+bun run dev:web          # web only
+bun run dev:desktop      # desktop shell
 
-bun run infra:up         # 启动 Tuwunel + MinIO
+bash infra/start-hiclaw-lite.sh
+bash infra/stop-hiclaw-lite.sh
+
+bun run infra:up         # Docker Compose 启动 Tuwunel + MinIO
 bun run infra:down       # 停止本地基础设施
 bun run infra:logs       # 查看基础设施日志
 
-bun run typecheck        # 全仓类型检查
+bun run typecheck
 bun --filter @agenthub/server typecheck
 bun --filter @agenthub/web typecheck
-bun test                 # 运行测试
+bun test
 ```
 
-## Runtime 模型
+## 配置
 
-### Manager
-
-OpenClaw Manager 是当前 Manager / Team Leader 的主要 runtime。AgentHub 会在本地用户数据目录下生成 Manager contract，并同步 OpenClaw config、skills、registries、rooms、state 和 heartbeat 文件。
-
-Manager 模型选择顺序：
-
-1. 显式 Manager runtime 环境变量覆盖；
-2. `Manager / Team Leader` Agent 绑定的模型；
-3. 内部默认模型或当前启用模型。
-
-如果模型来自模型目录，AgentHub 会先解析成供应商真实 `modelId`，再写入 `openclaw.json`。
-
-### Worker
-
-Worker 可以是：
-
-- OpenClaw resident Worker；
-- Codex CLI bridge；
-- Claude Code bridge；
-- OpenCode bridge；
-- Gemini CLI bridge。
-
-Worker 会收到 Room 上下文、任务契约、隔离 workdir、RuntimeLease、sandbox 环境变量和 shared storage 引用。
-
-## 配置说明
-
-重要环境变量：
-
-| 变量 | 用途 |
+| 变量 | 作用 |
 | --- | --- |
-| `PORT` | Server 端口，默认 `8000` |
+| `PORT` | AgentHub Server 端口，默认 `8000` |
 | `DATABASE_URL` | SQLite 数据库路径 |
-| `AGENTHUB_ROOM_PROVIDER` | 产品/开发路径应使用 `matrix` |
+| `LLM_PROVIDER` | 内部模型提供方 |
+| `LLM_API_KEY` | 模型网关密钥 |
+| `LLM_BASE_URL` | OpenAI-compatible 网关地址 |
+| `LLM_MODEL` | 内部默认模型 |
+| `AGENTHUB_ROOM_PROVIDER` | Room provider，产品路径使用 `matrix` |
 | `AGENTHUB_MATRIX_HOMESERVER_URL` | Matrix homeserver URL |
-| `AGENTHUB_MATRIX_SERVER_NAME` | Matrix server name，通常是 `agenthub.local` |
-| `AGENTHUB_OBJECT_STORE_PROVIDER` | 本地 filesystem 或 S3-compatible object storage |
-| `AGENTHUB_CONTAINER_RUNTIME` | 设置为 `docker` 时启用 Docker-backed Manager / Worker |
-| `AGENTHUB_MANAGER_BACKEND` | 覆盖 Manager backend |
-| `AGENTHUB_WORKER_BACKEND` | 覆盖 Worker backend |
+| `AGENTHUB_MATRIX_SERVER_NAME` | Matrix server name，默认 `agenthub.local` |
+| `AGENTHUB_MATRIX_REGISTRATION_TOKEN` | 本地 Matrix 注册 token |
+| `AGENTHUB_OBJECT_STORE_PROVIDER` | 本地 filesystem 或 S3-compatible object store |
+| `AGENTHUB_CONTAINER_RUNTIME` | 设为 `docker` 时启用 Docker resident runtime |
+| `AGENTHUB_MANAGER_BACKEND` | Manager backend 覆盖 |
+| `AGENTHUB_WORKER_BACKEND` | Worker backend 覆盖 |
 | `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | Code Agent 执行超时 |
-| `AGENTHUB_SANDBOX_PROVIDER` | `local-workdir` 或可选 Docker sandbox |
+| `AGENTHUB_SANDBOX_PROVIDER` | `local-workdir` 或 Docker sandbox |
 
-完整列表见 `.env.example`。
+完整配置见 [.env.example](.env.example)。
 
-## 文档
+## Runtime Contract
 
-入口文档：
+AgentHub 为 Manager / Worker 生成统一运行时契约：
 
-- [AGENTS.md](AGENTS.md)：AI Coding Agent 的权威工程说明。
-- [docs/](docs/)：产品、架构和迁移文档。
-- [infra/](infra/)：本地 Matrix / MinIO / OpenClaw runtime 基础设施。
-- [SECURITY.md](SECURITY.md)：漏洞报告和本地安全边界说明。
+```text
+SOUL.md
+AGENTS.md
+TOOLS.md
+skills/
+state.json
+rooms.json
+workers-registry.json
+teams-registry.json
+runtime.json
+runtime-manifest.json
+heartbeat
+workspace
+logs
+```
 
-部分历史文档可能包含已废弃的 DAG-first、模板优先或本地伪通信路径。若有冲突，以 `AGENTS.md`、本 README 和当前代码为准。
+这套 contract 让不同运行时基座可以暴露一致能力：身份、Room、模型、技能、工作目录、共享任务契约、健康状态和 Controller reconcile。
 
-## 路线图
+## 工程文档
 
-近期：
-
-- 稳定 Matrix room 投影和 runtime 诊断；
-- 改进 Manager / Worker 生命周期恢复；
-- 强化 ArtifactStore 和 shared storage；
-- 优化任务子对话、运行历史和产物资产库；
-- 改进模型/runtime 配置体验。
-
-中期：
-
-- Space / Task Center / Asset Center / Expert Center；
-- Eval / Trace 页面；
-- 长运行 Coding / Deploy 工作流；
-- 更完整的 resident Worker 支持；
-- 可选 MinIO/S3 生产 adapter。
-
-长期：
-
-- 成为一个 Coze 风格的开源 AI 工作台，服务本地和团队托管的 Coding Agent 协作。
+- [AGENTS.md](AGENTS.md)：AI Coding Agent 的权威工程约束。
+- [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)：文档索引和口径来源。
+- [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)：HiClaw-lite 内核设计。
+- [docs/使用指南.md](docs/使用指南.md)：产品使用说明。
+- [SECURITY.md](SECURITY.md)：安全边界和漏洞报告。
 
 ## 贡献
 
-仓库仍在快速变化。修改 runtime、room、task 或 artifact 行为前：
+修改 runtime、Room、task、artifact 或 Controller 行为前，请先读 [AGENTS.md](AGENTS.md)。核心原则：
 
-1. 阅读 `AGENTS.md`。
-2. 确认自己正在修改哪一层。
-3. 优先使用 Room timeline 和资源状态，不要恢复旧 message cache 主路径。
-4. 保持 Manager / Worker runtime 边界清晰。
-5. 为投影、生命周期和失败可见性添加聚焦测试。
+1. 先确认改动所在层级。
+2. 以 Room timeline 和资源状态为事实源。
+3. 保持 Manager / Worker runtime 边界清晰。
+4. 不恢复旧 DAG-first、模板优先或本地伪通信路径。
+5. 为投影、生命周期、失败可见性和边界条件补测试。
 
 建议检查：
 
@@ -263,8 +277,18 @@ bun test
 
 ## 安全
 
-不要提交密钥、模型 key、Matrix access token、本地 CLI auth 文件、生成的 workspace 或 runtime 日志。漏洞报告和本地安全假设见 [SECURITY.md](SECURITY.md)。
+AgentHub 可以运行本地 CLI、读写工作区、访问 Matrix token、模型密钥和生成产物。不要提交：
 
-## 许可证
+- `.env`
+- 模型 provider key
+- Matrix access token
+- 本地 CLI auth 文件
+- 数据库文件
+- 生成 workspace
+- runtime 日志和含密钥的诊断输出
+
+运行不可信提示词、仓库或生成代码时，请使用一次性工作区、受限模型密钥和更强的 sandbox。
+
+## License
 
 AgentHub 使用 [MIT License](LICENSE)。
