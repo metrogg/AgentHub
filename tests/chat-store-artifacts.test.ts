@@ -608,6 +608,130 @@ describe('chat store artifact snapshot projection', () => {
     })
   })
 
+  test('completed task board suppresses stale server runtime activity', () => {
+    const taskBoard = {
+      runId: 'run-1',
+      title: 'Demo',
+      goal: 'Goal',
+      collaborationMode: 'pipeline',
+      sessionId: 'group-1',
+      status: 'completed',
+      phases: [],
+      tasks: [
+        {
+          id: 'task-1',
+          phaseId: 'implementation',
+          title: 'Build page',
+          description: 'Implement the page',
+          agentId: 'agent-1',
+          agentName: 'Builder',
+          status: 'done',
+          dependencies: [],
+        },
+      ],
+    } as any
+
+    const projection = __chatStoreTestHooks.runtimeActivityFromSnapshot({
+      taskBoard,
+      agUiEvents: [
+        {
+          type: 'CUSTOM',
+          name: 'agenthub.manager.status',
+          value: {
+            status: 'thinking',
+            action: 'planning',
+            actorAgentId: 'orch-1',
+            actorName: 'Orchestrator',
+          },
+        },
+      ],
+      serverRuntimeActivity: {
+        agentTyping: true,
+        agentActivity: {
+          sessionId: 'group-1',
+          agentId: 'orch-1',
+          agentName: 'Orchestrator',
+          phase: 'thinking',
+          startedAt: null,
+        },
+        source: 'ag-ui',
+      },
+    })
+
+    expect(projection.agentTyping).toBe(false)
+    expect(projection.agentActivity).toBeNull()
+  })
+
+  test('completed task board ignores late manager thinking events', () => {
+    const initialState = {
+      sessions: [],
+      currentSession: null,
+      currentWorkspace: null,
+      currentWorkspaceAgents: [],
+      currentWorkspaceWorkers: [],
+      currentSessionId: 'group-1',
+      messages: [],
+      streamingMessage: null,
+      streamingCodeAgentRun: null,
+      pendingAttachments: [],
+      safetyMode: 'ask',
+      loadingSessions: false,
+      loadingMessages: false,
+      agentTyping: false,
+      agentActivity: null,
+      replyingToMessageId: null,
+      replyingToMessage: null,
+      sessionsBootstrapped: true,
+      taskBoard: {
+        runId: 'run-1',
+        title: 'Demo',
+        goal: 'Goal',
+        collaborationMode: 'pipeline',
+        sessionId: 'group-1',
+        status: 'completed',
+        phases: [],
+        tasks: [
+          {
+            id: 'task-1',
+            phaseId: 'implementation',
+            title: 'Build page',
+            description: 'Implement the page',
+            agentId: 'agent-1',
+            agentName: 'Builder',
+            status: 'done',
+            dependencies: [],
+            childSessionId: 'child-1',
+            artifacts: [],
+          },
+        ],
+      },
+      previewUrl: null,
+      previewFileName: null,
+      selectedAgentTab: null,
+      agentTabs: [],
+    } as any
+
+    const nextState = __chatStoreTestHooks.applyAgUiEventToState(
+      initialState,
+      {
+        type: 'CUSTOM',
+        name: 'agenthub.manager.status',
+        runId: 'run-1',
+        threadId: 'group-1',
+        value: {
+          status: 'thinking',
+          action: 'planning',
+          actorAgentId: 'orch-1',
+          actorName: 'Orchestrator',
+        },
+      },
+      'group-1',
+    )
+
+    expect(nextState.agentTyping).toBe(false)
+    expect(nextState.agentActivity).toBeNull()
+  })
+
   test('session refresh preserves orchestrator task threads projected from the current task board', () => {
     const sessions = [
       session({

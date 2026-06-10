@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">AgentHub 架构图</title>
+  <desc id="desc">展示 AgentHub 从 Web 工作台到 Room-first 通信、Manager 调度、Worker 执行和 ArtifactStore 交付的架构。</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7f7f5; }
+      .panel { fill: #ffffff; stroke: #d9d9d2; stroke-width: 1.5; }
+      .box { fill: #ffffff; stroke: #171717; stroke-width: 1.5; }
+      .soft { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.2; }
+      .accent { fill: #111827; stroke: #111827; }
+      .green { fill: #ecfdf5; stroke: #059669; stroke-width: 1.2; }
+      .blue { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.2; }
+      .amber { fill: #fffbeb; stroke: #d97706; stroke-width: 1.2; }
+      .purple { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 1.2; }
+      .title { font: 700 28px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #171717; }
+      .label { font: 600 17px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #171717; }
+      .small { font: 13px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #525252; }
+      .white { fill: #ffffff; }
+      .arrow { stroke: #171717; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .mutedArrow { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#mutedArrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#171717" />
+    </marker>
+    <marker id="mutedArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="760" />
+  <text class="title" x="60" y="58">AgentHub：Room-first 多 Agent 协作架构</text>
+  <text class="small" x="60" y="84">用户目标进入群聊，Manager 负责协调，Worker 在任务房间真实执行，产物通过 ArtifactStore 汇总回主群聊。</text>
+
+  <rect class="panel" x="48" y="116" width="246" height="542" rx="18" />
+  <text class="label" x="76" y="154">产品交互层</text>
+  <rect class="box" x="78" y="188" width="186" height="70" rx="12" />
+  <text class="label" x="111" y="216">AgentHub Web</text>
+  <text class="small" x="103" y="240">ChatPage / Thread</text>
+  <rect class="soft" x="78" y="300" width="186" height="70" rx="12" />
+  <text class="label" x="118" y="328">SessionList</text>
+  <text class="small" x="107" y="352">群聊 / 私聊 / 子对话</text>
+  <rect class="soft" x="78" y="412" width="186" height="70" rx="12" />
+  <text class="label" x="120" y="440">chatStore</text>
+  <text class="small" x="99" y="464">timeline 投影状态</text>
+
+  <rect class="panel" x="344" y="116" width="270" height="542" rx="18" />
+  <text class="label" x="372" y="154">Room-first 通信层</text>
+  <rect class="green" x="382" y="188" width="194" height="70" rx="12" />
+  <text class="label" x="408" y="216">messages.ts</text>
+  <text class="small" x="414" y="240">ChatIngress</text>
+  <rect class="green" x="382" y="300" width="194" height="78" rx="12" />
+  <text class="label" x="397" y="328">RoomService</text>
+  <text class="small" x="407" y="352">Room / timeline</text>
+  <rect class="green" x="382" y="420" width="194" height="78" rx="12" />
+  <text class="label" x="390" y="448">Matrix Adapter</text>
+  <text class="small" x="421" y="472">Tuwunel / sync</text>
+  <rect class="soft" x="382" y="540" width="194" height="70" rx="12" />
+  <text class="label" x="407" y="568">SQLite Index</text>
+  <text class="small" x="417" y="592">timeline_events</text>
+
+  <rect class="panel" x="664" y="116" width="270" height="542" rx="18" />
+  <text class="label" x="692" y="154">编排控制层</text>
+  <rect class="blue" x="702" y="188" width="194" height="78" rx="12" />
+  <text class="label" x="704" y="216">MatrixEventDispatcher</text>
+  <text class="small" x="734" y="240">路由 Manager / Worker</text>
+  <rect class="blue" x="702" y="310" width="194" height="78" rx="12" />
+  <text class="label" x="739" y="338">ManagerLoop</text>
+  <text class="small" x="734" y="362">Observe → Think → Act</text>
+  <rect class="blue" x="702" y="432" width="194" height="78" rx="12" />
+  <text class="label" x="742" y="460">RunController</text>
+  <text class="small" x="724" y="484">Run / Task 生命周期</text>
+  <rect class="blue" x="702" y="554" width="194" height="70" rx="12" />
+  <text class="label" x="740" y="582">ControllerApi</text>
+  <text class="small" x="722" y="606">Member / Room / Task</text>
+
+  <rect class="panel" x="984" y="116" width="248" height="542" rx="18" />
+  <text class="label" x="1012" y="154">执行与交付层</text>
+  <rect class="amber" x="1014" y="188" width="188" height="78" rx="12" />
+  <text class="label" x="1031" y="216">WorkerRuntime</text>
+  <text class="small" x="1034" y="240">Codex / Claude / OpenCode</text>
+  <rect class="amber" x="1014" y="310" width="188" height="78" rx="12" />
+  <text class="label" x="1027" y="338">RuntimeLease</text>
+  <text class="small" x="1041" y="362">隔离 HOME / cache</text>
+  <rect class="purple" x="1014" y="432" width="188" height="78" rx="12" />
+  <text class="label" x="1031" y="460">Task Workdir</text>
+  <text class="small" x="1039" y="484">spec / plan / result</text>
+  <rect class="purple" x="1014" y="554" width="188" height="70" rx="12" />
+  <text class="label" x="1032" y="582">ArtifactStore</text>
+  <text class="small" x="1036" y="606">产物卡 / 文件预览</text>
+
+  <path class="arrow" d="M264 223 C305 223, 335 223, 382 223" />
+  <path class="arrow" d="M576 339 C624 339, 650 227, 702 227" />
+  <path class="arrow" d="M896 227 C944 227, 966 227, 1014 227" />
+  <path class="arrow" d="M896 349 C944 349, 966 349, 1014 349" />
+  <path class="arrow" d="M896 471 C944 471, 966 471, 1014 471" />
+  <path class="arrow" d="M1108 554 C1108 526, 1108 518, 1108 510" />
+  <path class="mutedArrow" d="M1014 589 C890 700, 335 700, 171 482" />
+  <path class="mutedArrow" d="M479 498 C568 612, 690 615, 702 589" />
+  <path class="mutedArrow" d="M799 510 C799 530, 799 536, 799 554" />
+
+  <rect class="accent" x="60" y="690" width="1160" height="38" rx="12" />
+  <text class="small white" x="80" y="714">核心闭环：用户目标 → Room timeline → Manager 决策 → Worker 执行 → ArtifactStore 交付 → 前端任务看板与最终汇总</text>
+</svg>

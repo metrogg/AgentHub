@@ -17,7 +17,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -25,6 +25,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "installer-assets/agenthub-installer.ico",
+        "uninstallerIcon": "installer-assets/agenthub-installer.ico",
+        "headerImage": "installer-assets/nsis-header.bmp",
+        "sidebarImage": "installer-assets/nsis-sidebar.bmp",
+        "uninstallerHeaderImage": "installer-assets/nsis-header.bmp",
+        "installMode": "currentUser"
+      }
+    },
     "resources": [
       "resources/web-dist",
       "resources/binaries/agenthub-server.exe"

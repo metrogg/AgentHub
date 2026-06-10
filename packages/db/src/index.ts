@@ -33,6 +33,8 @@ export type DB = typeof db
 export const migrationsPath = resolve(PROJECT_ROOT, 'packages/db/drizzle')
 
 function ensureLegacySchema(database: Database) {
+  ensureCoreSchema(database)
+
   ensureColumn(
     database,
     'sessions',
@@ -181,6 +183,26 @@ function ensureLegacySchema(database: Database) {
   ensureColumn(
     database,
     'workspace_agents',
+    'description',
+    "ALTER TABLE workspace_agents ADD COLUMN description text DEFAULT '' NOT NULL",
+  )
+  ensureColumn(database, 'workspace_agents', 'avatar', 'ALTER TABLE workspace_agents ADD COLUMN avatar text')
+  ensureColumn(database, 'workspace_agents', 'model_id', 'ALTER TABLE workspace_agents ADD COLUMN model_id text')
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'runtime_type',
+    "ALTER TABLE workspace_agents ADD COLUMN runtime_type text DEFAULT 'code-agent' NOT NULL",
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'code_agent_type',
+    'ALTER TABLE workspace_agents ADD COLUMN code_agent_type text',
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
     'role_type',
     "ALTER TABLE workspace_agents ADD COLUMN role_type text DEFAULT 'custom' NOT NULL",
   )
@@ -237,6 +259,26 @@ function ensureLegacySchema(database: Database) {
       "UPDATE workspace_agents SET sandbox_policy = 'workspace-write' WHERE sandbox_policy = 'read-only'",
     )
   }
+
+  ensureTable(
+    database,
+    'workspace_agent_relations',
+    `CREATE TABLE workspace_agent_relations (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      source_agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      target_agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      relation_type TEXT NOT NULL,
+      note TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(
+    database,
+    'workspace_agent_relations_unique',
+    'CREATE UNIQUE INDEX workspace_agent_relations_unique ON workspace_agent_relations(workspace_id, source_agent_id, target_agent_id, relation_type)',
+  )
 
   ensureTable(
     database,
@@ -406,6 +448,25 @@ function ensureLegacySchema(database: Database) {
     'CREATE INDEX task_threads_workspace_id_idx ON task_threads(workspace_id)',
   )
 
+  ensureTable(
+    database,
+    'orchestrator_run_events',
+    `CREATE TABLE orchestrator_run_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      run_id TEXT NOT NULL REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      group_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      task_id TEXT,
+      thread_id TEXT REFERENCES task_threads(id) ON DELETE SET NULL,
+      worker_instance_id TEXT,
+      agent_id TEXT,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      severity TEXT NOT NULL DEFAULT 'info',
+      sequence INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
   ensureColumn(
     database,
     'orchestrator_run_events',
@@ -712,6 +773,283 @@ function ensureLegacySchema(database: Database) {
     database,
     'controller_audit_events_created_at_idx',
     'CREATE INDEX controller_audit_events_created_at_idx ON controller_audit_events(created_at)',
+  )
+}
+
+function ensureCoreSchema(database: Database) {
+  ensureTable(
+    database,
+    'users',
+    `CREATE TABLE users (
+      id TEXT PRIMARY KEY NOT NULL,
+      email TEXT NOT NULL,
+      username TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      avatar_url TEXT,
+      role TEXT NOT NULL DEFAULT 'user',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(database, 'users_email_unique', 'CREATE UNIQUE INDEX users_email_unique ON users(email)')
+
+  ensureTable(
+    database,
+    'agents',
+    `CREATE TABLE agents (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      description TEXT,
+      avatar TEXT,
+      capabilities TEXT DEFAULT '[]',
+      config TEXT,
+      enabled INTEGER NOT NULL DEFAULT true,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+
+  ensureTable(
+    database,
+    'settings',
+    `CREATE TABLE settings (
+      id TEXT PRIMARY KEY NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(database, 'settings_key_unique', 'CREATE UNIQUE INDEX settings_key_unique ON settings(key)')
+
+  ensureTable(
+    database,
+    'workspaces',
+    `CREATE TABLE workspaces (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      goal TEXT NOT NULL DEFAULT '',
+      project_path TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+
+  ensureTable(
+    database,
+    'workspace_agents',
+    `CREATE TABLE workspace_agents (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL,
+      role_type TEXT NOT NULL DEFAULT 'custom',
+      description TEXT NOT NULL DEFAULT '',
+      avatar TEXT,
+      system_prompt TEXT NOT NULL DEFAULT '',
+      role_profile TEXT,
+      color TEXT NOT NULL DEFAULT '#6366f1',
+      model_id TEXT,
+      runtime_type TEXT NOT NULL DEFAULT 'code-agent',
+      code_agent_type TEXT,
+      capability_tags TEXT NOT NULL DEFAULT '[]',
+      skill_ids TEXT NOT NULL DEFAULT '[]',
+      tool_permissions TEXT NOT NULL DEFAULT '[]',
+      sandbox_policy TEXT NOT NULL DEFAULT 'workspace-write',
+      context_policy TEXT NOT NULL DEFAULT 'workspace-aware',
+      auto_invoke INTEGER NOT NULL DEFAULT true,
+      approval_required INTEGER NOT NULL DEFAULT true,
+      order_idx INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(
+    database,
+    'workspace_agents_workspace_id_idx',
+    'CREATE INDEX workspace_agents_workspace_id_idx ON workspace_agents(workspace_id)',
+  )
+
+  ensureTable(
+    database,
+    'sessions',
+    `CREATE TABLE sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      title TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'direct',
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+      workspace_agent_id TEXT REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      metadata TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(database, 'sessions_workspace_id_idx', 'CREATE INDEX sessions_workspace_id_idx ON sessions(workspace_id)')
+  ensureIndex(
+    database,
+    'sessions_workspace_agent_id_idx',
+    'CREATE INDEX sessions_workspace_agent_id_idx ON sessions(workspace_agent_id)',
+  )
+
+  ensureTable(
+    database,
+    'messages',
+    `CREATE TABLE messages (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      sender_id TEXT NOT NULL,
+      sender_type TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'text',
+      content TEXT NOT NULL,
+      metadata TEXT,
+      is_pinned INTEGER NOT NULL DEFAULT 0,
+      reply_to_message_id TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+
+  ensureTable(
+    database,
+    'session_members',
+    `CREATE TABLE session_members (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      member_type TEXT NOT NULL,
+      joined_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(
+    database,
+    'session_members_session_id_idx',
+    'CREATE INDEX session_members_session_id_idx ON session_members(session_id)',
+  )
+
+  ensureTable(
+    database,
+    'orchestrator_runs',
+    `CREATE TABLE orchestrator_runs (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      group_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      plan_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'planning',
+      plan TEXT,
+      summary_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+      conflict_report TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+
+  ensureTable(
+    database,
+    'workspace_tasks',
+    `CREATE TABLE workspace_tasks (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id TEXT REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      order_idx INTEGER NOT NULL DEFAULT 0,
+      run_id TEXT REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      phase_id TEXT,
+      dependencies TEXT NOT NULL DEFAULT '[]',
+      input_refs TEXT NOT NULL DEFAULT '[]',
+      output_key TEXT,
+      parallel_group TEXT,
+      max_retries INTEGER NOT NULL DEFAULT 3,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      timeout INTEGER NOT NULL DEFAULT 300000,
+      fallback_agent_id TEXT REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      artifacts TEXT NOT NULL DEFAULT '[]',
+      started_at INTEGER,
+      completed_at INTEGER,
+      error_log TEXT,
+      progress_percent INTEGER DEFAULT 0,
+      progress_status TEXT,
+      clarification_count INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(
+    database,
+    'workspace_tasks_workspace_id_idx',
+    'CREATE INDEX workspace_tasks_workspace_id_idx ON workspace_tasks(workspace_id)',
+  )
+  ensureIndex(database, 'workspace_tasks_run_id_idx', 'CREATE INDEX workspace_tasks_run_id_idx ON workspace_tasks(run_id)')
+  ensureIndex(
+    database,
+    'workspace_tasks_session_id_idx',
+    'CREATE INDEX workspace_tasks_session_id_idx ON workspace_tasks(session_id)',
+  )
+  ensureIndex(
+    database,
+    'workspace_tasks_agent_id_idx',
+    'CREATE INDEX workspace_tasks_agent_id_idx ON workspace_tasks(agent_id)',
+  )
+
+  ensureTable(
+    database,
+    'blackboard_entries',
+    `CREATE TABLE blackboard_entries (
+      id TEXT PRIMARY KEY NOT NULL,
+      namespace TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      schema_version INTEGER NOT NULL DEFAULT 1,
+      agent_id TEXT,
+      task_id TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      tags TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(
+    database,
+    'blackboard_entries_namespace_key_idx',
+    'CREATE INDEX blackboard_entries_namespace_key_idx ON blackboard_entries(namespace, key)',
+  )
+
+  ensureTable(
+    database,
+    'execution_logs',
+    `CREATE TABLE execution_logs (
+      id TEXT PRIMARY KEY NOT NULL,
+      run_id TEXT NOT NULL REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      task_id TEXT,
+      type TEXT NOT NULL,
+      input TEXT,
+      output TEXT,
+      duration_ms INTEGER,
+      token_usage TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  ensureIndex(database, 'execution_logs_run_id_idx', 'CREATE INDEX execution_logs_run_id_idx ON execution_logs(run_id)')
+
+  ensureTable(
+    database,
+    'tasks',
+    `CREATE TABLE tasks (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      parent_id TEXT,
+      agent_id TEXT REFERENCES agents(id),
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
   )
 }
 
