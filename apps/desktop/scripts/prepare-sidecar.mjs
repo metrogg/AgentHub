@@ -1,5 +1,5 @@
 import { copyFile, cp, mkdir, rm } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 
@@ -8,6 +8,8 @@ const desktopTauri = resolve(root, 'apps/desktop/src-tauri')
 const resources = resolve(desktopTauri, 'resources')
 const webDistSource = resolve(root, 'apps/web/dist')
 const webDistTarget = resolve(resources, 'web-dist')
+const infraSource = resolve(root, 'infra')
+const infraTarget = resolve(resources, 'infra')
 const serverExeSource = resolve(root, 'apps/server/dist/agenthub-server.exe')
 const serverExeTarget = resolve(resources, 'binaries/agenthub-server.exe')
 const portFile = resolve(root, '.agenthub-port')
@@ -22,6 +24,14 @@ if (!skipWebBuild) {
 await run('bun', ['--filter', '@agenthub/server', 'build:exe'])
 
 await mkdir(resolve(resources, 'binaries'), { recursive: true })
+await rm(infraTarget, { recursive: true, force: true })
+await cp(infraSource, infraTarget, {
+  recursive: true,
+  filter(source) {
+    const rel = relative(infraSource, source).replaceAll('\\', '/')
+    return rel !== 'plugin-skills/browser-automation' && !rel.startsWith('plugin-skills/browser-automation/')
+  },
+})
 if (!skipWebBuild) {
   await rm(webDistTarget, { recursive: true, force: true })
   await cp(webDistSource, webDistTarget, { recursive: true })

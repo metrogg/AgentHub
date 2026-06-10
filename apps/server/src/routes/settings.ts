@@ -1044,8 +1044,20 @@ async function waitForManagerRuntimeHealth(
   return lastHealth ?? { healthy: false, error: 'OpenClaw Manager 未在等待时间内通过健康检查。' }
 }
 
+function resolveHiclawLiteComposeFile() {
+  const configuredInfraDir = process.env.AGENTHUB_INFRA_DIR?.trim()
+  if (configuredInfraDir) {
+    return resolve(configuredInfraDir, 'docker-compose.hiclaw-lite.yml')
+  }
+  const projectRoot = process.env.PROJECT_ROOT?.trim()
+  if (projectRoot) {
+    return resolve(projectRoot, 'infra', 'docker-compose.hiclaw-lite.yml')
+  }
+  return resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+}
+
 async function startLocalTuwunel() {
-  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  const composeFile = resolveHiclawLiteComposeFile()
   if (!existsSync(composeFile)) {
     return {
       ok: false,
@@ -1075,7 +1087,7 @@ async function startLocalTuwunel() {
 }
 
 async function startLocalHiclawLiteInfra() {
-  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  const composeFile = resolveHiclawLiteComposeFile()
   if (!existsSync(composeFile)) {
     return {
       ok: false,
@@ -1105,7 +1117,7 @@ async function startLocalHiclawLiteInfra() {
 }
 
 async function stopLocalTuwunel() {
-  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  const composeFile = resolveHiclawLiteComposeFile()
   if (!existsSync(composeFile)) {
     return {
       ok: false,
