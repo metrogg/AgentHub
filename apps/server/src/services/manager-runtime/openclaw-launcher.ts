@@ -199,7 +199,18 @@ export class OpenClawLauncher {
               emoji: '🧭',
             },
             model: { primary: `agenthub-llm/${llmModel}` },
-            skills: ['agenthub-controller'],
+            skills: [
+              'agenthub-controller',
+              'task-management',
+              'task-coordination',
+              'team-management',
+              'worker-management',
+              'channel-management',
+              'review-and-synthesis',
+              'webapp-builder',
+              'competitive-analysis',
+              'tutorial-series',
+            ],
             groupChat: {
               mentionPatterns: ['@Orchestrator', '@Manager', 'Orchestrator', 'Manager', '管理者'],
             },
@@ -291,11 +302,20 @@ export class OpenClawLauncher {
     this.copyAgentFiles()
 
     // Set up environment
+    // Add the manager workspace + agent dir to PATH so the `agenthub` CLI shim
+    // (copied to {managerWorkspace}/agenthub.cmd) is discoverable when the
+    // agent uses tools.exec to invoke `agenthub apply -f ...`.
+    const pathSep = process.platform === 'win32' ? ';' : ':'
+    const managerAgentDir = join(this.managerWorkspace, '.openclaw', 'agents', 'manager', 'agent')
+    const extraPath = [this.managerWorkspace, managerAgentDir].filter(Boolean).join(pathSep)
     const env = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_NO_RESPAWN: '1',
       HOME: this.managerWorkspace,
+      PATH: `${extraPath}${pathSep}${process.env.PATH || ''}`,
+      AGENTHUB_CONTROLLER_URL: this.config.controllerUrl ?? `http://localhost:${process.env.PORT ?? 8000}`,
+      AGENTHUB_MANAGER_TOKEN: this.config.matrixAccessToken ?? '',
     }
 
     // Create .openclaw symlink
