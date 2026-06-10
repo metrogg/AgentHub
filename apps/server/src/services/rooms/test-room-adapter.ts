@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { gt } from 'drizzle-orm'
-import { asc, db, desc, eq, and, roomParticipants, rooms, sql, timelineEvents } from '@agenthub/db'
+import { asc, db, desc, eq, and, roomParticipants, rooms, timelineEvents } from '@agenthub/db'
+import { insertTimelineEventWithAllocatedSequence } from './timeline-event-writer'
 import type {
   AddParticipantInput,
   AppendMentionTimelineEventInput,
@@ -208,44 +209,10 @@ export class TestRoomAdapter implements RoomAdapter {
 
   async appendTimelineEvent(input: AppendTimelineEventInput) {
     const resolvedProviderEventId = input.providerEventId ?? providerEventId()
-    const [existing] = await db
-      .select()
-      .from(timelineEvents)
-      .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, resolvedProviderEventId)))
-      .limit(1)
-    if (existing) return existing
-    const sequenceRows = await db
-      .select({ nextSequence: sql<number>`coalesce(max(${timelineEvents.sequence}), 0) + 1` })
-      .from(timelineEvents)
-      .where(eq(timelineEvents.roomId, input.roomId))
-    const nextSequence = sequenceRows[0]?.nextSequence ?? 1
-    const [event] = await db
-      .insert(timelineEvents)
-      .values({
-        roomId: input.roomId,
-        providerEventId: resolvedProviderEventId,
-        senderParticipantId: input.senderParticipantId ?? null,
-        senderType: input.senderType,
-        type: input.type,
-        body: input.body ?? '',
-        metadata: input.metadata ?? {},
-        sequence: nextSequence ?? 1,
-      })
-      .onConflictDoNothing({
-        target: [timelineEvents.roomId, timelineEvents.providerEventId],
-      })
-      .returning()
-    if (!event) {
-      const [existingAfterConflict] = await db
-        .select()
-        .from(timelineEvents)
-        .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, resolvedProviderEventId)))
-        .limit(1)
-      if (existingAfterConflict) return existingAfterConflict
-      throw new Error('Timeline event create failed')
-    }
-    await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
-    return event
+    return insertTimelineEventWithAllocatedSequence({
+      ...input,
+      providerEventId: resolvedProviderEventId,
+    })
   }
 
   async appendMentionTimelineEvent(input: AppendMentionTimelineEventInput) {

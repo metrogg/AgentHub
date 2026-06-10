@@ -1,7 +1,8 @@
 import { gt } from 'drizzle-orm'
-import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, sql, timelineEvents, workspaceAgents } from '@agenthub/db'
+import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, timelineEvents, workspaceAgents } from '@agenthub/db'
 import { MatrixApiError, MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
 import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
+import { insertTimelineEventWithAllocatedSequence } from './timeline-event-writer'
 import type {
   AddParticipantInput,
   AppendTimelineEventInput,
@@ -399,44 +400,9 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   private async insertLocalTimelineEvent(input: AppendTimelineEventInput & { providerEventId: string }) {
-    const [existing] = await db
-      .select()
-      .from(timelineEvents)
-      .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, input.providerEventId)))
-      .limit(1)
-    if (existing) return existing
-    const sequenceRows = await db
-      .select({ nextSequence: sql<number>`coalesce(max(${timelineEvents.sequence}), 0) + 1` })
-      .from(timelineEvents)
-      .where(eq(timelineEvents.roomId, input.roomId))
-    const nextSequence = sequenceRows[0]?.nextSequence ?? 1
-    const [event] = await db
-      .insert(timelineEvents)
-      .values({
-        roomId: input.roomId,
-        providerEventId: input.providerEventId,
-        senderParticipantId: input.senderParticipantId ?? null,
-        senderType: input.senderType,
-        type: input.type,
-        body: input.body ?? '',
-        metadata: input.metadata ?? {},
-        sequence: nextSequence ?? 1,
-      })
-      .onConflictDoNothing({
-        target: [timelineEvents.roomId, timelineEvents.providerEventId],
-      })
-      .returning()
-    if (!event) {
-      const [existingAfterConflict] = await db
-        .select()
-        .from(timelineEvents)
-        .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, input.providerEventId)))
-        .limit(1)
-      if (existingAfterConflict) return existingAfterConflict
-      throw new Error('Matrix timeline event create failed')
-    }
-    await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
-    return event
+    return insertTimelineEventWithAllocatedSequence(input, {
+      failureMessage: 'Matrix timeline event create failed',
+    })
   }
 
   private async reconcileMatrixMembership(

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createServer } from 'node:net'
 import { and, desc, db, eq, matrixIdentities, roomParticipants, rooms, timelineEvents, workspaceAgents } from '@agenthub/db'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
@@ -196,7 +197,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       return { ...st, error: 'OpenClaw binary not found. Run: bash infra/setup-openclaw.sh' }
     }
 
-    this.managerGatewayPort = preferredManagerGatewayPort()
+    this.managerGatewayPort = await resolveManagedManagerGatewayPort()
     if (!managerContainersEnabled()) {
       await this.stopLastManagedProcess()
     }
@@ -662,6 +663,47 @@ export class QwenPawManagerRuntimeProvider implements ManagerRuntimeProvider {
 function preferredManagerGatewayPort() {
   const raw = Number(process.env.AGENTHUB_OPENCLAW_MANAGER_PORT || '18799')
   return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 18799
+}
+
+async function resolveManagedManagerGatewayPort() {
+  const preferred = preferredManagerGatewayPort()
+  if (process.env.AGENTHUB_OPENCLAW_MANAGER_PORT) return preferred
+  if (await canBindTcpPort(preferred)) return preferred
+
+  const fallback = await findAvailableTcpPort(preferred + 1, preferred + 20)
+  if (fallback) {
+    logger.warn(
+      { preferredPort: preferred, selectedPort: fallback },
+      'Preferred OpenClaw Manager gateway port is unavailable; using another local port',
+    )
+    return fallback
+  }
+  return preferred
+}
+
+async function findAvailableTcpPort(start: number, end: number) {
+  for (let port = start; port <= end; port += 1) {
+    if (await canBindTcpPort(port)) return port
+  }
+  return null
+}
+
+function canBindTcpPort(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const server = createServer()
+    server.unref()
+    server.on('error', () => {
+      try {
+        server.close()
+      } catch {
+        // ignore
+      }
+      resolve(false)
+    })
+    server.listen({ host: '127.0.0.1', port }, () => {
+      server.close(() => resolve(true))
+    })
+  })
 }
 
 function localControllerUrl() {

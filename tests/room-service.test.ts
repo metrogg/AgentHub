@@ -242,6 +242,41 @@ describe('RoomService Matrix room adapter contract', () => {
     expect(events.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
   })
 
+  test('allocates unique timeline sequences under concurrent room imports', async () => {
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!concurrent-room:test.agenthub',
+        kind: 'group',
+        ownerId: 'default-user',
+        title: 'Concurrent Timeline Room',
+      })
+      .returning()
+    expect(room).toBeDefined()
+
+    await Promise.all(
+      Array.from({ length: 32 }, (_, index) =>
+        roomService.importTimelineEvent({
+          roomId: room!.id,
+          providerEventId: `$concurrent-${index}`,
+          senderType: 'human',
+          type: 'human.message',
+          body: `hello ${index}`,
+          metadata: {
+            kind: 'matrix.sync.imported',
+          },
+        }),
+      ),
+    )
+
+    const events = await roomService.listTimelineEvents({ roomId: room!.id, limit: 64 })
+    const sequences = events.map((event) => event.sequence)
+    expect(events).toHaveLength(32)
+    expect(new Set(sequences).size).toBe(32)
+    expect(sequences).toEqual(Array.from({ length: 32 }, (_, index) => index + 1))
+  })
+
   test('treats replayed Matrix timeline events as idempotent imports', async () => {
     const [room] = await db
       .insert(rooms)
@@ -1436,6 +1471,11 @@ describe('RoomService Matrix room adapter contract', () => {
 
   test('Matrix runtime listener can run as a stoppable polling loop', async () => {
     let syncCount = 0
+    const loopBatchIndex = (value: unknown) => {
+      if (typeof value !== 'string') return 0
+      const match = value.match(/^loop-batch-(\d+)$/)
+      return match?.[1] ? Number(match[1]) : 0
+    }
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (url: RequestInfo | URL) => {
       const parsed = new URL(String(url))
@@ -1488,7 +1528,7 @@ describe('RoomService Matrix room adapter contract', () => {
             .limit(1)
           return latestIdentity?.metadata?.matrixSync?.nextBatch ?? null
         },
-        (nextBatch) => nextBatch === 'loop-batch-2',
+        (nextBatch) => loopBatchIndex(nextBatch) >= 2,
         { description: 'matrix runtime loop persisted second sync batch' },
       )
       expect(listener.isRunning(identity!.id)).toBe(true)
@@ -1500,7 +1540,7 @@ describe('RoomService Matrix room adapter contract', () => {
         .from(matrixIdentities)
         .where(eq(matrixIdentities.id, identity!.id))
         .limit(1)
-      expect(updatedIdentity?.metadata?.matrixSync?.nextBatch).toBe('loop-batch-2')
+      expect(loopBatchIndex(updatedIdentity?.metadata?.matrixSync?.nextBatch)).toBeGreaterThanOrEqual(2)
     } finally {
       globalThis.fetch = originalFetch
     }

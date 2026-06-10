@@ -471,6 +471,13 @@ export const Thread: FC<{
             className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6"
           >
             <ThreadWelcome />
+            {isGroupSession && selectedAgentTab === null && (roomTaskBoard || groupRoomActivity) && (
+              <GroupProcessCard
+                taskBoard={roomTaskBoard}
+                activity={groupRoomActivity}
+                onOpenTasks={() => setGroupTasksOpen(true)}
+              />
+            )}
             <VirtualThreadMessages
               key={currentSession?.id ?? 'no-session'}
               scrollRef={viewportRef}
@@ -1097,6 +1104,126 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
           线程与产物
         </button>
       </div>
+    </div>
+  )
+}
+
+const GroupProcessCard: FC<{
+  taskBoard: LiveTaskBoard | null
+  activity: LiveAgentActivity | null
+  onOpenTasks: () => void
+}> = ({ taskBoard, activity, onOpenTasks }) => {
+  const stats = taskProgressStats(taskBoard)
+  const runningTasks = taskBoard?.tasks.filter((task) => task.status === 'running').length ?? 0
+  const activeTasks = taskBoard?.tasks
+    .filter((task) => task.status === 'running' || task.status === 'blocked' || task.status === 'pending')
+    .slice(0, 3) ?? []
+  const completedTasks = taskBoard?.tasks.filter((task) => task.status === 'done').length ?? 0
+  const failedTasks = taskBoard?.tasks.filter((task) => task.status === 'failed').length ?? 0
+  const status = taskBoard
+    ? runStatusLabel[taskBoard.status] ?? taskBoard.status
+    : activity
+      ? runtimeActivityLabel(activity.phase)
+      : '处理中'
+  const title = taskBoard?.title || taskBoard?.goal || 'Manager 正在组织群聊协作'
+  const detail = activity
+    ? [activity.agentName ?? 'Manager', runtimeActivityDetail(activity.phase)].filter(Boolean).join(' · ')
+    : taskBoard?.status === 'completed'
+      ? '协作已完成，结果已汇总到群聊'
+      : taskBoard
+        ? '正在同步成员任务、过程消息和产物'
+        : '正在读取群聊上下文'
+
+  return (
+    <div className="mx-auto mb-4 mt-3 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-[#fbfbf8] p-4 shadow-sm">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-600">
+          {taskBoard?.status === 'completed' ? (
+            <CheckCircle2 className="h-4 w-4" />
+          ) : taskBoard?.status === 'failed' ? (
+            <AlertTriangle className="h-4 w-4" />
+          ) : (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="min-w-0 truncate text-sm font-semibold text-neutral-900" title={title}>
+              {title}
+            </div>
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+              {status}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-neutral-500">{detail}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenTasks}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
+        >
+          <ListTodo className="h-3.5 w-3.5" />
+          任务过程
+        </button>
+      </div>
+
+      {taskBoard && (
+        <>
+          <div className="mt-3 flex items-center gap-2">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-neutral-200">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all"
+                style={{ width: `${Math.min(100, Math.max(0, stats.percent))}%` }}
+              />
+            </div>
+            <span className="w-10 text-right text-xs tabular-nums text-neutral-500">{stats.percent}%</span>
+          </div>
+
+          <div className="mt-3 grid gap-2 text-xs text-neutral-600 sm:grid-cols-3">
+            <div className="rounded-md border border-neutral-200 bg-white px-2.5 py-2">
+              <div className="text-[11px] text-neutral-400">进行中</div>
+              <div className="mt-0.5 font-medium text-neutral-800">{runningTasks} 个任务</div>
+            </div>
+            <div className="rounded-md border border-neutral-200 bg-white px-2.5 py-2">
+              <div className="text-[11px] text-neutral-400">已完成</div>
+              <div className="mt-0.5 font-medium text-neutral-800">{completedTasks} 个任务</div>
+            </div>
+            <div className="rounded-md border border-neutral-200 bg-white px-2.5 py-2">
+              <div className="text-[11px] text-neutral-400">异常</div>
+              <div className="mt-0.5 font-medium text-neutral-800">{failedTasks} 个任务</div>
+            </div>
+          </div>
+
+          {activeTasks.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              {activeTasks.map((task) => (
+                <button
+                  key={task.id}
+                  type="button"
+                  onClick={onOpenTasks}
+                  className="flex w-full items-center gap-2 rounded-md border border-neutral-200 bg-white px-2.5 py-2 text-left text-xs transition hover:border-blue-200 hover:bg-blue-50/40"
+                >
+                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-neutral-100 text-neutral-500">
+                    {task.status === 'running' ? (
+                      <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
+                    ) : task.status === 'blocked' ? (
+                      <CircleHelp className="h-3 w-3 text-yellow-600" />
+                    ) : (
+                      <Clock3 className="h-3 w-3" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-neutral-700">
+                    {task.title || task.description || task.agentName || '未命名任务'}
+                  </span>
+                  {task.agentName && (
+                    <span className="shrink-0 text-neutral-400">{task.agentName}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
