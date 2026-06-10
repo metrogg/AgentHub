@@ -29,6 +29,8 @@ export class MatrixRoomAdapter implements RoomAdapter {
   private clientInstance: MatrixClient | null = null
   private identityServiceInstance: MatrixIdentityService | null = null
   private clientSignature: string | null = null
+  private readonly sessionRoomEnsures = new Map<string, Promise<typeof rooms.$inferSelect>>()
+  private readonly taskThreadRoomEnsures = new Map<string, Promise<typeof rooms.$inferSelect>>()
 
   constructor(options: MatrixRoomAdapterOptions = {}) {
     this.options = options
@@ -89,6 +91,16 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   async ensureRoomForSession(input: EnsureRoomForSessionInput) {
+    const existingEnsure = this.sessionRoomEnsures.get(input.sessionId)
+    if (existingEnsure) return existingEnsure
+    const ensure = this.ensureRoomForSessionOnce(input).finally(() => {
+      this.sessionRoomEnsures.delete(input.sessionId)
+    })
+    this.sessionRoomEnsures.set(input.sessionId, ensure)
+    return ensure
+  }
+
+  private async ensureRoomForSessionOnce(input: EnsureRoomForSessionInput) {
     const [existing] = await db.select().from(rooms).where(eq(rooms.sessionId, input.sessionId)).limit(1)
     if (existing) {
       const expectedKind = roomKindForSession(input)
@@ -159,6 +171,16 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   async ensureRoomForTaskThread(input: EnsureRoomForTaskThreadInput) {
+    const existingEnsure = this.taskThreadRoomEnsures.get(input.taskThreadId)
+    if (existingEnsure) return existingEnsure
+    const ensure = this.ensureRoomForTaskThreadOnce(input).finally(() => {
+      this.taskThreadRoomEnsures.delete(input.taskThreadId)
+    })
+    this.taskThreadRoomEnsures.set(input.taskThreadId, ensure)
+    return ensure
+  }
+
+  private async ensureRoomForTaskThreadOnce(input: EnsureRoomForTaskThreadInput) {
     const [existing] = await db.select().from(rooms).where(eq(rooms.taskThreadId, input.taskThreadId)).limit(1)
     if (existing) return existing
     const room = await this.createRoom({

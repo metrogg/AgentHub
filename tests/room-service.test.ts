@@ -155,6 +155,92 @@ async function createTaskRoomWithPendingClarification(label: string) {
 }
 
 describe('RoomService Matrix room adapter contract', () => {
+  test('Matrix adapter coalesces concurrent session room ensures', async () => {
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Concurrent Manager Group',
+        type: 'group',
+        ownerId: 'default-user',
+        metadata: { kind: 'workspace-agent-group' },
+      })
+      .returning()
+
+    class SlowEnsureAdapter extends MatrixRoomAdapter {
+      createCalls = 0
+      participantCalls = 0
+
+      override async createRoom(input: Parameters<MatrixRoomAdapter['createRoom']>[0]) {
+        this.createCalls += 1
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        const [room] = await db
+          .insert(rooms)
+          .values({
+            provider: 'matrix',
+            providerRoomId: `!singleflight-${randomUUID()}:agenthub.local`,
+            kind: input.kind,
+            ownerId: input.ownerId,
+            workspaceId: input.workspaceId ?? null,
+            sessionId: input.sessionId ?? null,
+            runId: input.runId ?? null,
+            taskId: input.taskId ?? null,
+            taskThreadId: input.taskThreadId ?? null,
+            title: input.title,
+            topic: input.topic ?? null,
+            metadata: input.metadata ?? {},
+          })
+          .returning()
+        if (!room) throw new Error('test room create failed')
+        return room
+      }
+
+      override async addParticipant(input: Parameters<MatrixRoomAdapter['addParticipant']>[0]) {
+        this.participantCalls += 1
+        const [participant] = await db
+          .insert(roomParticipants)
+          .values({
+            roomId: input.roomId,
+            participantType: input.participantType,
+            userId: input.userId ?? null,
+            workspaceAgentId: input.workspaceAgentId ?? null,
+            workerInstanceId: input.workerInstanceId ?? null,
+            providerUserId: input.providerUserId ?? null,
+            displayName: input.displayName,
+            role: input.role ?? 'member',
+            metadata: input.metadata ?? {},
+          })
+          .returning()
+        if (!participant) throw new Error('test participant create failed')
+        return participant
+      }
+    }
+
+    const adapter = new SlowEnsureAdapter()
+    const input = {
+      ownerId: 'default-user',
+      sessionId: session!.id,
+      title: session!.title,
+      sessionType: session!.type,
+      workspaceId: session!.workspaceId,
+      workspaceAgentId: session!.workspaceAgentId,
+      metadata: session!.metadata,
+    } as const
+
+    const [first, second] = await Promise.all([
+      adapter.ensureRoomForSession(input),
+      adapter.ensureRoomForSession(input),
+    ])
+
+    const roomRows = await db.select().from(rooms).where(eq(rooms.sessionId, session!.id))
+    const participantRows = await db.select().from(roomParticipants).where(eq(roomParticipants.roomId, first.id))
+
+    expect(first.id).toBe(second.id)
+    expect(adapter.createCalls).toBe(1)
+    expect(adapter.participantCalls).toBe(2)
+    expect(roomRows).toHaveLength(1)
+    expect(participantRows.map((item) => item.participantType).sort()).toEqual(['human', 'manager'])
+  })
+
   test('maps text @orchestrator mention to the real Manager room participant without frontend metadata', async () => {
     const [workspace] = await db
       .insert(workspaces)
