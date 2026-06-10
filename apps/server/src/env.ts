@@ -50,6 +50,7 @@ const envSchema = z.object({
   AGENTHUB_SANDBOX_PROVIDER: z.enum(['local-workdir', 'docker-sandbox', 'cloud']).default('local-workdir'),
   AGENTHUB_DOCKER_SANDBOX_AGENT: z.string().optional(),
   AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS: envBoolean.default(true),
+  AGENTHUB_ALLOW_EXTERNAL_FILE_PREVIEW: envBoolean.default(true),
 })
 
 export const env = envSchema.parse(Bun.env)

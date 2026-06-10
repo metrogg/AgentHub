@@ -101,7 +101,7 @@ describe('artifact static preview', () => {
     expect(pdf.source).toBeUndefined()
   })
 
-  test('preview-dir rejects an arbitrary directory not under a managed root or workspace', async () => {
+  test('preview-dir allows an arbitrary local directory by default', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-'))
     mkdirSync(join(root, 'assets'))
     writeFileSync(join(root, 'index.html'), '<link rel="stylesheet" href="./assets/app.css"><div id="app"></div>')
@@ -109,7 +109,27 @@ describe('artifact static preview', () => {
 
     const url = previewDirectoryUrl(join(root, 'index.html'))
     const html = await app.request(url)
-    expect([401, 403]).toContain(html.status)
+    expect(html.status).toBe(200)
+    expect(await html.text()).toBe('<link rel="stylesheet" href="./assets/app.css"><div id="app"></div>')
+  })
+
+  test('preview-dir can still reject arbitrary directories when external preview is disabled', async () => {
+    const previous = process.env.AGENTHUB_ALLOW_EXTERNAL_FILE_PREVIEW
+    process.env.AGENTHUB_ALLOW_EXTERNAL_FILE_PREVIEW = 'false'
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-locked-'))
+      writeFileSync(join(root, 'index.html'), '<div>locked</div>')
+
+      const url = previewDirectoryUrl(join(root, 'index.html'))
+      const html = await app.request(url)
+      expect([401, 403]).toContain(html.status)
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AGENTHUB_ALLOW_EXTERNAL_FILE_PREVIEW
+      } else {
+        process.env.AGENTHUB_ALLOW_EXTERNAL_FILE_PREVIEW = previous
+      }
+    }
   })
 
   test('preview-file resolves legacy absolute paths under an owned workspace', async () => {
@@ -130,7 +150,7 @@ describe('artifact static preview', () => {
     expect(await response.text()).toBe('<div>ok</div>')
   })
 
-  test('preview-file rejects requests with invalid workspaceId', async () => {
+  test('preview-file allows absolute local paths even when workspaceId is stale', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-bad-'))
     const filePath = join(root, 'index.html')
     writeFileSync(filePath, '<div>ok</div>')
@@ -139,6 +159,40 @@ describe('artifact static preview', () => {
       `/api/artifacts/preview-file?workspaceId=nonexistent&path=${encodeURIComponent(filePath)}`,
     )
 
-    expect([401, 404]).toContain(response.status)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('<div>ok</div>')
+  })
+
+  test('file preview allows absolute local document paths without a workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-file-'))
+    const filePath = join(root, 'deck.pptx')
+    writeFileSync(filePath, 'pptx')
+
+    const response = await app.request(`/api/artifacts/file?path=${encodeURIComponent(filePath)}`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Type')).toBe(
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    )
+  })
+
+  test('file preview resolves relative document paths from the workspace root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-relative-file-'))
+    const workspaceId = `preview-${randomUUID()}`
+    writeFileSync(join(root, 'deck.pptx'), 'pptx')
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      ownerId: 'default-user',
+      name: 'Relative File Preview Workspace',
+      goal: 'Preview relative artifacts',
+      projectPath: root,
+    })
+
+    const response = await app.request(
+      `/api/artifacts/file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent('deck.pptx')}`,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('pptx')
   })
 })

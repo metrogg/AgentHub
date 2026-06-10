@@ -161,6 +161,14 @@ AGENTHUB_MATRIX_REGISTRATION_TOKEN
 bash infra/start-hiclaw-lite.sh
 ```
 
+在 Windows PowerShell 里，`bash` 可能会调用 WSL。此时需要先进入 WSL 挂载的仓库路径：
+
+```powershell
+wsl
+cd /mnt/f/Learning/AgentHub
+bash infra/start-hiclaw-lite.sh
+```
+
 这个脚本负责准备本地 Matrix / MinIO / OpenClaw runtime 所需环境，并输出关键端口、健康状态和诊断信息。
 
 停止基础设施：

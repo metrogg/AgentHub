@@ -161,6 +161,14 @@ AGENTHUB_MATRIX_REGISTRATION_TOKEN
 bash infra/start-hiclaw-lite.sh
 ```
 
+On Windows PowerShell, `bash` may resolve to WSL. In that case, run the script from the WSL-mounted repo path:
+
+```powershell
+wsl
+cd /mnt/f/Learning/AgentHub
+bash infra/start-hiclaw-lite.sh
+```
+
 The script prepares the local Matrix / MinIO / OpenClaw runtime environment and prints the relevant ports, health status, and diagnostics.
 
 Stop the infrastructure:

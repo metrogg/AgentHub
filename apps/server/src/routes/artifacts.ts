@@ -26,6 +26,21 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     const user = c.get('user')
+    const normalizedPath = normalize(rawPath)
+    if (isExternalFilePreviewAllowed() && isAbsolute(normalizedPath)) {
+      const filePath = resolve(normalizedPath)
+      if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+        throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, 'Preview file not found')
+      }
+
+      return new Response(readFileSync(filePath), {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'X-Frame-Options': 'SAMEORIGIN',
+        },
+      })
+    }
+
     const ws = workspaceId
       ? await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1).then((rows) => rows[0])
       : await resolveWorkspaceForPreviewPath(rawPath, user.sub)
@@ -68,7 +83,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     const root = Buffer.from(rootEncoded, 'base64url').toString('utf8')
     const resolvedRoot = resolve(root)
     const user = c.get('user')
-    if (!(await isPreviewRootAllowed(resolvedRoot, user.sub))) {
+    if (!isExternalFilePreviewAllowed() && !(await isPreviewRootAllowed(resolvedRoot, user.sub))) {
       throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '预览目录不在允许范围内')
     }
 
@@ -92,6 +107,20 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!rawPath) {
       throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, 'Missing file path', { field: 'path' })
     }
+    if (isExternalFilePreviewAllowed() && isAbsolute(normalize(rawPath))) {
+      const resolvedPath = resolve(normalize(rawPath))
+      if (!existsSync(resolvedPath) || !statSync(resolvedPath).isFile()) {
+        throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, 'File not found')
+      }
+
+      return new Response(Bun.file(resolvedPath), {
+        headers: {
+          'Content-Type': contentType(resolvedPath),
+          'Content-Disposition': `inline; filename="${encodeURIComponent(basename(resolvedPath))}"`,
+        },
+      })
+    }
+
     if (!workspaceId) {
       throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, 'Missing workspace id', { field: 'workspaceId' })
     }
@@ -106,7 +135,12 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     // 1. Inside the workspace project directory
     // 2. Inside AgentHub managed object storage (artifact-store bucket)
     const projectRoot = ws.projectPath ? resolve(ws.projectPath) : null
-    const resolvedPath = resolve(normalize(rawPath))
+    const normalizedPath = normalize(rawPath)
+    const resolvedPath = isAbsolute(normalizedPath)
+      ? resolve(normalizedPath)
+      : projectRoot
+        ? resolve(projectRoot, normalizedPath)
+        : resolve(normalizedPath)
 
     let allowed = false
     if (projectRoot && isPathUnder(resolvedPath, projectRoot)) {
@@ -589,6 +623,12 @@ function isPathUnder(child: string, parent: string) {
 function isObjectStorePath(resolvedPath: string): boolean {
   const storeRoot = resolve(agentHubUserDataRoot(), 'storage', 'objects')
   return isPathUnder(resolvedPath, storeRoot)
+}
+
+function isExternalFilePreviewAllowed(): boolean {
+  const raw = process.env.AGENTHUB_ALLOW_EXTERNAL_FILE_PREVIEW?.trim().toLowerCase()
+  if (raw === undefined || raw === '') return true
+  return ['1', 'true', 'yes', 'on'].includes(raw)
 }
 
 async function isPreviewRootAllowed(resolvedRoot: string, ownerId: string): Promise<boolean> {
