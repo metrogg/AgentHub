@@ -98,25 +98,38 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const user = c.get('user')
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-    if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
+    if (!ws || ws.ownerId !== user.sub) {
       throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
     }
 
-    const allowedRoot = resolve(ws.projectPath)
-    const filePath = resolveWorkspaceFilePath(rawPath, allowedRoot)
-    const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
-    if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
-      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, 'Access denied: path outside workspace')
+    // Two valid path sources:
+    // 1. Inside the workspace project directory
+    // 2. Inside AgentHub managed object storage (artifact-store bucket)
+    const projectRoot = ws.projectPath ? resolve(ws.projectPath) : null
+    const resolvedPath = resolve(normalize(rawPath))
+
+    let allowed = false
+    if (projectRoot && isPathUnder(resolvedPath, projectRoot)) {
+      allowed = true
+    } else if (isObjectStorePath(resolvedPath)) {
+      // Verify the path is under the workspace's artifact-store prefix:
+      //   agenthub-artifacts/workspaces/{workspaceId}/...
+      const expectedPrefix = resolve(agentHubUserDataRoot(), 'storage', 'objects', 'agenthub-artifacts', 'workspaces', workspaceId)
+      allowed = isPathUnder(resolvedPath, expectedPrefix)
     }
 
-    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    if (!allowed) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, 'Access denied: path outside workspace or artifact store')
+    }
+
+    if (!existsSync(resolvedPath) || !statSync(resolvedPath).isFile()) {
       throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, 'File not found')
     }
 
-    return new Response(Bun.file(filePath), {
+    return new Response(Bun.file(resolvedPath), {
       headers: {
-        'Content-Type': contentType(filePath),
-        'Content-Disposition': `inline; filename="${encodeURIComponent(basename(filePath))}"`,
+        'Content-Type': contentType(resolvedPath),
+        'Content-Disposition': `inline; filename="${encodeURIComponent(basename(resolvedPath))}"`,
       },
     })
   })
@@ -571,6 +584,11 @@ function isPathUnder(child: string, parent: string) {
   const resolvedParent = resolve(parent)
   const parentWithSep = resolvedParent.endsWith(sep) ? resolvedParent : `${resolvedParent}${sep}`
   return child === resolvedParent || child.startsWith(parentWithSep)
+}
+
+function isObjectStorePath(resolvedPath: string): boolean {
+  const storeRoot = resolve(agentHubUserDataRoot(), 'storage', 'objects')
+  return isPathUnder(resolvedPath, storeRoot)
 }
 
 async function isPreviewRootAllowed(resolvedRoot: string, ownerId: string): Promise<boolean> {

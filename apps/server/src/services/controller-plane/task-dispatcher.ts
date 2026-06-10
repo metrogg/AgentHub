@@ -16,7 +16,13 @@ import { TaskStatus } from '@agenthub/shared'
 import { prepareAgentWorkdir } from '../execution/agent-workdir'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { logger } from '../../lib/logger'
-import { agentHubUserCacheRoot, agentHubUserDataRoot, safePathSegment } from '../system-paths'
+import {
+  agentHubUserCacheRoot,
+  agentHubUserDataRoot,
+  safePathSegment,
+  workspaceCacheRoot,
+  workspaceDataRoot,
+} from '../system-paths'
 import type { ManagerAction } from '../manager-runtime'
 import { prepareTaskRuntimeThread } from '../orchestrator/task-thread-service'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
@@ -250,6 +256,7 @@ async function prepareAssignedTask(input: {
     workerName: input.spec.worker.name,
     runId: input.run.runId,
     dependsOn: dependencyTaskIds,
+    projectPath: input.workspace.projectPath,
   })
 
   const runtimeThread = await prepareTaskRuntimeThread({
@@ -490,7 +497,7 @@ async function createTaskRuntimeLease(input: {
     sandboxPolicy: input.worker.sandboxPolicy ?? 'workspace-write',
   })
   const root = resolve(
-    agentHubUserCacheRoot(),
+    workspaceCacheRoot(input.projectPath),
     'runtime-leases',
     safePathSegment(input.run.runId),
     safePathSegment(input.worker.name || input.worker.id),
@@ -682,8 +689,9 @@ function writeTaskSpecMd(input: {
   workerName: string
   runId: string
   dependsOn: string[]
+  projectPath?: string | null
 }) {
-  const specDir = resolve(agentHubUserDataRoot(), 'storage', 'objects', 'shared', 'tasks', input.taskId)
+  const specDir = resolve(workspaceDataRoot(input.projectPath), 'storage', 'objects', 'shared', 'tasks', input.taskId)
   mkdirSync(specDir, { recursive: true })
 
   const lines = [

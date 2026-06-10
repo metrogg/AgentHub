@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { agentHubUserDataRoot, safePathSegment } from '../system-paths'
+import { agentHubUserDataRoot, safePathSegment, workspaceDataRoot } from '../system-paths'
 
 export interface SharedObjectRef {
   storageProvider: 'local-filesystem' | 's3'
@@ -18,6 +18,7 @@ export async function putSharedObject(input: {
   objectKey: string
   content: string
   mimeType?: string
+  projectPath?: string | null
 }): Promise<SharedObjectRef> {
   const bucket = sharedStorageBucket()
   const objectKey = normalizeObjectKey(input.objectKey)
@@ -49,7 +50,7 @@ export async function putSharedObject(input: {
     }
   }
 
-  const storagePath = localObjectPath(bucket, objectKey)
+  const storagePath = localObjectPath(bucket, objectKey, input.projectPath)
   mkdirSync(dirname(storagePath), { recursive: true })
   writeFileSync(storagePath, content, 'utf8')
   return {
@@ -75,13 +76,13 @@ function useS3ObjectStore() {
   return (process.env.AGENTHUB_OBJECT_STORE_PROVIDER ?? '').trim().toLowerCase() === 's3'
 }
 
-function localObjectPath(bucket: string, objectKey: string) {
+function localObjectPath(bucket: string, objectKey: string, projectPath?: string | null) {
   const parts = objectKey
     .replace(/\\/g, '/')
     .split('/')
     .filter(Boolean)
     .map((part) => safePathSegment(part))
-  return join(agentHubUserDataRoot(), 'storage', 'objects', safePathSegment(bucket), ...parts)
+  return join(workspaceDataRoot(projectPath), 'storage', 'objects', safePathSegment(bucket), ...parts)
 }
 
 function normalizeObjectKey(value: string) {
