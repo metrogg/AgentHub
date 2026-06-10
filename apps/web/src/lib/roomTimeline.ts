@@ -597,7 +597,7 @@ export function codeAgentRunFromWorkerRuntimeEvent(
   const direct = codeAgentRunMetadataFromRecord(metadata)
   if (direct) return direct
 
-  const kind = asString(metadata?.kind)
+  const kind = effectiveTimelineKind(metadata)
   if (!kind?.startsWith('worker-runtime.')) return null
   const runtime = readCodeAgentRuntime(metadata)
   if (!runtime) return null
@@ -655,13 +655,13 @@ function isLiveCodeAgentRunMetadataEvent(event: TimelineEvent) {
   const metadata = asRecord(event.metadata)
   return (
     event.type === 'task.progress' &&
-    asString(metadata?.kind) === 'worker-runtime.progress' &&
+    effectiveTimelineKind(metadata) === 'worker-runtime.progress' &&
     asString(metadata?.type) === 'code-agent-run'
   )
 }
 
 function shouldHideRuntimeStatusMessage(event: TimelineEvent, room: Room) {
-  const kind = asString(asRecord(event.metadata)?.kind)
+  const kind = effectiveTimelineKind(asRecord(event.metadata))
   if (!kind) return false
   if (INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return true
   return room.kind === 'direct' && kind === 'worker-runtime.started'
@@ -672,7 +672,7 @@ function shouldAttachCodeAgentRunToMessage(
   run: CodeAgentRunMetadata | null,
 ) {
   if (!run) return false
-  const kind = asString(asRecord(event.metadata)?.kind)
+  const kind = effectiveTimelineKind(asRecord(event.metadata))
   return (
     run.status !== 'running' &&
     (kind === 'worker-runtime.completed' ||
@@ -730,7 +730,7 @@ function codeAgentStatusFromWorkerRuntimeEvent(
 ): CodeAgentRunMetadata['status'] | null {
   const explicit = readCodeAgentStatus(metadata?.status)
   if (explicit) return explicit
-  const kind = asString(metadata?.kind)
+  const kind = effectiveTimelineKind(metadata)
   if (kind === 'worker-runtime.completed') return 'completed'
   if (kind === 'worker-runtime.failed') return 'failed'
   if (kind === 'worker-runtime.cancelled') return 'cancelled'
@@ -743,6 +743,16 @@ function codeAgentStatusFromWorkerRuntimeEvent(
     return 'running'
   }
   return null
+}
+
+function effectiveTimelineKind(metadata: Record<string, unknown> | null | undefined) {
+  const kind = asString(metadata?.kind)
+  if (kind !== 'matrix.sync.imported') return kind
+  return (
+    asString(metadata?.sourceKind) ??
+    asString(asRecord(metadata?.matrix)?.importedMetadataKind) ??
+    kind
+  )
 }
 
 function readCodeAgentStatus(value: unknown): CodeAgentRunMetadata['status'] | null {

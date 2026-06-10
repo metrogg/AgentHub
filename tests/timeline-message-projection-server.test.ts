@@ -173,6 +173,63 @@ describe('server room timeline message projection', () => {
     })
   })
 
+  test('restores worker runtime cards from Matrix imported sourceKind metadata', () => {
+    const messages = projectTimelineMessages({
+      room: directRoom as any,
+      participants: [worker as any],
+      sessionId: 'direct-session-1',
+      timeline: [
+        event({
+          id: 'matrix-started',
+          providerEventId: '$matrix-started',
+          sequence: 1,
+          body: 'Builder started claude-code runtime.',
+          metadata: {
+            kind: 'matrix.sync.imported',
+            sourceKind: 'worker-runtime.started',
+            status: 'running',
+            runtimeType: 'claude-code',
+            workspaceAgentId: 'agent-1',
+          },
+        }),
+        event({
+          id: 'matrix-progress',
+          providerEventId: '$matrix-progress',
+          sequence: 2,
+          body: 'Worker runtime metadata updated.',
+          metadata: {
+            kind: 'matrix.sync.imported',
+            sourceKind: 'worker-runtime.progress',
+            status: 'running',
+            runtimeType: 'claude-code',
+            workspaceAgentId: 'agent-1',
+          },
+        }),
+        event({
+          id: 'matrix-failed',
+          providerEventId: '$matrix-failed',
+          type: 'worker.message',
+          sequence: 3,
+          body: 'Claude Code API connection failed.',
+          metadata: {
+            kind: 'matrix.sync.imported',
+            sourceKind: 'worker-runtime.failed',
+            status: 'failed',
+            runtimeType: 'claude-code',
+            workspaceAgentId: 'agent-1',
+          },
+        }),
+      ],
+    })
+
+    expect(messages.map((message) => message.id)).toEqual(['room:matrix-failed'])
+    expect(messages[0]?.metadata?.codeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'failed',
+      runtime: 'claude-code',
+    })
+  })
+
   test('projects manager runtime errors as visible manager messages', () => {
     const messages = projectTimelineMessages({
       room: directRoom as any,
