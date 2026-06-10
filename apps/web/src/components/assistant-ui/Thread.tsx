@@ -331,6 +331,16 @@ export const Thread: FC<{
     agentActivity?.sessionId === currentSession?.id
       ? agentActivity
       : null
+  const isTaskBoardRoomContext =
+    Boolean(taskBoard && currentSession) &&
+    (taskBoard?.sessionId === currentSession?.id ||
+      taskBoard?.tasks.some((task) => task.childSessionId === currentSession?.id))
+  const persistentManagerActivity =
+    isTaskBoardRoomContext &&
+    agentActivity &&
+    (agentActivity.sessionId === taskBoard?.sessionId || agentActivity.sessionId === currentSession?.id)
+      ? agentActivity
+      : null
   const directActivity =
     !isGroupSession && agentActivity?.sessionId === currentSession?.id ? agentActivity : null
   const directRunProgress = useMemo(
@@ -471,10 +481,10 @@ export const Thread: FC<{
             className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6"
           >
             <ThreadWelcome />
-            {isGroupSession && selectedAgentTab === null && (roomTaskBoard || groupRoomActivity) && (
+            {isTaskBoardRoomContext && (taskBoard || persistentManagerActivity) && (
               <GroupProcessCard
-                taskBoard={roomTaskBoard}
-                activity={groupRoomActivity}
+                taskBoard={taskBoard}
+                activity={persistentManagerActivity}
                 onOpenTasks={() => setGroupTasksOpen(true)}
               />
             )}
@@ -488,13 +498,13 @@ export const Thread: FC<{
           </ThreadPrimitive.Viewport>
           <Composer />
         </div>
-        {isGroupSession && (
+        {isTaskBoardRoomContext && (
           <RoomTaskDrawer
             open={groupTasksOpen}
             onClose={() => setGroupTasksOpen(false)}
-            taskBoard={roomTaskBoard}
+            taskBoard={taskBoard}
             agentTabs={agentTabs}
-            activity={groupRoomActivity}
+            activity={persistentManagerActivity}
           />
         )}
         {!usesGlobalSidecar && previewItem && !previewCollapsed && (

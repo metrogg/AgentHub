@@ -3011,6 +3011,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     cancelledSessions.delete(sessionId)
     const state = get()
     const keepTaskBoard = isTaskBoardSession(sessionId, state.taskBoard, state.agentTabs)
+    const keepRuntimeActivity = Boolean(
+      keepTaskBoard &&
+      state.taskBoard &&
+      !isTerminalTaskBoardStatus(state.taskBoard.status) &&
+      state.agentActivity,
+    )
     const optimisticSession =
       state.sessions.find((session) => session.id === sessionId) ??
       (state.currentSession?.id === sessionId ? state.currentSession : null) ??
@@ -3046,8 +3052,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingMessage: null,
       streamingCodeAgentRun: null,
       pendingAttachments: [],
-      agentTyping: false,
-      agentActivity: null,
+      agentTyping: keepRuntimeActivity ? state.agentTyping : false,
+      agentActivity: keepRuntimeActivity ? state.agentActivity : null,
       replyingToMessageId: null,
       replyingToMessage: null,
       replyingToKind: 'reply',
