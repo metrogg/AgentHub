@@ -23,7 +23,7 @@ import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
-import { updateSharedTaskDirectoryStatus } from '../orchestrator/shared-task-directory'
+import { buildSharedTaskDirectoryProtocolBlock, updateSharedTaskDirectoryStatus } from '../orchestrator/shared-task-directory'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
 import { ensureManagerParticipantForRoom } from '../rooms/manager-participant'
@@ -912,6 +912,21 @@ export class WorkerRuntimeService {
     this.runningControllers.set(room.id, abortController)
 
     try {
+      // Inject shared task directory protocol into the prompt so bridge Workers
+      // (Codex / Claude Code / OpenCode / Gemini) know:
+      //   - where to read spec.md
+      //   - where to write artifacts
+      //   - **they MUST write result.md before completing** (Manager reads it
+      //     for final review; without it the run is stuck on the result
+      //     validation step).
+      const protocolBlock = buildSharedTaskDirectoryProtocolBlock({
+        sharedTaskRelativeRoot,
+        sharedTaskSpecPath,
+      })
+      const finalPrompt = protocolBlock
+        ? `${prompt}\n\n---\n\n${protocolBlock}\n\n## Mandatory Result Contract\n\nAfter completing the work, you MUST write \`${sharedTaskRelativeRoot ?? '.agenthub/shared/tasks/{taskId}'}/result.md\` with this exact format:\n\n\`\`\`\nSTATUS: SUCCESS|SUCCESS_WITH_NOTES|REVISION_NEEDED|BLOCKED|INTERRUPTED\nSUMMARY: <one-line summary>\n\nDELIVERABLES:\n- <absolute or relative path to each deliverable under ${sharedTaskRelativeRoot ?? '.agenthub/shared/tasks/{taskId}'}/artifacts/>\n\nNOTES:\n- <optional notes>\n\`\`\`\n\nIf you skip this, Manager cannot verify your work and the run will be stuck. Write result.md BEFORE posting TASK_COMPLETED.`
+        : prompt
+
       const iterator = runtime.executeTask(
         {
           roomId: room.id,
@@ -926,7 +941,7 @@ export class WorkerRuntimeService {
           sharedTaskRelativeRoot,
           sharedTaskSpecPath,
           runtimeLeaseId: lease?.id ?? null,
-          prompt,
+          prompt: finalPrompt,
           history: timeline.map((event) => ({
             senderType: event.senderType,
             type: event.type,
@@ -1026,6 +1041,35 @@ export class WorkerRuntimeService {
         result: finalResult,
         source: input.source ?? 'worker-runtime.run',
       })
+
+      // Auto-discover any files the Worker dropped into shared/tasks/{taskId}/artifacts/
+      // and register them as artifacts. This is the path that makes code-style
+      // Workers (who just write files to the workspace) actually show their
+      // outputs in the UI.
+      if (finalResult.status === 'completed' && room.taskId && workspace?.projectPath) {
+        try {
+          const { discoverAndRegisterSharedTaskArtifacts } = await import(
+            '../orchestrator/artifact-controller'
+          )
+          await discoverAndRegisterSharedTaskArtifacts({
+            workspaceId: room.workspaceId ?? workspace.id,
+            runId: room.runId ?? '',
+            taskId: room.taskId,
+            roomId: room.id,
+            taskThreadId: room.taskThreadId ?? null,
+            workspaceAgentId: agent.id,
+            workerInstanceId: thread?.workerInstanceId ?? null,
+            groupSessionId: thread?.groupSessionId ?? null,
+            projectPath: workspace.projectPath,
+            sharedTaskRelativeRoot: sharedTaskRelativeRoot,
+          })
+        } catch (err) {
+          logger.warn(
+            { err: (err as Error)?.message, taskId: room.taskId },
+            'Failed to auto-discover shared task artifacts',
+          )
+        }
+      }
       await refreshWorkerContractMirror({
         workerInstanceId: thread?.workerInstanceId ?? null,
         source: input.source ?? 'worker-runtime.run',
