@@ -130,6 +130,7 @@ At minimum, review:
 
 ```bash
 bun run infra:up
+bash infra/start-hiclaw-lite.sh
 ```
 
 This starts the local HiClaw-lite infrastructure defined in `infra/docker-compose.hiclaw-lite.yml`, including Tuwunel for Matrix and MinIO for S3-compatible storage experiments.
