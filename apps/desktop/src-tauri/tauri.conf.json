@@ -37,6 +37,7 @@
     },
     "resources": [
       "resources/web-dist",
+      "resources/infra",
       "resources/binaries/agenthub-server.exe"
     ]
   }

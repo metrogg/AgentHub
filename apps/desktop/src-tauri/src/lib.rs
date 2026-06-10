@@ -821,6 +821,7 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
             return;
         }
     };
+    let infra_dir = resolve_resource(&app, &["resources/infra", "infra"]);
 
     set_startup_status(
         &window,
@@ -848,6 +849,33 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
             set_startup_status(&window, "failed", "无法初始化日志输出", &err.to_string());
             return;
         }
+    };
+
+    let matrix_admin_access_token = if !cfg!(debug_assertions) {
+        set_startup_status(
+            &window,
+            "starting",
+            "Starting local collaboration services",
+            &format!(
+                "Starting Tuwunel and MinIO from bundled infra.\nLog: {}",
+                log_path.display()
+            ),
+        );
+        match start_local_hiclaw_lite_infra(infra_dir.as_deref(), &log_path) {
+            Ok(token) => Some(token),
+            Err(err) => {
+                let tail = read_log_tail(&log_path);
+                set_startup_status(
+                    &window,
+                    "failed",
+                    "Local services failed to start",
+                    &format!("{err}\n\nLog: {}\n\n{}", log_path.display(), tail),
+                );
+                return;
+            }
+        }
+    } else {
+        None
     };
 
     let workspace_root = workspace_root_from_manifest();
@@ -880,10 +908,25 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         .env("AGENTHUB_CONFIG_DIR", &paths.config_dir)
         .env("AGENTHUB_LOG_DIR", &paths.log_dir)
         .env("AGENTHUB_WEB_DIST", &web_dist)
-        .env("DATABASE_URL", paths.data_dir.join("agenthub.db"));
+        .env("DATABASE_URL", paths.data_dir.join("agenthub.db"))
+        .env("AGENTHUB_ROOM_PROVIDER", "matrix")
+        .env("AGENTHUB_MATRIX_HOMESERVER_URL", "http://127.0.0.1:6167")
+        .env("AGENTHUB_MATRIX_SERVER_NAME", "agenthub.local")
+        .env(
+            "AGENTHUB_MATRIX_REGISTRATION_TOKEN",
+            "agenthub-dev-registration-token",
+        )
+        .env("AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS", "true")
+        .env("AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS", "true");
 
     if let Some(root) = workspace_root.as_ref() {
         command.env("PROJECT_ROOT", root);
+    }
+    if let Some(infra_dir) = infra_dir.as_ref() {
+        command.env("AGENTHUB_INFRA_DIR", infra_dir);
+    }
+    if let Some(token) = matrix_admin_access_token.as_ref() {
+        command.env("AGENTHUB_MATRIX_ACCESS_TOKEN", token);
     }
     if let Some(port_file) = dev_port_file.as_ref() {
         command.env("AGENTHUB_PORT_FILE", port_file);
@@ -943,6 +986,209 @@ fn desktop_paths(app: &tauri::AppHandle) -> Result<DesktopPaths, String> {
         data_dir: app_data_dir.join("data"),
         app_data_dir,
     })
+}
+
+fn start_local_hiclaw_lite_infra(infra_dir: Option<&Path>, log_path: &Path) -> Result<String, String> {
+    let infra_dir = infra_dir.ok_or_else(|| {
+        "Bundled infra directory was not found. Rebuild the installer after prepare:sidecar.".to_string()
+    })?;
+    let compose_file = infra_dir.join("docker-compose.hiclaw-lite.yml");
+    if !compose_file.exists() {
+        return Err(format!(
+            "Bundled HiClaw-lite compose file was not found: {}",
+            compose_file.display()
+        ));
+    }
+
+    append_startup_log(
+        log_path,
+        &format!(
+            "[desktop] starting local infra with compose file: {}\n",
+            compose_file.display()
+        ),
+    );
+    run_docker_compose_up(&compose_file, log_path)?;
+    if wait_for_http_ok(6167, "/_matrix/client/versions", Duration::from_secs(25)) {
+        append_startup_log(log_path, "[desktop] Tuwunel is ready on http://127.0.0.1:6167\n");
+        ensure_local_matrix_admin_token(log_path)
+    } else {
+        Err("Tuwunel did not become ready on http://127.0.0.1:6167. Check Docker Desktop and the sidecar log.".to_string())
+    }
+}
+
+fn ensure_local_matrix_admin_token(log_path: &Path) -> Result<String, String> {
+    const ADMIN_USER: &str = "admin";
+    const ADMIN_PASS: &str = "admin-dev-password-2026";
+    const REGISTRATION_TOKEN: &str = "agenthub-dev-registration-token";
+
+    if let Ok(token) = matrix_login(ADMIN_USER, ADMIN_PASS, log_path) {
+        append_startup_log(log_path, "[desktop] Matrix admin login succeeded\n");
+        return Ok(token);
+    }
+
+    match matrix_register(ADMIN_USER, ADMIN_PASS, REGISTRATION_TOKEN, log_path) {
+        Ok(token) => {
+            append_startup_log(log_path, "[desktop] Matrix admin registration succeeded\n");
+            Ok(token)
+        }
+        Err(register_error) => {
+            append_startup_log(
+                log_path,
+                &format!("[desktop] Matrix admin registration failed: {register_error}\n"),
+            );
+            matrix_login(ADMIN_USER, ADMIN_PASS, log_path)
+        }
+    }
+}
+
+fn matrix_login(user: &str, password: &str, log_path: &Path) -> Result<String, String> {
+    let body = serde_json::json!({
+        "type": "m.login.password",
+        "identifier": {
+            "type": "m.id.user",
+            "user": user,
+        },
+        "password": password,
+    });
+    matrix_post_json("/_matrix/client/v3/login", &body.to_string(), log_path)
+}
+
+fn matrix_register(
+    user: &str,
+    password: &str,
+    registration_token: &str,
+    log_path: &Path,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "username": user,
+        "password": password,
+        "auth": {
+            "type": "m.login.registration_token",
+            "token": registration_token,
+        },
+    });
+    matrix_post_json("/_matrix/client/v3/register", &body.to_string(), log_path)
+}
+
+fn matrix_post_json(path: &str, body: &str, log_path: &Path) -> Result<String, String> {
+    let url = format!("http://127.0.0.1:6167{path}");
+    let output = Command::new("curl")
+        .args(["-fsS", "-X", "POST", &url, "-H", "Content-Type: application/json", "-d", body])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| format!("curl failed to start for {url}: {err}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        append_startup_log(
+            log_path,
+            &format!("[desktop] Matrix request failed: {url}\n{stderr}\n"),
+        );
+        return Err(format!("Matrix request failed: {url}: {stderr}"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|err| format!("Matrix response was not JSON for {url}: {err}"))?;
+    value
+        .get("access_token")
+        .and_then(|token| token.as_str())
+        .filter(|token| !token.trim().is_empty())
+        .map(|token| token.to_string())
+        .ok_or_else(|| format!("Matrix response did not include access_token for {url}"))
+}
+
+fn run_docker_compose_up(compose_file: &Path, log_path: &Path) -> Result<(), String> {
+    let compose_arg = compose_file.to_string_lossy().to_string();
+    let attempts: [(&str, Vec<String>); 2] = [
+        (
+            "docker",
+            vec![
+                "compose".to_string(),
+                "-f".to_string(),
+                compose_arg.clone(),
+                "up".to_string(),
+                "-d".to_string(),
+            ],
+        ),
+        (
+            "docker-compose",
+            vec![
+                "-f".to_string(),
+                compose_arg,
+                "up".to_string(),
+                "-d".to_string(),
+            ],
+        ),
+    ];
+    let mut last_error = String::new();
+    for (program, args) in attempts {
+        let output = Command::new(program)
+            .args(&args)
+            .stdin(Stdio::null())
+            .output();
+        match output {
+            Ok(output) if output.status.success() => {
+                append_startup_log(
+                    log_path,
+                    &format!(
+                        "[desktop] {} {} succeeded\n{}\n{}\n",
+                        program,
+                        args.join(" "),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ),
+                );
+                return Ok(());
+            }
+            Ok(output) => {
+                last_error = format!(
+                    "{} {} failed with status {}\n{}\n{}",
+                    program,
+                    args.join(" "),
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                append_startup_log(log_path, &format!("[desktop] {last_error}\n"));
+            }
+            Err(err) => {
+                last_error = format!("{} failed to start: {err}", program);
+                append_startup_log(log_path, &format!("[desktop] {last_error}\n"));
+            }
+        }
+    }
+    Err(last_error)
+}
+
+fn wait_for_http_ok(port: u16, path: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if http_ok(port, path) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    false
+}
+
+fn http_ok(port: u16, path: &str) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
+        return false;
+    };
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok()
+        && (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+}
+
+fn append_startup_log(path: &Path, text: &str) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(text.as_bytes());
+    }
 }
 
 fn resolve_resource(app: &tauri::AppHandle, candidates: &[&str]) -> Option<PathBuf> {
