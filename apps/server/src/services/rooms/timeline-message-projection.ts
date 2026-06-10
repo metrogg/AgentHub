@@ -419,6 +419,10 @@ function mergeTimelineStreamContent(base: string, next: string) {
   return `${base}${next}`
 }
 
+function normalizeMatrixSnapshotContent(value: string) {
+  return value.replace(/\s+/g, ' ').trim().replace(/^[*-]\s+/, '')
+}
+
 /**
  * Merge consecutive agent messages from the same sender within a time window.
  * This handles Matrix /sync imported messages that don't have a traceId
@@ -536,7 +540,7 @@ function timelineEventToMessage(input: {
   const metadata = asRecord(event.metadata)
   if (metadata.hiddenFromChat === true) return null
   if (isLiveCodeAgentRunMetadataEvent(event)) return null
-  const kind = asString(metadata.kind)
+  const kind = effectiveTimelineKind(metadata)
   if (kind?.startsWith('manager.status.')) return null
   if (kind === 'manager.dispatch.diagnostic' && asString(metadata.reason) === 'resident-manager-started') return null
   if (shouldHideRuntimeStatusMessage(event, room, metadata)) return null
@@ -592,7 +596,7 @@ function codeAgentRunFromWorkerRuntimeEvent(event: TimelineEventRow): CodeAgentR
   const direct = codeAgentRunMetadataFromRecord(metadata)
   if (direct) return direct
 
-  const kind = asString(metadata.kind)
+  const kind = effectiveTimelineKind(metadata)
   if (!kind?.startsWith('worker-runtime.')) return null
   const runtime = readCodeAgentRuntime(metadata)
   if (!runtime) return null
@@ -650,7 +654,7 @@ function isLiveCodeAgentRunMetadataEvent(event: TimelineEventRow) {
   const metadata = asRecord(event.metadata)
   return (
     event.type === 'task.progress' &&
-    asString(metadata.kind) === 'worker-runtime.progress' &&
+    effectiveTimelineKind(metadata) === 'worker-runtime.progress' &&
     asString(metadata.type) === 'code-agent-run'
   )
 }
@@ -661,7 +665,7 @@ function isDirectWorkerRuntimeRunningStatusEvent(
   metadata: Record<string, unknown>,
 ) {
   if (room.kind !== 'direct' || event.type !== 'task.progress') return false
-  const kind = asString(metadata.kind)
+  const kind = effectiveTimelineKind(metadata)
   if (kind !== 'worker-runtime.started' && kind !== 'worker-runtime.progress') return false
   return codeAgentStatusFromWorkerRuntimeEvent(event, metadata) === 'running'
 }
@@ -671,7 +675,7 @@ function shouldHideRuntimeStatusMessage(
   room: RoomRow,
   metadata: Record<string, unknown>,
 ) {
-  const kind = asString(metadata.kind)
+  const kind = effectiveTimelineKind(metadata)
   if (!kind) return false
   if (INTERNAL_RUNTIME_CHAT_KINDS.has(kind)) return true
   return isDirectWorkerRuntimeRunningStatusEvent(event, room, metadata)
@@ -682,7 +686,7 @@ function shouldAttachCodeAgentRunToMessage(
   run: CodeAgentRunMetadata | null,
 ) {
   if (!run) return false
-  const kind = asString(asRecord(event.metadata).kind)
+  const kind = effectiveTimelineKind(asRecord(event.metadata))
   return (
     run.status !== 'running' &&
     (kind === 'worker-runtime.completed' ||
@@ -738,7 +742,7 @@ function codeAgentStatusFromWorkerRuntimeEvent(
 ): CodeAgentRunMetadata['status'] | null {
   const explicit = readCodeAgentStatus(metadata.status)
   if (explicit) return explicit
-  const kind = asString(metadata.kind)
+  const kind = effectiveTimelineKind(metadata)
   if (kind === 'worker-runtime.completed') return 'completed'
   if (kind === 'worker-runtime.failed') return 'failed'
   if (kind === 'worker-runtime.cancelled') return 'cancelled'
@@ -751,6 +755,16 @@ function codeAgentStatusFromWorkerRuntimeEvent(
     return 'running'
   }
   return null
+}
+
+function effectiveTimelineKind(metadata: Record<string, unknown>) {
+  const kind = asString(metadata.kind)
+  if (kind !== 'matrix.sync.imported') return kind
+  return (
+    asString(metadata.sourceKind) ??
+    asString(asRecord(metadata.matrix).importedMetadataKind) ??
+    kind
+  )
 }
 
 function readCodeAgentStatus(value: unknown): CodeAgentRunMetadata['status'] | null {

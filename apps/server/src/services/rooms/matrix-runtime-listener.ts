@@ -4,6 +4,8 @@ import { ensureManagerParticipantForRoom } from './manager-participant'
 import { roomService } from './room-service'
 import type { ParticipantType, TimelineEventType } from './types'
 
+const matrixEventMetadataKey = 'org.agenthub.metadata'
+
 export interface MatrixRuntimeListenerSyncInput {
   identityId: string
   since?: string | null
@@ -213,6 +215,8 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
   const mentions = parseMatrixMentions(content, body)
   const mentionedParticipantIds = await findMentionedParticipantIds(roomId, mentions)
   const eventType = timelineEventTypeFor(msgtype, senderParticipant?.participantType)
+  const matrixEventMetadata = readMatrixEventMetadata(content)
+  const sourceKind = asString(matrixEventMetadata.kind) ?? null
   if (
     eventType === 'manager.message' &&
     senderParticipant &&
@@ -236,13 +240,16 @@ async function importMatrixEvent(roomId: string, event: MatrixSyncRoomEvent) {
     type: eventType,
     body,
     metadata: {
+      ...matrixEventMetadata,
       kind: 'matrix.sync.imported',
-      ...streamMetadata,
+      ...(sourceKind ? { sourceKind } : {}),
       matrix: {
+        ...asRecord(matrixEventMetadata.matrix),
         eventId: event.event_id,
         senderUserId: sender,
         msgtype,
         originServerTs: event.origin_server_ts ?? null,
+        importedMetadataKind: sourceKind,
         mentions,
         mentionedParticipantIds,
         file: fileRefFromContent(content),
@@ -440,6 +447,10 @@ function fileRefFromContent(content: Record<string, unknown>) {
     url: typeof content.url === 'string' ? content.url : null,
     info: content.info && typeof content.info === 'object' ? content.info : null,
   }
+}
+
+function readMatrixEventMetadata(content: Record<string, unknown>) {
+  return asRecord(content[matrixEventMetadataKey])
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

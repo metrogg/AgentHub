@@ -255,6 +255,62 @@ describe('room timeline projection', () => {
     })
   })
 
+  test('restores worker runtime cards from Matrix imported sourceKind metadata', () => {
+    const liveMetadataEvent = event({
+      id: 'matrix-live-metadata',
+      type: 'task.progress',
+      sequence: 1,
+      body: 'Worker runtime metadata updated.',
+      metadata: {
+        kind: 'matrix.sync.imported',
+        sourceKind: 'worker-runtime.progress',
+        hiddenFromChat: true,
+        type: 'code-agent-run',
+        status: 'running',
+        runtime: 'opencode',
+        command: 'opencode run',
+        steps: [{ id: 'step-1', kind: 'command', status: 'running', title: 'Run tests' }],
+      },
+    })
+
+    expect(codeAgentRunFromWorkerRuntimeEvent(liveMetadataEvent)).toMatchObject({
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: 'opencode',
+      command: 'opencode run',
+    })
+
+    const projection = projectRoomTimeline({
+      room: directRoom,
+      participants: [worker],
+      sessionId: 'direct-session-1',
+      timeline: [
+        liveMetadataEvent,
+        event({
+          id: 'matrix-completed',
+          type: 'worker.message',
+          sequence: 2,
+          body: 'done',
+          metadata: {
+            kind: 'matrix.sync.imported',
+            sourceKind: 'worker-runtime.completed',
+            status: 'completed',
+            runtimeType: 'opencode',
+            workspaceAgentId: 'agent-1',
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages.map((message) => message.id)).toEqual(['room:matrix-completed'])
+    expect(projection.messages[0]?.metadata?.codeAgentRun).toMatchObject({
+      type: 'code-agent-run',
+      status: 'completed',
+      runtime: 'opencode',
+      finalMessage: 'done',
+    })
+  })
+
   test('projects task room code-agent process metadata without live metadata bubbles', () => {
     const liveMetadataEvent = event({
       id: 'task-live-metadata',

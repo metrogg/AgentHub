@@ -905,6 +905,24 @@ describe('RoomService Matrix room adapter contract', () => {
                         info: { mimetype: 'application/pdf', size: 1234 },
                       },
                     },
+                    {
+                      type: 'm.room.message',
+                      event_id: '$worker-progress',
+                      sender: '@worker-matrix-agent-2:agenthub.local',
+                      origin_server_ts: 3,
+                      content: {
+                        msgtype: 'm.text',
+                        body: 'Worker runtime metadata updated.',
+                        'org.agenthub.metadata': {
+                          kind: 'worker-runtime.progress',
+                          hiddenFromChat: true,
+                          type: 'code-agent-run',
+                          status: 'running',
+                          runtime: 'opencode',
+                          command: 'opencode run',
+                        },
+                      },
+                    },
                   ],
                 },
               },
@@ -979,14 +997,27 @@ describe('RoomService Matrix room adapter contract', () => {
       const result = await listener.syncOnce({ identityId: identity!.id, dispatch: false })
 
       expect(result.nextBatch).toBe('batch-2')
-      expect(result.importedEventIds).toHaveLength(2)
+      expect(result.importedEventIds).toHaveLength(3)
       expect(result.dispatchedEventIds).toHaveLength(0)
       expect(calls.filter((call) => call.path.includes('/send/m.room.message/'))).toHaveLength(0)
       const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room!.id))
-      expect(events.map((event) => event.type)).toEqual(['human.message', 'file.shared'])
+      expect(events.map((event) => event.type)).toEqual(['human.message', 'file.shared', 'worker.message'])
       expect(events[0]?.metadata?.matrix?.mentions).toEqual(['@worker-matrix-agent-2:agenthub.local'])
       expect(events[0]?.metadata?.matrix?.mentionedParticipantIds).toHaveLength(1)
       expect(events[1]?.metadata?.matrix?.file?.url).toBe('mxc://agenthub.local/report')
+      expect(events[2]?.metadata).toMatchObject({
+        kind: 'matrix.sync.imported',
+        sourceKind: 'worker-runtime.progress',
+        type: 'code-agent-run',
+        status: 'running',
+        runtime: 'opencode',
+        command: 'opencode run',
+        hiddenFromChat: true,
+        matrix: {
+          importedMetadataKind: 'worker-runtime.progress',
+          eventId: '$worker-progress',
+        },
+      })
       const [updatedIdentity] = await db
         .select()
         .from(matrixIdentities)

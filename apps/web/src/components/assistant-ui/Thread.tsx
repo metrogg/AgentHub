@@ -151,6 +151,7 @@ import { useChatStore } from '../../stores/chatStore'
 import {
   buildHeaderAgentStatusProjection,
   runtimeActivityDetail,
+  runtimeActivityLabel,
   type HeaderAgentStatusProjection,
 } from '../../stores/chatStore'
 import {
@@ -324,11 +325,10 @@ export const Thread: FC<{
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
   const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
-  const planningActivity =
+  const groupRoomActivity =
     isGroupSession &&
     selectedAgentTab === null &&
-    agentActivity?.sessionId === currentSession?.id &&
-    ['thinking', 'planning', 'synthesizing'].includes(agentActivity.phase ?? '')
+    agentActivity?.sessionId === currentSession?.id
       ? agentActivity
       : null
   const directActivity =
@@ -458,11 +458,11 @@ export const Thread: FC<{
       {chatHeader}
       <div className="relative z-[1] flex min-h-0 flex-1 pt-14">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && selectedAgentTab === null && (roomTaskBoard || planningActivity) && (
+          {isGroupSession && selectedAgentTab === null && (roomTaskBoard || groupRoomActivity) && (
             <LeaderViewBanner
               taskBoard={roomTaskBoard}
               agentTabs={agentTabs}
-              activity={planningActivity}
+              activity={groupRoomActivity}
               onOpenTasks={() => setGroupTasksOpen(true)}
             />
           )}
@@ -487,7 +487,7 @@ export const Thread: FC<{
             onClose={() => setGroupTasksOpen(false)}
             taskBoard={roomTaskBoard}
             agentTabs={agentTabs}
-            activity={planningActivity}
+            activity={groupRoomActivity}
           />
         )}
         {!usesGlobalSidecar && previewItem && !previewCollapsed && (
@@ -505,7 +505,7 @@ export const Thread: FC<{
             open={singleSidecarOpen}
             onClose={() => setSingleSidecarOpen(false)}
             taskBoard={railTaskBoard}
-            activity={planningActivity}
+            activity={groupRoomActivity}
             directRunProgress={directRunProgress}
           />
         )}
@@ -1014,12 +1014,12 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
   const title = taskBoard?.title || taskBoard?.goal || 'Manager 正在组织协作'
   const phaseLabel = taskBoard
     ? runStatusLabel[taskBoard.status] ?? taskBoard.status
-    : activity?.phase === 'synthesizing'
-      ? '汇总中'
-      : activity?.phase === 'planning'
-        ? '编排中'
-        : '理解中'
-  const activityDetail = activity ? runtimeActivityDetail(activity.phase) : null
+    : activity
+      ? runtimeActivityLabel(activity.phase)
+      : '理解中'
+  const activityDetail = activity
+    ? [activity.agentName, runtimeActivityDetail(activity.phase)].filter(Boolean).join(' · ')
+    : null
 
   return (
     <div className="shrink-0 border-b border-neutral-100 bg-[#fcfcfb] px-6 py-2.5">
