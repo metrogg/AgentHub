@@ -106,7 +106,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       ? true
       : containerMode
         ? Boolean(container?.running)
-        : localManagedProcessRunning || Boolean(localGatewayProbe?.ok)
+        : localManagedProcessRunning
     const residentSyncReady = endpoint ? true : running
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const configInspection = inspectOpenClawManagerConfig(this.getConfigPath(), matrixDomain)
@@ -667,14 +667,17 @@ function preferredManagerGatewayPort() {
 
 async function resolveManagedManagerGatewayPort() {
   const preferred = preferredManagerGatewayPort()
-  if (process.env.AGENTHUB_OPENCLAW_MANAGER_PORT) return preferred
   if (await canBindTcpPort(preferred)) return preferred
 
   const fallback = await findAvailableTcpPort(preferred + 1, preferred + 20)
   if (fallback) {
     logger.warn(
-      { preferredPort: preferred, selectedPort: fallback },
-      'Preferred OpenClaw Manager gateway port is unavailable; using another local port',
+      {
+        preferredPort: preferred,
+        selectedPort: fallback,
+        configuredByEnv: Boolean(process.env.AGENTHUB_OPENCLAW_MANAGER_PORT),
+      },
+      'OpenClaw Manager gateway port is unavailable; using another local port',
     )
     return fallback
   }
@@ -700,7 +703,7 @@ function canBindTcpPort(port: number) {
       }
       resolve(false)
     })
-    server.listen({ host: '127.0.0.1', port }, () => {
+    server.listen({ host: '0.0.0.0', port }, () => {
       server.close(() => resolve(true))
     })
   })
