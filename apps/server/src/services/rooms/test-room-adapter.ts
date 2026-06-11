@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { gt } from 'drizzle-orm'
 import { asc, db, desc, eq, and, roomParticipants, rooms, timelineEvents } from '@agenthub/db'
+import { resolveRoomKindForSession } from './session-room-kind'
 import { insertTimelineEventWithAllocatedSequence } from './timeline-event-writer'
 import type {
   AddParticipantInput,
@@ -12,7 +13,6 @@ import type {
   ListTimelineEventsInput,
   ParticipantType,
   RoomAdapter,
-  RoomKind,
 } from './types'
 
 function providerRoomId() {
@@ -21,11 +21,6 @@ function providerRoomId() {
 
 function providerEventId() {
   return `$agenthub-test-${randomUUID()}`
-}
-
-function roomKindForSession(input: EnsureRoomForSessionInput): RoomKind {
-  if (input.metadata?.kind === 'agent-direct') return 'direct'
-  return input.sessionType === 'group' ? 'group' : 'direct'
 }
 
 export class TestRoomAdapter implements RoomAdapter {
@@ -54,7 +49,7 @@ export class TestRoomAdapter implements RoomAdapter {
   async ensureRoomForSession(input: EnsureRoomForSessionInput) {
     const [existing] = await db.select().from(rooms).where(eq(rooms.sessionId, input.sessionId)).limit(1)
     if (existing) {
-      const expectedKind = roomKindForSession(input)
+      const expectedKind = resolveRoomKindForSession(input)
       const expectedCompatibility = {
         source: 'session',
         sessionType: input.sessionType,
@@ -86,7 +81,7 @@ export class TestRoomAdapter implements RoomAdapter {
       return updated ?? existing
     }
     const room = await this.createRoom({
-      kind: roomKindForSession(input),
+      kind: resolveRoomKindForSession(input),
       ownerId: input.ownerId,
       title: input.title,
       workspaceId: input.workspaceId ?? null,

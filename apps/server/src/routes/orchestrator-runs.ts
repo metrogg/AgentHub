@@ -16,7 +16,6 @@ import {
   workspaceAgents,
   workspaceTasks,
   taskThreads,
-  type AgentArtifact,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { listRunEvents } from '../services/orchestrator/run-events'
@@ -29,6 +28,17 @@ import { roomService } from '../services/rooms'
 import { MatrixRoomEventDispatcher } from '../services/rooms/matrix-event-dispatcher'
 import { runtimeLeaseController } from '../services/orchestrator/runtime-lease-controller'
 import { markWorkerInstanceState } from '../services/orchestrator/worker-runtime-resources'
+import {
+  buildDirectRuntimeRunProjection,
+  isDirectRuntimeTerminalEvent as isDirectRuntimeTerminalTimelineEvent,
+} from '../services/orchestrator/direct-run-history-projection'
+import { buildRuntimeActivitySnapshot } from '../services/orchestrator/runtime-activity-snapshot'
+import {
+  applyTaskBoardSnapshotStatuses,
+  normalizeTaskBoardRunStatus,
+  normalizeTaskBoardTaskStatus,
+  normalizeTaskBoardTaskStatusFromTaskThread,
+} from '../services/orchestrator/task-board-status'
 
 const taskThreadSessions = alias(sessions, 'task_thread_sessions')
 
@@ -778,7 +788,7 @@ async function loadDirectRuntimeRuns(ownerId: string) {
   )
 
   return rows
-    .filter((row) => isDirectRuntimeTerminalEvent(row.eventType, row.eventMetadata))
+    .filter((row) => isDirectRuntimeTerminalTimelineEvent(row.eventType, row.eventMetadata))
     .map(normalizeDirectRuntimeRunRow)
 }
 
@@ -845,12 +855,12 @@ function normalizeDirectRuntimeRunRow(row: {
   eventId: string
   eventType: string
   eventBody: string
-  eventMetadata: Record<string, unknown>
+  eventMetadata: unknown
   createdAt: Date
   roomId: string
   roomTitle: string
   sessionId: string
-  sessionTitle: string
+  sessionTitle: string | null
   workspaceId: string
   workspaceName: string
   participantName: string | null
@@ -858,250 +868,8 @@ function normalizeDirectRuntimeRunRow(row: {
   participantWorkerInstanceId: string | null
   workspaceAgentName: string | null
 }) {
-  const metadata = recordValue(row.eventMetadata) ?? {}
-  const codeAgentRun = recordValue(metadata.codeAgentRun) ?? metadata
-  const status = directRunStatusFromMetadata(metadata)
-  const agentId =
-    stringValue(metadata.workspaceAgentId) ??
-    row.participantWorkspaceAgentId ??
-    row.participantWorkerInstanceId ??
-    'direct-agent'
-  const agentName =
-    stringValue(metadata.agentName) ??
-    row.workspaceAgentName ??
-    row.participantName ??
-    'Agent'
-  const taskId = `direct-task:${row.eventId}`
-  const artifacts = directRunArtifacts(codeAgentRun, metadata)
-  const taskStatus: 'done' | 'cancelled' | 'failed' | 'running' =
-    status === OrchestratorRunStatus.Completed
-      ? 'done'
-      : status === OrchestratorRunStatus.Cancelled
-        ? 'cancelled'
-        : status === OrchestratorRunStatus.Failed
-          ? 'failed'
-          : 'running'
-  const directTaskTitle = `${agentName} direct run`
-  const directTaskDescription =
-    stringValue(codeAgentRun.finalMessage) ??
-    stringValue(row.eventBody) ??
-    'Agent direct runtime record'
-  const directTask = {
-    id: taskId,
-    workspaceId: row.workspaceId,
-    agentId,
-    title: directTaskTitle,
-    description: directTaskDescription,
-    status: taskStatus,
-    sessionId: row.sessionId,
-    taskThreadId: null,
-    taskThreadSessionId: row.sessionId,
-    taskThreadStatus: null,
-    workerInstanceId: row.participantWorkerInstanceId,
-    taskThreadSessionMetadata: {},
-    orderIdx: 0,
-    runId: `direct-runtime:${row.eventId}`,
-    phaseId: 'direct',
-    dependencies: [],
-    artifacts,
-    progressPercent: null,
-    progressStatus: null,
-    startedAt: row.createdAt,
-    completedAt: row.createdAt,
-    errorLog: null,
-  }
-  const plan = {
-    title: `私聊运行：${row.sessionTitle}`,
-    goal:
-      stringValue(codeAgentRun.finalMessage) ??
-      stringValue(row.eventBody) ??
-      row.sessionTitle,
-    collaborationMode: 'direct',
-    phases: [
-      {
-        id: 'direct',
-        title: '私聊执行',
-        purpose: 'Agent 私聊中的单次运行。',
-        taskIds: [taskId],
-      },
-    ],
-    tasks: [
-      {
-        id: taskId,
-        phaseId: 'direct',
-        title: `${agentName} 私聊执行`,
-        description:
-          stringValue(codeAgentRun.finalMessage) ??
-          stringValue(row.eventBody) ??
-          'Agent 私聊运行记录',
-        agentId,
-        agentName,
-        status: taskStatus,
-        childSessionId: row.sessionId,
-        artifacts,
-        outputSummary: stringValue(codeAgentRun.finalMessage) ?? stringValue(row.eventBody) ?? undefined,
-      },
-    ],
-    taskLedger: {
-      phases: [
-        {
-          id: 'direct',
-          title: '私聊执行',
-          purpose: 'Agent 私聊中的单次运行。',
-        },
-      ],
-      tasks: [
-        {
-          id: taskId,
-          phaseId: 'direct',
-          title: `${agentName} 私聊执行`,
-          agentId,
-          agentName,
-        },
-      ],
-    },
-    progressLedger: {
-      status,
-      completedTaskIds: status === OrchestratorRunStatus.Completed ? [taskId] : [],
-      runningTaskIds: status === OrchestratorRunStatus.Running ? [taskId] : [],
-      failedTaskIds: status === OrchestratorRunStatus.Failed ? [taskId] : [],
-      cancelledTaskIds: status === OrchestratorRunStatus.Cancelled ? [taskId] : [],
-      blockedTaskIds: [],
-    },
-  }
-
-  return normalizeRunRow(
-    {
-      id: `direct-runtime:${row.eventId}`,
-      workspaceId: row.workspaceId,
-      groupSessionId: row.sessionId,
-      planMessageId: null,
-      status,
-      plan,
-      summaryMessageId: null,
-      conflictReport: [],
-      createdAt: row.createdAt,
-      updatedAt: row.createdAt,
-      workspaceName: row.workspaceName,
-      sessionTitle: row.sessionTitle ?? row.roomTitle,
-      source: 'direct-runtime',
-      roomId: row.roomId,
-      eventId: row.eventId,
-    },
-    [directTask],
-    [],
-    [],
-  )
-}
-
-function isDirectRuntimeTerminalEvent(eventType: string, metadata: unknown) {
-  if (eventType !== 'worker.message' && eventType !== 'task.progress') return false
-  const record = recordValue(metadata)
-  const kind = stringValue(record?.kind)
-  if (
-    kind === 'worker-runtime.completed' ||
-    kind === 'worker-runtime.failed' ||
-    kind === 'worker-runtime.cancelled'
-  ) {
-    return true
-  }
-  const codeAgentRun = recordValue(record?.codeAgentRun) ?? record
-  const status = stringValue(codeAgentRun?.status)
-  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'timed-out'
-}
-
-function directRunStatusFromMetadata(metadata: Record<string, unknown>) {
-  const kind = stringValue(metadata.kind)
-  const codeAgentRun = recordValue(metadata.codeAgentRun) ?? metadata
-  const status = stringValue(codeAgentRun.status) ?? stringValue(metadata.status)
-  if (kind === 'worker-runtime.cancelled' || status === 'cancelled') return OrchestratorRunStatus.Cancelled
-  if (kind === 'worker-runtime.failed' || status === 'failed' || status === 'timed-out') return OrchestratorRunStatus.Failed
-  if (kind === 'worker-runtime.completed' || status === 'completed') return OrchestratorRunStatus.Completed
-  return OrchestratorRunStatus.Running
-}
-
-function directRunArtifacts(...sources: Array<Record<string, unknown>>): AgentArtifact[] {
-  const items: AgentArtifact[] = []
-  for (const source of sources) {
-    if (Array.isArray(source.artifacts)) {
-      for (const item of source.artifacts) {
-        const artifact = normalizeDirectRunArtifact(recordValue(item))
-        if (artifact) items.push(artifact)
-      }
-    }
-    if (Array.isArray(source.files)) {
-      for (const file of source.files) {
-        const record = recordValue(file)
-        const path = stringValue(record?.path) ?? stringValue(record?.filePath)
-        if (!path) continue
-        items.push({
-          id: `code-agent-file:${path}`,
-          kind: 'file',
-          title: path.split(/[\\/]/).filter(Boolean).at(-1) ?? path,
-          path,
-          filePath: path,
-          status: normalizeDirectRunFileStatus(stringValue(record?.status)) ?? 'modified',
-          source: 'codeAgentRun.files',
-        })
-      }
-    }
-  }
-  const seen = new Set<string>()
-  return items.filter((item) => {
-    const key =
-      stringValue(item.id) ??
-      stringValue(item.path) ??
-      stringValue(item.filePath) ??
-      JSON.stringify(item)
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-function normalizeDirectRunArtifact(record: Record<string, unknown> | null): AgentArtifact | null {
-  if (!record) return null
-  const path =
-    stringValue(record.path) ??
-    stringValue(record.filePath) ??
-    stringValue(record.handoffPath) ??
-    stringValue(record.relativePath)
-  const kind = normalizeDirectRunArtifactKind(stringValue(record.kind) ?? stringValue(record.type) ?? 'file')
-  const title =
-    stringValue(record.title) ??
-    (path ? path.split(/[\\/]/).filter(Boolean).at(-1) : null) ??
-    stringValue(record.id) ??
-    'artifact'
-  return {
-    ...record,
-    id: stringValue(record.id) ?? stringValue(record.artifactId) ?? `${kind}:${path ?? title}`,
-    kind,
-    title,
-    description: stringValue(record.description) ?? stringValue(record.summary) ?? undefined,
-    source: stringValue(record.source) ?? 'codeAgentRun.artifacts',
-    path: path ?? stringValue(record.url) ?? undefined,
-    filePath: stringValue(record.filePath) ?? path ?? undefined,
-    status: normalizeDirectRunFileStatus(stringValue(record.status)),
-    url: stringValue(record.url) ?? undefined,
-    mimeType: stringValue(record.mimeType) ?? undefined,
-    size: numberValue(record.size) ?? undefined,
-  }
-}
-
-function normalizeDirectRunArtifactKind(value: string): AgentArtifact['kind'] {
-  if (value === 'diff') return 'diff'
-  if (value === 'preview') return 'preview'
-  if (value === 'deploy') return 'deploy'
-  if (value === 'log') return 'log'
-  if (value === 'workflow') return 'workflow'
-  return 'file'
-}
-
-function normalizeDirectRunFileStatus(value: string | null): AgentArtifact['status'] | undefined {
-  if (value === 'created' || value === 'modified' || value === 'deleted' || value === 'renamed' || value === 'untracked') {
-    return value
-  }
-  return undefined
+  const projection = buildDirectRuntimeRunProjection(row)
+  return normalizeRunRow(projection.runRow, [projection.task], [], [])
 }
 
 function buildTaskBoardSnapshot(input: {
@@ -1292,69 +1060,6 @@ function buildTaskBoardSnapshot(input: {
   }
 }
 
-function normalizeTaskBoardTaskStatus(value: string | null) {
-  if (
-    value === 'pending' ||
-    value === 'assigned' ||
-    value === 'running' ||
-    value === 'done' ||
-    value === 'failed' ||
-    value === 'blocked' ||
-    value === 'cancelled'
-  ) {
-    return value
-  }
-  return null
-}
-
-function normalizeTaskBoardTaskStatusFromTaskThread(value: string | null) {
-  if (value === 'prepared') return 'pending'
-  if (value === 'assigned') return 'assigned'
-  if (value === 'active') return 'running'
-  if (value === 'completed') return 'done'
-  if (value === 'failed' || value === 'cancelled') return value
-  return null
-}
-
-function normalizeTaskBoardRunStatus(value: string | null) {
-  if (
-    value === 'planning' ||
-    value === 'running' ||
-    value === 'synthesizing' ||
-    value === 'completed' ||
-    value === 'failed' ||
-    value === 'cancelled'
-  ) {
-    return value
-  }
-  return null
-}
-
-function applyTaskBoardSnapshotStatuses(
-  phases: Array<{
-    id: string
-    title: string
-    purpose: string
-    taskIds: string[]
-    status: 'pending' | 'active' | 'completed'
-  }>,
-  tasks: Array<{ id: string; status: string }>,
-) {
-  return phases.map((phase) => {
-    const phaseTasks = phase.taskIds
-      .map((id) => tasks.find((task) => task.id === id))
-      .filter((task): task is { id: string; status: string } => Boolean(task))
-    if (!phaseTasks.length) return { ...phase, status: 'pending' as const }
-    if (phaseTasks.some((task) => task.status === 'assigned' || task.status === 'running' || task.status === 'blocked')) {
-      return { ...phase, status: 'active' as const }
-    }
-    if (phaseTasks.every((task) => task.status === 'done' || task.status === 'failed' || task.status === 'cancelled')) {
-      return { ...phase, status: 'completed' as const }
-    }
-    return { ...phase, status: 'pending' as const }
-  })
-}
-
 function normalizeRunEventForAgUi(event: Awaited<ReturnType<typeof listRunEvents>>[number]) {
   const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
     ? event.payload
@@ -1456,169 +1161,6 @@ function normalizeResourceSnapshot(snapshot: RunResourceSnapshot) {
       updatedAt: worker.updatedAt,
     })),
   }
-}
-
-function buildRuntimeActivitySnapshot(input: {
-  taskBoardSnapshot?: ReturnType<typeof buildTaskBoardSnapshot>
-  agUiEvents?: ReturnType<typeof buildAgUiEventsFromRunEvent>
-}) {
-  const taskBoardSnapshot = input.taskBoardSnapshot
-  const sessionId = taskBoardSnapshot?.sessionId ?? null
-
-  if (isTerminalTaskBoardSnapshotStatus(taskBoardSnapshot?.status)) {
-    return {
-      agentTyping: false,
-      agentActivity: null,
-      source: 'task-board',
-    }
-  }
-
-  if (taskBoardSnapshot?.tasks?.length) {
-    const runningTask = taskBoardSnapshot.tasks.find((task) => task.status === 'running')
-    if (runningTask && sessionId) {
-      return {
-        agentTyping: true,
-        agentActivity: {
-          sessionId,
-          agentId: runningTask.agentId ?? null,
-          agentName: runningTask.agentName ?? null,
-          phase: 'executing',
-          startedAt: null,
-        },
-        source: 'task-board',
-      }
-    }
-  }
-
-  if (Array.isArray(input.agUiEvents) && input.agUiEvents.length && sessionId) {
-    const agUiProjection = deriveRuntimeActivityFromAgUiEvents(input.agUiEvents, sessionId)
-    if (agUiProjection) return agUiProjection
-  }
-
-  if (taskBoardSnapshot?.status === 'planning' && sessionId) {
-    return {
-      agentTyping: true,
-      agentActivity: {
-        sessionId,
-        agentId: null,
-        agentName: 'Orchestrator',
-        phase: 'planning',
-        startedAt: null,
-      },
-      source: 'task-board',
-    }
-  }
-
-  if (taskBoardSnapshot?.status === 'synthesizing' && sessionId) {
-    return {
-      agentTyping: true,
-      agentActivity: {
-        sessionId,
-        agentId: null,
-        agentName: 'Orchestrator',
-        phase: 'synthesizing',
-        startedAt: null,
-      },
-      source: 'task-board',
-    }
-  }
-
-  return {
-    agentTyping: false,
-    agentActivity: null,
-    source: 'none',
-  }
-}
-
-function isTerminalTaskBoardSnapshotStatus(status: unknown) {
-  return status === 'completed' || status === 'failed' || status === 'cancelled'
-}
-
-function deriveRuntimeActivityFromAgUiEvents(
-  events: NonNullable<ReturnType<typeof buildAgUiEventsFromRunEvent>>,
-  sessionId: string,
-) {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = recordValue(events[index])
-    if (!event) continue
-    const type = stringValue(event.type)
-    if (type === 'RUN_FINISHED') {
-      return {
-        agentTyping: false,
-        agentActivity: null,
-        source: 'ag-ui',
-      }
-    }
-    if (type !== 'CUSTOM') continue
-
-    const name = stringValue(event.name)
-    const value = recordValue(event.value)
-    if (!name || !value) continue
-
-    if (name === 'agenthub.task.status') {
-      const status = stringValue(value.status)
-      if (status === 'running' || status === 'assigned') {
-        return {
-          agentTyping: true,
-          agentActivity: {
-            sessionId,
-            agentId: stringValue(value.agentId),
-            agentName: stringValue(value.agentName),
-            phase: status === 'running' ? 'executing' : 'assigned',
-            startedAt: null,
-          },
-          source: 'ag-ui',
-        }
-      }
-      continue
-    }
-
-    if (name === 'agenthub.run.status') {
-      const status = stringValue(value.status)
-      if (status === 'synthesizing') {
-        return {
-          agentTyping: true,
-          agentActivity: {
-            sessionId,
-            agentId: null,
-            agentName: 'Orchestrator',
-            phase: 'synthesizing',
-            startedAt: null,
-          },
-          source: 'ag-ui',
-        }
-      }
-      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-        return {
-          agentTyping: false,
-          agentActivity: null,
-          source: 'ag-ui',
-        }
-      }
-      continue
-    }
-
-    if (name === 'agenthub.manager.status') {
-      const phase =
-        stringValue(value.phase) ??
-        stringValue(value.action) ??
-        stringValue(value.status)
-      if (!phase) continue
-      return {
-        agentTyping: true,
-        agentActivity: {
-          sessionId,
-          agentId: stringValue(value.actorAgentId),
-          agentName: stringValue(value.actorName) ?? 'Orchestrator',
-          phase,
-          startedAt: null,
-        },
-        source: 'ag-ui',
-      }
-    }
-  }
-
-  return null
 }
 
 function normalizeArtifactRowForTask(artifact: Awaited<ReturnType<typeof loadRunArtifacts>>[number]) {

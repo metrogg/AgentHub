@@ -2,6 +2,20 @@
 
 This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md`, `AGENTS.md`, `docs/文档索引与权威口径.md`, `docs/当前状态与下一步路线.md`, `docs/AgentHub-HiClaw-lite开源内核重构方案.md`, and `docs/HiClaw架构调研与AgentHub底层重构方案.md`.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `metrogg/AgentHub`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five-role triage vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repo for skill consumption; the authoritative domain context currently lives in the existing project docs rather than a root `CONTEXT.md`. See `docs/agents/domain.md`.
+
 ## Product Definition
 
 AgentHub is an open-source Coze/Kimi-style AI work platform shell evolving toward a HiClaw-lite open collaboration kernel. The expected behavior is:

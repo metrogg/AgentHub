@@ -849,7 +849,7 @@ describe('RoomService Matrix room adapter contract', () => {
       })
 
       expect(human.providerUserId).toBe('@human-default-user:agenthub.local')
-      expect(manager.providerUserId).toMatch(/@manager-manager-.*:agenthub\.local/)
+      expect(manager.providerUserId).toBe('@manager-manager:agenthub.local')
       expect(worker.providerUserId).toBe('@worker-matrix-agent-1:agenthub.local')
       expect(human.metadata?.source).toBe('test')
       expect(human.metadata?.matrixMembership?.providerRoomId).toBe('!matrix-room:agenthub.local')
@@ -860,7 +860,7 @@ describe('RoomService Matrix room adapter contract', () => {
       const identityUserIds = identities.map((identity) => identity.userId).sort()
       expect(identityUserIds).toContain('@human-default-user:agenthub.local')
       expect(identityUserIds).toContain('@worker-matrix-agent-1:agenthub.local')
-      expect(identityUserIds.some((id) => id.match(/@manager-manager-.*:agenthub\.local/))).toBe(true)
+      expect(identityUserIds).toContain('@manager-manager:agenthub.local')
       const inviteCalls = calls.filter((call) => call.path.includes('/invite'))
       const joinCalls = calls.filter((call) => call.path.includes('/join/'))
       const sendCall = calls.find((call) => call.path.includes('/send/m.room.message/'))

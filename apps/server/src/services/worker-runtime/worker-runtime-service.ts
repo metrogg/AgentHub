@@ -32,6 +32,21 @@ import { EphemeralCodeAgentWorkerRuntime } from './local-worker-runtime'
 import { ResidentRoomWorkerRuntime } from './resident-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
 import type { WorkerRuntime, WorkerRuntimeEvent, WorkerRuntimeResult } from './types'
+import {
+  projectWorkerRuntimeArtifactTimelineEvent,
+  projectWorkerRuntimeClarificationLeaseWait,
+  projectWorkerRuntimeClarificationTimelineEvent,
+  projectWorkerRuntimeMessageTimelineEvent,
+  projectWorkerRuntimeProgressTimelineEvent,
+  workerRuntimeClarificationQuestion,
+} from './worker-runtime-event-projection'
+import { projectWorkerRuntimeResultTransition } from './worker-runtime-result-transition'
+import {
+  codeAgentRunStatusFromWorkerStatus,
+  sharedTaskStatusFromWorkerResult,
+  terminalSharedTaskTimestamps,
+  workerRuntimeTerminalKind,
+} from './worker-runtime-status'
 
 function buildSandboxEnvFromLease(lease: typeof runtimeLeases.$inferSelect | undefined): Record<string, string> | undefined {
   if (!lease) return undefined
@@ -1478,26 +1493,17 @@ async function appendWorkerRuntimeEvent(input: {
     const canonicalArtifact = registeredArtifact
       ? toCanonicalArtifactRecord(registeredArtifact)
       : input.event.artifact
-    return roomService.appendTimelineEvent({
-      roomId: input.roomId,
-      senderParticipantId: input.participantId,
-      senderType: 'worker',
-      type: 'artifact.created',
-      body: input.event.message ?? input.event.artifact.title,
-      metadata: {
-        kind: 'worker-runtime.artifact',
-        artifactId: registeredArtifact?.id ?? input.event.artifact.id,
-        status: input.event.status ?? registeredArtifact?.status ?? 'registered',
-        workspaceAgentId: input.workspaceAgentId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeType: input.runtimeType,
-        artifact: canonicalArtifact,
-        ...(input.event.metadata ?? {}),
-      },
-    })
+    return roomService.appendTimelineEvent(
+      projectWorkerRuntimeArtifactTimelineEvent({
+        ...input,
+        event: input.event,
+        registeredArtifact,
+        canonicalArtifact,
+      }),
+    )
   }
   if (input.event.type === 'clarification') {
-    const question = input.event.question ?? input.event.message
+    const question = workerRuntimeClarificationQuestion(input.event)
     const clarification = await createTaskClarification({
       runId: input.runId,
       taskId: input.taskId,
@@ -1505,70 +1511,34 @@ async function appendWorkerRuntimeEvent(input: {
       question,
       options: input.event.options ?? [],
     })
+    const leaseWait = projectWorkerRuntimeClarificationLeaseWait({
+      roomId: input.roomId,
+      runId: input.runId,
+      taskId: input.taskId,
+      event: input.event,
+      clarificationId: clarification?.id ?? null,
+    })
     await runtimeLeaseController.markWaitingForHuman(input.runtimeLeaseId, {
       workerInstanceId: input.workerInstanceId ?? null,
-      message: question,
-      metadata: {
-        waitingForHuman: true,
-        clarificationId: clarification?.id ?? null,
-        question,
-        roomId: input.roomId,
-        runId: input.runId ?? null,
-        taskId: input.taskId ?? null,
-      },
+      message: leaseWait.message,
+      metadata: leaseWait.metadata,
     })
-    return roomService.appendTimelineEvent({
-      roomId: input.roomId,
-      senderParticipantId: input.participantId,
-      senderType: 'worker',
-      type: 'approval.requested',
-      body: input.event.message,
-      metadata: {
-        kind: 'worker-runtime.clarification-requested',
+    return roomService.appendTimelineEvent(
+      projectWorkerRuntimeClarificationTimelineEvent({
+        ...input,
+        event: input.event,
         clarificationId: clarification?.id ?? null,
-        workspaceAgentId: input.workspaceAgentId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeLeaseId: input.runtimeLeaseId ?? null,
-        runtimeType: input.runtimeType,
-        question,
-        options: input.event.options ?? [],
-        ...(input.event.metadata ?? {}),
-      },
-    })
+      }),
+    )
   }
   if (input.event.type === 'message') {
-    return roomService.appendTimelineEvent({
-      roomId: input.roomId,
-      senderParticipantId: input.participantId,
-      senderType: 'worker',
-      type: 'worker.message',
-      body: input.event.message,
-      metadata: {
-        kind: 'worker-runtime.message',
-        workspaceAgentId: input.workspaceAgentId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeType: input.runtimeType,
-        hiddenFromChat: true,
-        ...(input.event.metadata ?? {}),
-      },
-    })
+    return roomService.appendTimelineEvent(
+      projectWorkerRuntimeMessageTimelineEvent({ ...input, event: input.event }),
+    )
   }
-  return roomService.appendTimelineEvent({
-    roomId: input.roomId,
-    senderParticipantId: input.participantId,
-    senderType: 'worker',
-    type: 'task.progress',
-    body: input.event.message,
-    metadata: {
-      kind: input.event.type === 'failed' ? 'worker-runtime.failed' : 'worker-runtime.progress',
-      workspaceAgentId: input.workspaceAgentId,
-      workerInstanceId: input.workerInstanceId ?? null,
-      runtimeType: input.runtimeType,
-      progressPercent: input.event.type === 'progress' ? input.event.progressPercent ?? null : null,
-      hiddenFromChat: true,
-      ...(input.event.metadata ?? {}),
-    },
-  })
+  return roomService.appendTimelineEvent(
+    projectWorkerRuntimeProgressTimelineEvent({ ...input, event: input.event }),
+  )
 }
 
 const DEFAULT_WORKER_RUNTIME_HEARTBEAT_MS = 60_000
@@ -1782,60 +1752,65 @@ async function syncRunControllerAfterTaskRoomResult(input: {
     },
   }
 
-  if (input.result.status === 'completed') {
+  const transition = projectWorkerRuntimeResultTransition({
+    result: input.result,
+    source: input.source,
+    taskRoomId: room.id,
+  })
+
+  if (transition.task.kind === 'completed') {
     await runController.markTaskCompleted(run, base)
-    await runtimeLeaseController.release(lease?.id, {
-      workerInstanceId: thread?.workerInstanceId ?? null,
-      metadata: { resultStatus: input.result.status, source: input.source },
-    })
+    await applyRuntimeLeaseTransition(lease?.id, thread?.workerInstanceId ?? null, transition.lease)
     return
   }
-  if (input.result.status === 'cancelled') {
+  if (transition.task.kind === 'cancelled') {
     await runController.markTaskCancelled(run, {
       ...base,
-      reason: input.result.message ?? 'worker-runtime-cancelled',
+      reason: transition.task.reason,
     })
-    await runtimeLeaseController.release(lease?.id, {
-      workerInstanceId: thread?.workerInstanceId ?? null,
-      metadata: { resultStatus: input.result.status, source: input.source },
-    })
+    await applyRuntimeLeaseTransition(lease?.id, thread?.workerInstanceId ?? null, transition.lease)
     return
   }
-  if (input.result.status === 'waiting_for_human') {
-    const clarificationId =
-      typeof input.result.metadata?.clarificationId === 'string'
-        ? input.result.metadata.clarificationId
-        : null
-    const clarificationQuestion =
-      typeof input.result.metadata?.clarificationQuestion === 'string'
-        ? input.result.metadata.clarificationQuestion
-        : input.result.message ?? null
+  if (transition.task.kind === 'waiting_for_human') {
     await runController.markTaskWaitingForHuman(run, {
       ...base,
-      question: clarificationQuestion,
-      clarificationId,
+      question: transition.task.clarificationQuestion,
+      clarificationId: transition.task.clarificationId,
     })
-    await runtimeLeaseController.markWaitingForHuman(lease?.id, {
-      workerInstanceId: thread?.workerInstanceId ?? null,
-      message: clarificationQuestion,
-      metadata: {
-        resultStatus: input.result.status,
-        clarificationId,
-        clarificationQuestion,
-        taskRoomId: room.id,
-        source: input.source,
-      },
-    })
+    await applyRuntimeLeaseTransition(lease?.id, thread?.workerInstanceId ?? null, transition.lease)
     return
   }
   await runController.markTaskFailed(run, {
     ...base,
-    error: input.result.message ?? 'WorkerRuntime failed.',
+    error: transition.task.error,
   })
-  await runtimeLeaseController.fail(lease?.id, {
-    workerInstanceId: thread?.workerInstanceId ?? null,
-    error: input.result.message ?? 'WorkerRuntime failed.',
-    metadata: { resultStatus: input.result.status, source: input.source },
+  await applyRuntimeLeaseTransition(lease?.id, thread?.workerInstanceId ?? null, transition.lease)
+}
+
+async function applyRuntimeLeaseTransition(
+  leaseId: string | null | undefined,
+  workerInstanceId: string | null,
+  transition: ReturnType<typeof projectWorkerRuntimeResultTransition>['lease'],
+) {
+  if (transition.kind === 'release') {
+    await runtimeLeaseController.release(leaseId, {
+      workerInstanceId,
+      metadata: transition.metadata,
+    })
+    return
+  }
+  if (transition.kind === 'waiting_for_human') {
+    await runtimeLeaseController.markWaitingForHuman(leaseId, {
+      workerInstanceId,
+      message: transition.message,
+      metadata: transition.metadata,
+    })
+    return
+  }
+  await runtimeLeaseController.fail(leaseId, {
+    workerInstanceId,
+    error: transition.error,
+    metadata: transition.metadata,
   })
 }
 
@@ -1856,30 +1831,6 @@ async function syncSharedTaskDirectoryStatus(input: Parameters<typeof updateShar
       'Failed to update shared task directory status',
     )
   }
-}
-
-function sharedTaskStatusFromWorkerResult(
-  status: WorkerRuntimeResult['status'],
-): Parameters<typeof updateSharedTaskDirectoryStatus>[0]['status'] {
-  if (status === 'completed') return 'completed'
-  if (status === 'cancelled') return 'cancelled'
-  if (status === 'waiting_for_human') return 'blocked'
-  return 'failed'
-}
-
-function terminalSharedTaskTimestamps(status: WorkerRuntimeResult['status']) {
-  const now = new Date().toISOString()
-  if (status === 'completed') return { completedAt: now, updatedAt: now }
-  if (status === 'cancelled') return { cancelledAt: now, updatedAt: now }
-  if (status === 'failed') return { failedAt: now, updatedAt: now }
-  return { updatedAt: now }
-}
-
-function workerRuntimeTerminalKind(status: WorkerRuntimeResult['status']) {
-  if (status === 'waiting_for_human') return 'worker-runtime.waiting-for-human'
-  if (status === 'cancelled') return 'worker-runtime.cancelled'
-  if (status === 'failed') return 'worker-runtime.failed'
-  return 'worker-runtime.completed'
 }
 
 async function refreshWorkerContractMirror(input: {
@@ -2005,12 +1956,6 @@ function isThrottleableCodeAgentProgress(
   message: string | undefined,
 ) {
   return run?.status === 'running' && message === 'Worker runtime metadata updated.'
-}
-
-function codeAgentRunStatusFromWorkerStatus(status: WorkerRuntimeResult['status']): CodeAgentRunStatus {
-  if (status === 'completed') return 'completed'
-  if (status === 'cancelled') return 'cancelled'
-  return 'failed'
 }
 
 function readCodeAgentRunStatus(value: unknown): CodeAgentRunStatus | null {
