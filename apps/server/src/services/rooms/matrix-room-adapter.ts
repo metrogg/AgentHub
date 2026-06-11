@@ -2,6 +2,7 @@ import { gt } from 'drizzle-orm'
 import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, timelineEvents, workspaceAgents } from '@agenthub/db'
 import { MatrixApiError, MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
 import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
+import { resolveRoomKindForSession } from './session-room-kind'
 import { insertTimelineEventWithAllocatedSequence } from './timeline-event-writer'
 import type {
   AddParticipantInput,
@@ -12,7 +13,6 @@ import type {
   ListTimelineEventsInput,
   ParticipantType,
   RoomAdapter,
-  RoomKind,
 } from './types'
 
 interface MatrixRoomAdapterOptions {
@@ -103,7 +103,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
   private async ensureRoomForSessionOnce(input: EnsureRoomForSessionInput) {
     const [existing] = await db.select().from(rooms).where(eq(rooms.sessionId, input.sessionId)).limit(1)
     if (existing) {
-      const expectedKind = roomKindForSession(input)
+      const expectedKind = resolveRoomKindForSession(input)
       const expectedCompatibility = {
         source: 'session',
         sessionType: input.sessionType,
@@ -135,7 +135,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
       return updated ?? existing
     }
     const room = await this.createRoom({
-      kind: roomKindForSession(input),
+      kind: resolveRoomKindForSession(input),
       ownerId: input.ownerId,
       title: input.title,
       workspaceId: input.workspaceId ?? null,
@@ -700,11 +700,6 @@ export class MatrixRoomAdapter implements RoomAdapter {
     this.identityServiceInstance = new MatrixIdentityService(this.client())
     return this.identityServiceInstance
   }
-}
-
-function roomKindForSession(input: EnsureRoomForSessionInput): RoomKind {
-  if (input.metadata?.kind === 'agent-direct') return 'direct'
-  return input.sessionType === 'group' ? 'group' : 'direct'
 }
 
 function defaultRole(type: ParticipantType) {

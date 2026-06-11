@@ -109,7 +109,7 @@ describe('Matrix room adapter e2e contract', () => {
       expect(matrix.requests.some((request) => request.method === 'POST' && request.path === '/_matrix/client/v3/createRoom')).toBe(true)
       expect(matrix.requests.filter((request) => request.path === '/_matrix/client/v3/register')).toHaveLength(3)
       expect(matrix.requests.filter((request) => request.path.endsWith('/invite'))).toHaveLength(3)
-      expect(matrix.requests.filter((request) => request.path.startsWith('/_matrix/client/v3/join/'))).toHaveLength(3)
+      expect(matrix.requests.filter((request) => request.path.startsWith('/_matrix/client/v3/join/'))).toHaveLength(5)
       const sentMessages = matrix.requests.filter((request) => request.path.includes('/send/m.room.message/'))
       expect(sentMessages).toHaveLength(2)
       expect(sentMessages[1]?.body?.['m.mentions']).toMatchObject({
